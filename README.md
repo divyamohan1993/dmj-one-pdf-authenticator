@@ -1,4 +1,4 @@
-# dmdmj-one-pdf-authenticator
+#dmj-one-pdf-authenticator
 
 This repository contains a serverless zero‑knowledge document signing and verification system built with Cloudflare Workers, D1, and a companion Java microservice.
 
