@@ -59,7 +59,7 @@ This script is **idempotent**. You can run it multiple times; it won’t clobber
 1. **Run Part 1** (installs deps, starts headless Wrangler OAuth, prints URL and exits)
 
 ```bash
-bash -lc 'curl -fsSL https://raw.githubusercontent.com/YOUREPO/dmj-one-signer/main/dmj-part1.sh?nocache=$(date +%s) | bash'
+bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) | bash'
 ```
 
 > Part 1 will print (and save) a URL like
@@ -76,7 +76,7 @@ export CF_D1_DATABASE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 export DMJ_ROOT_DOMAIN="dmj.one"
 export SIGNER_DOMAIN="signer.dmj.one"   # must point to this VM via Cloudflare DNS (proxied)
 
-bash -lc 'curl -fsSL https://raw.githubusercontent.com/YOUREPO/dmj-one-signer/main/dmj-part2.sh?nocache=$(date +%s) | bash'
+bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
 ```
 
 After Part 2 finishes you’ll see:
