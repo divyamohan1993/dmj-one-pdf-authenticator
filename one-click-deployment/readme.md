@@ -1,21 +1,3 @@
-
-
-```bash
-bash -lc 'curl -fsSL https://raw.githubusercontent.com/YOUREPO/dmj-one-signer/main/dmj-part1.sh?nocache=$(date +%s) | bash'
-```
-
-```bash
-# set your D1 database id (from `wrangler d1 list`, or Dashboard)
-export CF_D1_DATABASE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-
-# optional: customize domains
-export DMJ_ROOT_DOMAIN="dmj.one"
-export SIGNER_DOMAIN="signer.dmj.one"   # must point to this VM via Cloudflare DNS (proxied)
-
-bash -lc 'curl -fsSL https://raw.githubusercontent.com/YOUREPO/dmj-one-signer/main/dmj-part2.sh?nocache=$(date +%s) | bash'
-```
-
-
 You can run this **directly on a fresh GCP e2‑micro VM**. It’s split into two idempotent shell scripts:
 
 * **Part 1 (`dmj-part1.sh`)** — installs everything, **launches `wrangler login` on the headless VM**, captures and **prints/saves the OAuth URL**, and then **exits** so you can finish the login from your browser. This flow matches Cloudflare’s documented OAuth login (it prints a URL to open) and is the recommended pattern for headless servers.
