@@ -36,7 +36,10 @@ sudo systemctl enable --now nginx >/dev/null 2>&1 || true
 
 # Save machine install id (used for DB table prefix / uniqueness)
 if [ ! -f "$INST_ENV" ]; then
-  INSTALLATION_ID="$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)"
+  # INSTALLATION_ID="$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)"
+  # Generate 16 hex chars (8 random bytes) without triggering pipefail/SIGPIPE
+  INSTALLATION_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+
   {
     echo "INSTALLATION_ID=${INSTALLATION_ID}"
     # DB_PREFIX seeded with install id to avoid collisions in shared D1
@@ -44,7 +47,9 @@ if [ ! -f "$INST_ENV" ]; then
   } | sudo tee "$INST_ENV" >/dev/null
 else
   # shellcheck disable=SC1090
+  set +u
   source "$INST_ENV"
+  set -u
 fi
 
 echo "[+] Checking Wrangler auth..."
@@ -67,7 +72,9 @@ WRANGLER_PID=$!
 sleep 3
 
 # Extract the printed OAuth URL if present
-if grep -Eo 'https://dash\.cloudflare\.com/oauth2/auth[^ ]+' "$LOGIN_LOG" | head -n1 | sponge "${STATE_DIR}/wrangler-oauth-url.txt"; then
+# if grep -Eo 'https://dash\.cloudflare\.com/oauth2/auth[^ ]+' "$LOGIN_LOG" | head -n1 | sponge "${STATE_DIR}/wrangler-oauth-url.txt"; then
+if grep -Eo 'https://dash\.cloudflare\.com/oauth2/(auth|authorize)[^ ]+' "$LOGIN_LOG" | head -n1 | sponge "${STATE_DIR}/wrangler-oauth-url.txt"; then
+
   OAUTH_URL="$(cat "${STATE_DIR}/wrangler-oauth-url.txt")"
   echo
   echo "------------------------------------------------------------"
