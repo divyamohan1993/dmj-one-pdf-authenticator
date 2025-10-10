@@ -24,7 +24,7 @@ echo "[+] Updating apt and installing base packages..."
 sudo apt-get update -y
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   ca-certificates curl git jq unzip gnupg software-properties-common \
-  openjdk-21-jdk maven nginx ufw util-linux moreutils
+  openjdk-21-jdk maven nginx ufw util-linux moreutils openssl
 
 # Install/ensure Node.js (only if missing; Wrangler works on Node >=18)
 if ! command -v node >/dev/null 2>&1; then
