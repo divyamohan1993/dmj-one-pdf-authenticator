@@ -53,50 +53,79 @@ else
 fi
 
 echo "[+] Checking Wrangler auth..."
-if wrangler whoami >/dev/null 2>&1; then
-  echo "[✓] Wrangler already authenticated. You can proceed to Part 2."
-  exit 0
+# Capture output safely under `set -euo pipefail` without aborting the script.
+WHOAMI_OUTPUT="$( (wrangler whoami 2>&1 || true) )"
+
+if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are not authenticated|not authenticated'; then
+  echo "[!] Wrangler is NOT authenticated."
+else
+  # If output looks like real user info, consider it authenticated.
+  if echo "$WHOAMI_OUTPUT" | grep -qiE 'Account|Email|User'; then
+    echo "[✓] Wrangler already authenticated. You can proceed to Part 2."
+    exit 0
+  else
+    echo "[!] Wrangler authentication status was unclear; treating as NOT authenticated."
+  fi
 fi
 
 echo
 echo "[!] Wrangler is not authenticated. Starting headless OAuth login..."
-echo "    We will capture and save the login URL for you."
+echo "    We will capture and display the login URL for you."
 
 LOGIN_LOG="${LOG_DIR}/wrangler-login-$(date +%s).log"
-# Start wrangler login in background, capture output (it prints the OAuth URL).
-# Keep it running so the local callback server remains available.
-( set -o pipefail; wrangler login 2>&1 | tee -a "$LOGIN_LOG" ) &
+PID_FILE="${STATE_DIR}/wrangler-login.pid"
+OAUTH_URL_FILE="${STATE_DIR}/wrangler-oauth-url.txt"
+
+# Idempotency: stop any previous wrangler login process if it is still running.
+if [ -f "$PID_FILE" ]; then
+  OLD_PID="$(cat "$PID_FILE" || true)"
+  if [ -n "${OLD_PID:-}" ] && kill -0 "$OLD_PID" >/dev/null 2>&1; then
+    echo "[i] Stopping previous 'wrangler login' (PID: $OLD_PID)..."
+    kill "$OLD_PID" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+fi
+
+# Start wrangler login in headless mode; it will print the OAuth URL.
+# (--browser=false is the headless switch; wrangler runs a local callback server on 8976)
+( set -o pipefail; wrangler login --browser=false 2>&1 | tee -a "$LOGIN_LOG" ) &
 WRANGLER_PID=$!
+echo "$WRANGLER_PID" > "$PID_FILE"
 
-# Give wrangler a moment to print the URL
-sleep 3
+# Poll the log for the printed OAuth URL and show it to the user.
+: > "$OAUTH_URL_FILE"
+echo "[i] Waiting for OAuth URL from wrangler (PID: ${WRANGLER_PID})..."
+MAX_WAIT="${WRANGLER_LOGIN_MAX_WAIT:-60}"
+for _ in $(seq 1 "$MAX_WAIT"); do
+  if grep -Eo 'https://dash\.cloudflare\.com/oauth2/(auth|authorize)\?[^ ]+' "$LOGIN_LOG" \
+      | head -n1 | tee "$OAUTH_URL_FILE" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
 
-# Extract the printed OAuth URL if present
-# if grep -Eo 'https://dash\.cloudflare\.com/oauth2/auth[^ ]+' "$LOGIN_LOG" | head -n1 | sponge "${STATE_DIR}/wrangler-oauth-url.txt"; then
-if grep -Eo 'https://dash\.cloudflare\.com/oauth2/(auth|authorize)[^ ]+' "$LOGIN_LOG" | head -n1 | sponge "${STATE_DIR}/wrangler-oauth-url.txt"; then
-
-  OAUTH_URL="$(cat "${STATE_DIR}/wrangler-oauth-url.txt")"
+if [ -s "$OAUTH_URL_FILE" ]; then
+  OAUTH_URL="$(cat "$OAUTH_URL_FILE")"
   echo
   echo "------------------------------------------------------------"
-  echo "[ACTION REQUIRED]"
-  echo "Open the following URL on your local machine to continue:"
+  echo "[ACTION REQUIRED] Open this URL in a browser on your machine:"
   echo "$OAUTH_URL"
-  echo "The login will attempt to redirect to:"
+  echo
+  echo "After you approve, your browser will redirect to:"
   echo "  http://localhost:8976/oauth/callback?code=...&state=..."
   echo
-  echo "Since this is a headless VM, copy that entire callback URL"
-  echo "from your browser and run (on this VM):"
+  echo "Since this VM is headless, copy that entire callback URL"
+  echo "from the browser and run (on this VM):"
   echo '  curl -fsSL "http://localhost:8976/oauth/callback?code=...&state=..."'
   echo
-  echo "(Alternatively, temporarily open port 8976 and replace"
-  echo " localhost with your VM IP—this is a known workaround)."
+  echo "[i] Saved URL: $OAUTH_URL_FILE"
+  echo "[i] Live log : $LOGIN_LOG"
+  echo "[i] Login PID: ${WRANGLER_PID} (keeps listening on 8976)"
   echo "------------------------------------------------------------"
-  echo
-  echo "[i] The URL has also been saved to: ${STATE_DIR}/wrangler-oauth-url.txt"
-  echo "[i] Wrangler login process is running in background (PID: ${WRANGLER_PID})."
 else
-  echo "[!] Could not detect OAuth URL yet. Check the live log at: $LOGIN_LOG"
-  echo "    Wrangler login is running (PID: ${WRANGLER_PID})."
+  echo "[!] Could not detect the OAuth URL yet."
+  echo "    Tail the log for updates:  tail -f \"$LOGIN_LOG\""
+  echo "    'wrangler login' is still running (PID: ${WRANGLER_PID})."
 fi
 
 echo "[*] Exiting Part 1 now. After you complete login, run Part 2."
