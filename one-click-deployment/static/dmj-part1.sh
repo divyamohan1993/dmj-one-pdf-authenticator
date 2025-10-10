@@ -7,6 +7,17 @@ LOG_DIR="/var/log/dmj"
 STATE_DIR="/var/lib/dmj"
 CONF_DIR="/etc/dmj"
 INST_ENV="${CONF_DIR}/installer.env"
+
+# Service account that will own ALL Wrangler auth/config
+DMJ_USER="dmjsvc"
+DMJ_HOME="/var/lib/${DMJ_USER}"
+DMJ_XDG="${DMJ_HOME}/.config"                         # XDG base
+DMJ_WR_CFG_DIR="${DMJ_XDG}/.wrangler/config"          # XDG-style path
+DMJ_WR_CFG_FILE="${DMJ_WR_CFG_DIR}/default.toml"
+# Legacy path (some Wrangler builds still use this)
+DMJ_LEGACY_WR_DIR="${DMJ_HOME}/.wrangler"             # symlink to XDG
+DMJ_LEGACY_CFG="${DMJ_LEGACY_WR_DIR}/config/default.toml"
+
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
 echo "[+] Updating apt and installing base packages..."
@@ -15,8 +26,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   ca-certificates curl git jq unzip gnupg software-properties-common \
   openjdk-21-jdk maven nginx ufw util-linux moreutils
 
-# Install Node.js (22.x LTS) via NodeSource
-# (official quick method per NodeSource) 
+# Install/ensure Node.js (only if missing; Wrangler works on Node >=18)
 if ! command -v node >/dev/null 2>&1; then
   echo "[+] Installing Node.js 22.x (NodeSource)..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -24,25 +34,56 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 echo "[+] Node: $(node -v); npm: $(npm -v)"
 
-# Install Wrangler (modern) 
+# Install Wrangler (global) if missing
 if ! command -v wrangler >/dev/null 2>&1; then
   echo "[+] Installing Wrangler CLI..."
   sudo npm i -g wrangler@latest
 fi
-echo "[+] Wrangler: $(wrangler --version)"
+WRANGLER_BIN="$(command -v wrangler)"
+echo "[+] Wrangler: $("$WRANGLER_BIN" --version)"
 
-# Ensure nginx is running (we’ll use it in Part 2)
+# Ensure nginx is running (used in Part 2)
 sudo systemctl enable --now nginx >/dev/null 2>&1 || true
+
+# Create locked service account for Wrangler auth (idempotent)
+if ! id -u "$DMJ_USER" >/dev/null 2>&1; then
+  echo "[+] Creating locked service user: ${DMJ_USER}"
+  sudo useradd --system --home-dir "$DMJ_HOME" --create-home \
+    --shell /usr/sbin/nologin "$DMJ_USER"
+fi
+
+# Prepare config dirs (XDG + legacy symlink), secure permissions
+sudo mkdir -p "$DMJ_WR_CFG_DIR"
+sudo chown -R "$DMJ_USER:$DMJ_USER" "$DMJ_HOME"
+sudo chmod 700 "$DMJ_HOME"
+sudo chmod -R go-rwx "$DMJ_HOME"
+
+# Ensure legacy ~/.wrangler points at XDG .wrangler
+if [ ! -e "$DMJ_LEGACY_WR_DIR" ]; then
+  sudo -u "$DMJ_USER" -H ln -s "${DMJ_XDG}/.wrangler" "$DMJ_LEGACY_WR_DIR" || true
+fi
+
+# Helper to run commands as the service user, with HOME/XDG set
+as_dmj() {
+  sudo -u "$DMJ_USER" -H env HOME="$DMJ_HOME" XDG_CONFIG_HOME="$DMJ_XDG" "$@"
+}
+
+# If root has a token file but service-user doesn't, migrate it (one-time)
+ROOT_CFG1="/root/.wrangler/config/default.toml"
+ROOT_CFG2="/root/.config/.wrangler/config/default.toml"
+if [ ! -f "$DMJ_WR_CFG_FILE" ] && [ -f "$ROOT_CFG1" -o -f "$ROOT_CFG2" ]; then
+  SRC="$ROOT_CFG1"
+  [ -f "$ROOT_CFG2" ] && SRC="$ROOT_CFG2"
+  echo "[i] Migrating existing root Wrangler credentials into ${DMJ_USER}..."
+  sudo install -m 600 -o "$DMJ_USER" -g "$DMJ_USER" "$SRC" "$DMJ_WR_CFG_FILE" || true
+fi
 
 # Save machine install id (used for DB table prefix / uniqueness)
 if [ ! -f "$INST_ENV" ]; then
-  # INSTALLATION_ID="$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)"
   # Generate 16 hex chars (8 random bytes) without triggering pipefail/SIGPIPE
   INSTALLATION_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-
   {
     echo "INSTALLATION_ID=${INSTALLATION_ID}"
-    # DB_PREFIX seeded with install id to avoid collisions in shared D1
     echo "DB_PREFIX=dmj_${INSTALLATION_ID}_"
   } | sudo tee "$INST_ENV" >/dev/null
 else
@@ -52,31 +93,40 @@ else
   set -u
 fi
 
-echo "[+] Checking Wrangler auth..."
-# Capture output safely under `set -euo pipefail` without aborting the script.
-WHOAMI_OUTPUT="$( (wrangler whoami 2>&1 || true) )"
+# === CONSOLIDATED AUTH CHECK (always as service user) =======================
+echo "[+] Checking Wrangler auth (service acct: ${DMJ_USER})..."
+WHOAMI_OUTPUT="$( (as_dmj "$WRANGLER_BIN" whoami 2>&1 || true) )"
 
 if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are not authenticated|not authenticated'; then
-  echo "[!] Wrangler is NOT authenticated."
+  echo "[!] Wrangler is NOT authenticated for ${DMJ_USER}."
 else
-  # If output looks like real user info, consider it authenticated.
-  if echo "$WHOAMI_OUTPUT" | grep -qiE 'Account|Email|User'; then
-    echo "[✓] Wrangler already authenticated. You can proceed to Part 2."
+  if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are logged in|Account Name|Email|User'; then
+    echo "[✓] Wrangler already authenticated (service user). You can proceed to Part 2."
+    # Drop a small wrapper so future commands pin to the service user.
+    if [ ! -x /usr/local/bin/dmj-wrangler ]; then
+      echo "[+] Installing dmj-wrangler helper..."
+      sudo bash -c "cat > /usr/local/bin/dmj-wrangler" <<'EOSH'
+#!/usr/bin/env bash
+exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config wrangler "$@"
+EOSH
+      sudo chmod 0755 /usr/local/bin/dmj-wrangler
+    fi
     exit 0
   else
-    echo "[!] Wrangler authentication status was unclear; treating as NOT authenticated."
+    echo "[!] Wrangler authentication status unclear; treating as NOT authenticated."
   fi
 fi
 
+# === HEADLESS LOGIN (service user) ==========================================
 echo
-echo "[!] Wrangler is not authenticated. Starting headless OAuth login..."
+echo "[!] Starting headless OAuth login for ${DMJ_USER}..."
 echo "    We will capture and display the login URL for you."
 
 LOGIN_LOG="${LOG_DIR}/wrangler-login-$(date +%s).log"
 PID_FILE="${STATE_DIR}/wrangler-login.pid"
 OAUTH_URL_FILE="${STATE_DIR}/wrangler-oauth-url.txt"
 
-# Idempotency: stop any previous wrangler login process if it is still running.
+# Idempotency: stop any previous wrangler login process if running
 if [ -f "$PID_FILE" ]; then
   OLD_PID="$(cat "$PID_FILE" || true)"
   if [ -n "${OLD_PID:-}" ] && kill -0 "$OLD_PID" >/dev/null 2>&1; then
@@ -86,19 +136,18 @@ if [ -f "$PID_FILE" ]; then
   fi
 fi
 
-# Start wrangler login in headless mode; it will print the OAuth URL.
-# (--browser=false is the headless switch; wrangler runs a local callback server on 8976)
-( set -o pipefail; wrangler login --browser=false 2>&1 | tee -a "$LOGIN_LOG" ) &
-WRANGLER_PID=$!
-echo "$WRANGLER_PID" > "$PID_FILE"
+# Start wrangler login as service user, write its real PID, and tee output
+# into a root-writable log (login server listens on localhost:8976).
+( set -o pipefail;
+  as_dmj bash -lc 'echo $$ > "'"$PID_FILE"'"; exec '"$WRANGLER_BIN"' login --browser=false'
+) 2>&1 | tee -a "$LOGIN_LOG" &
 
-# Poll the log for the printed OAuth URL and show it to the user.
+echo "[i] Waiting for OAuth URL from wrangler (PID file: $PID_FILE)..."
 : > "$OAUTH_URL_FILE"
-echo "[i] Waiting for OAuth URL from wrangler (PID: ${WRANGLER_PID})..."
-MAX_WAIT="${WRANGLER_LOGIN_MAX_WAIT:-60}"
+MAX_WAIT="${WRANGLER_LOGIN_MAX_WAIT:-90}"
 for _ in $(seq 1 "$MAX_WAIT"); do
   if grep -Eo 'https://dash\.cloudflare\.com/oauth2/(auth|authorize)\?[^ ]+' "$LOGIN_LOG" \
-      | head -n1 | tee "$OAUTH_URL_FILE" >/dev/null; then
+      | head -n1 | sponge "$OAUTH_URL_FILE"; then
     break
   fi
   sleep 1
@@ -108,24 +157,34 @@ if [ -s "$OAUTH_URL_FILE" ]; then
   OAUTH_URL="$(cat "$OAUTH_URL_FILE")"
   echo
   echo "------------------------------------------------------------"
-  echo "[ACTION REQUIRED] Open this URL in a browser on your machine:"
+  echo "[ACTION REQUIRED] Open this URL in a local browser to continue:"
   echo "$OAUTH_URL"
   echo
   echo "After you approve, your browser will redirect to:"
   echo "  http://localhost:8976/oauth/callback?code=...&state=..."
   echo
-  echo "Since this VM is headless, copy that entire callback URL"
-  echo "from the browser and run (on this VM):"
+  echo "Because this is a headless VM, copy that entire callback URL"
+  echo "from your browser and run (on THIS VM):"
   echo '  curl -fsSL "http://localhost:8976/oauth/callback?code=...&state=..."'
   echo
   echo "[i] Saved URL: $OAUTH_URL_FILE"
   echo "[i] Live log : $LOGIN_LOG"
-  echo "[i] Login PID: ${WRANGLER_PID} (keeps listening on 8976)"
+  echo "[i] Login PID: $(cat "$PID_FILE" 2>/dev/null || echo '?') (listens on 8976)"
   echo "------------------------------------------------------------"
 else
   echo "[!] Could not detect the OAuth URL yet."
   echo "    Tail the log for updates:  tail -f \"$LOGIN_LOG\""
-  echo "    'wrangler login' is still running (PID: ${WRANGLER_PID})."
+  echo "    'wrangler login' is still running (PID: $(cat "$PID_FILE" 2>/dev/null || echo '?'))."
+fi
+
+# Install the dmj-wrangler helper for consistent future use
+if [ ! -x /usr/local/bin/dmj-wrangler ]; then
+  echo "[+] Installing dmj-wrangler helper..."
+  sudo bash -c "cat > /usr/local/bin/dmj-wrangler" <<'EOSH'
+#!/usr/bin/env bash
+exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config wrangler "$@"
+EOSH
+  sudo chmod 0755 /usr/local/bin/dmj-wrangler
 fi
 
 echo "[*] Exiting Part 1 now. After you complete login, run Part 2."
