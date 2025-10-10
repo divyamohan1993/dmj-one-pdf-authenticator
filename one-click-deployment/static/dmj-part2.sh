@@ -13,6 +13,18 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 # shellcheck disable=SC1090
 [ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
 
+# --- Use the Part 1 service-user Wrangler wrapper ----------------------------
+WR="/usr/local/bin/dmj-wrangler"
+if [ ! -x "$WR" ]; then
+  # Fallback if the helper is missing (shouldn't happen if Part 1 ran)
+  WR="$(command -v wrangler || true)"
+fi
+if [ -z "$WR" ]; then
+  echo "[x] Wrangler CLI not found. Run Part 1 first."
+  exit 1
+fi
+
+
 DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
 SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
 
@@ -26,19 +38,19 @@ NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
 if [ -z "${CF_D1_DATABASE_ID}" ]; then
   echo "[x] Please export CF_D1_DATABASE_ID to your D1 database id (UUID)."
-  echo "    You can run:  wrangler d1 list --json"
+  echo "    You can run:  dmj-wrangler d1 list --json"
   exit 1
 fi
 
 echo "[+] Verifying Wrangler auth..."
-if ! wrangler whoami >/dev/null 2>&1; then
+if ! "$WR" whoami >/dev/null 2>&1; then
   echo "[x] Wrangler is not authenticated yet. Finish Part 1 login first."
   exit 1
 fi
 
 ### --- Resolve D1 database name (needed by wrangler d1 execute) --------------
 echo "[+] Resolving D1 database name for id ${CF_D1_DATABASE_ID} ..."
-D1_LIST_JSON="$(wrangler d1 list --json || true)"
+D1_LIST_JSON="$("$WR" d1 list --json || true)"
 if [ -z "$D1_LIST_JSON" ] || [ "$D1_LIST_JSON" = "null" ]; then
   echo "[x] Could not list D1 databases. Are you logged into the right account?"
   exit 1
@@ -48,25 +60,38 @@ D1_NAME="$(echo "$D1_LIST_JSON" | jq -r --arg ID "$CF_D1_DATABASE_ID" '
   .[] | select((.uuid==$ID) or (.id==$ID) or (.database_id==$ID)) | .name // .database_name' | head -n1)"
 if [ -z "$D1_NAME" ] || [ "$D1_NAME" = "null" ]; then
   echo "[x] Could not find a database with id ${CF_D1_DATABASE_ID} in your account."
-  echo "    Run: wrangler d1 list --json   and copy the correct id."
+  echo "    Run: dmj-wrangler d1 list --json   and copy the correct id."
   exit 1
 fi
 echo "[✓] D1: name=${D1_NAME}, id=${CF_D1_DATABASE_ID}"
 
-### --- Generate or load all local secrets (VM only; Worker gets only hashed/opaque) ---
+# --- Secrets: generate once, but ALWAYS load into this shell -----------------
 SECRETS_FILE="${CONF_DIR}/dmj-worker.secrets"
 if [ ! -f "$SECRETS_FILE" ]; then
   echo "[+] Generating secrets (HMAC keys, session secret, TOTP master) ..."
-  SIGNING_HMAC="$(openssl rand -base64 32)"
-  SESSION_HMAC="$(openssl rand -base64 32)"
-  TOTP_MASTER="$(openssl rand -base64 32)"
-  echo "SIGNING_GATEWAY_HMAC_KEY=${SIGNING_HMAC}" | sudo tee -a "$SECRETS_FILE" >/dev/null
-  echo "SESSION_HMAC_KEY=${SESSION_HMAC}"         | sudo tee -a "$SECRETS_FILE" >/dev/null
-  echo "TOTP_MASTER_KEY=${TOTP_MASTER}"           | sudo tee -a "$SECRETS_FILE" >/dev/null
-else
-  # shellcheck disable=SC1090
-  source "$SECRETS_FILE"
+  SIGNING_GATEWAY_HMAC_KEY="$(openssl rand -base64 32)"
+  SESSION_HMAC_KEY="$(openssl rand -base64 32)"
+  TOTP_MASTER_KEY="$(openssl rand -base64 32)"
+  {
+    echo "SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}"
+    echo "SESSION_HMAC_KEY=${SESSION_HMAC_KEY}"
+    echo "TOTP_MASTER_KEY=${TOTP_MASTER_KEY}"
+  } | sudo tee "$SECRETS_FILE" >/dev/null
+  sudo chmod 600 "$SECRETS_FILE"
 fi
+# Load them into the current shell so subsequent steps can use them
+# shellcheck disable=SC1090
+source "$SECRETS_FILE"
+
+# Sanity-check: do not proceed with empty secrets (prevents bad deploys)
+for v in SIGNING_GATEWAY_HMAC_KEY SESSION_HMAC_KEY TOTP_MASTER_KEY; do
+  if [ -z "${!v:-}" ]; then
+    echo "[x] $v is empty; aborting."
+    echo "    Check ${SECRETS_FILE} or delete it and re-run Part 2 to regenerate."
+    exit 1
+  fi
+done
+
 
 # Admin portal key (cleartext shown once via GUI). We store a hash as a Worker secret.
 ADMIN_KEY_FILE="${STATE_DIR}/admin-key.txt"
@@ -417,7 +442,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-signer.service
 
 # nginx site (reverse proxy to dynamic port from /etc/dmj/signer.port)
-SIGNER_PORT="$(cat /etc/dmj/signer.port)"
+SIGNER_PORT="$(cat /etc/dmj/signer.port 2>/dev/null || echo 18080)"
 sudo tee "$NGINX_SITE" >/dev/null <<NGX
 server {
   listen 80;
@@ -836,26 +861,26 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}sessions(
 SQL
 
 echo "[+] Applying schema to remote D1..."
-( cd "$WORKER_DIR" && wrangler d1 execute "${D1_NAME}" --remote --file ./schema.sql )
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
 
 # Insert one-time admin key for first GUI fetch
 echo "[+] Storing one-time admin portal key for first GUI access..."
-( cd "$WORKER_DIR" && wrangler d1 execute "${D1_NAME}" --remote --command \
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command \
 "INSERT OR REPLACE INTO ${DB_PREFIX}bootstrap(k,v,consumed,created_at) VALUES('ADMIN_PORTAL_KEY','${ADMIN_PORTAL_KEY}',0,${EPOCHSECONDS:-$(date +%s)});" )
 
 # Upload Worker secrets (pipe, non-interactive) 
 echo "[+] Pushing Worker secrets to Cloudflare..."
 ( cd "$WORKER_DIR" && \
-  printf '%s' "${SIGNING_GATEWAY_HMAC_KEY}" | wrangler secret put SIGNING_GATEWAY_HMAC_KEY --quiet && \
-  printf '%s' "${SESSION_HMAC_KEY}"        | wrangler secret put SESSION_HMAC_KEY --quiet && \
-  printf '%s' "${TOTP_MASTER_KEY}"         | wrangler secret put TOTP_MASTER_KEY --quiet && \
-  printf '%s' "${ADMIN_HASH}"              | wrangler secret put ADMIN_PASS_HASH --quiet )
+  printf '%s' "${SIGNING_GATEWAY_HMAC_KEY}" | "$WR" secret put SIGNING_GATEWAY_HMAC_KEY --quiet && \
+  printf '%s' "${SESSION_HMAC_KEY}"        | "$WR" secret put SESSION_HMAC_KEY --quiet && \
+  printf '%s' "${TOTP_MASTER_KEY}"         | "$WR" secret put TOTP_MASTER_KEY --quiet && \
+  printf '%s' "${ADMIN_HASH}"              | "$WR" secret put ADMIN_PASS_HASH --quiet )
 
 # Deploy Worker (modern command) 
 echo "[+] Deploying Worker..."
-( cd "$WORKER_DIR" && wrangler deploy )
+( cd "$WORKER_DIR" && "$WR" deploy )
 
-WORKER_URL="$(wrangler deployments list --format=json | jq -r '.[0].url' || true)"
+WORKER_URL="$("$WR" deployments list --format=json | jq -r '.[0].url' || true)"
 echo "------------------------------------------------------------------"
 echo "[✓] Done."
 echo "Worker URL (temporary workers.dev): ${WORKER_URL:-see dashboard}"
