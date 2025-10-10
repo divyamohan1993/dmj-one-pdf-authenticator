@@ -29,7 +29,7 @@ if ! command -v wrangler >/dev/null 2>&1; then
   echo "[+] Installing Wrangler CLI..."
   sudo npm i -g wrangler@latest
 fi
-echo "[+] Wrangler: $(wrangler --version)"
+# echo "[+] Wrangler: $(wrangler --version)"
 
 # Ensure nginx is running (we’ll use it in Part 2)
 sudo systemctl enable --now nginx >/dev/null 2>&1 || true
