@@ -270,6 +270,14 @@ import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
+import org.apache.pdfbox.pdmodel.PDDocumentInformation;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.ExternalSigningSupport;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.SignatureOptions;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
@@ -419,29 +427,92 @@ public class SignerServer {
     return cms.getEncoded(); // DER
   }
 
+  // Set DocMDP transform so this becomes a *certification* signature.
+  // P=1 => no changes allowed; 2 => form fill/annot; 3 => limited edits.
+  static void setMDPPermission(PDDocument doc, PDSignature signature, int accessPermissions) {
+    COSDictionary sigDict = signature.getCOSObject();
+    COSDictionary transformParams = new COSDictionary();
+    transformParams.setItem(COSName.TYPE, COSName.getPDFName("TransformParams"));
+    transformParams.setName(COSName.V, "1.2");
+    transformParams.setInt(COSName.P, accessPermissions);
+
+    COSDictionary refDict = new COSDictionary();
+    refDict.setItem(COSName.TYPE, COSName.getPDFName("SigRef"));
+    refDict.setItem(COSName.TRANSFORM_METHOD, COSName.DOCMDP);
+    refDict.setItem(COSName.D, transformParams);
+
+    COSArray refArray = new COSArray();
+    refArray.add(refDict);
+    sigDict.setItem(COSName.REFERENCE, refArray);
+
+    COSDictionary catalog = doc.getDocumentCatalog().getCOSObject();
+    COSDictionary perms = (COSDictionary) catalog.getDictionaryObject(COSName.PERMS);
+    if (perms == null) { perms = new COSDictionary(); catalog.setItem(COSName.PERMS, perms); }
+    perms.setItem(COSName.DOCMDP, sigDict);
+  }
+
+
   static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
-    try (PDDocument doc = Loader.loadPDF(original)) {
+    // 1) Harden the input (author metadata, optional "no-copy" permissions)
+    byte[] hardened;
+    {
+      try (PDDocument doc = Loader.loadPDF(original)) {
+        // Author / Creator metadata
+        PDDocumentInformation info = doc.getDocumentInformation();
+        if (info == null) info = new PDDocumentInformation();
+        info.setAuthor("dmj.one");                         // Author = dmj.one
+        info.setCreator("dmj.one");                        // optional
+        doc.setDocumentInformation(info);                  // persist metadata
+
+        // (Optional) viewer-enforced "no copy / no modify"
+        // Empty user password keeps the file openable; owner password is random.
+        AccessPermission ap = new AccessPermission();
+        ap.setCanExtractContent(false);
+        ap.setCanExtractForAccessibility(false);
+        ap.setCanModify(false);
+        ap.setCanModifyAnnotations(false);
+        ap.setCanAssembleDocument(false);
+        ap.setCanFillInForm(false);
+        // ap.setCanPrint(false); // uncomment if you also want to forbid printing
+        String ownerPass = Base64.toBase64String(SecureRandom.getInstanceStrong().generateSeed(24));
+        StandardProtectionPolicy spp = new StandardProtectionPolicy(ownerPass, "", ap);
+        spp.setEncryptionKeyLength(256);
+        spp.setPreferAES(true);
+        doc.protect(spp);  // apply permissions
+
+        ByteArrayOutputStream tmp = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
+        doc.save(tmp);     // full save (encrypted content must be fully written)
+        hardened = tmp.toByteArray();
+      }
+    }
+
+    // 2) Certification + signature (no changes allowed after signing)
+    try (PDDocument doc = Loader.loadPDF(hardened)) {
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
       sig.setName("dmj.one");
       sig.setLocation("IN");
-      sig.setReason("Issued by dmj.one");
+      sig.setReason("Contents securely verified by dmj.one against any tampering.");
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());
-  
-      // PDFBox will call our callback with the exact byte range to be signed
-      doc.addSignature(sig, content -> {
-        try {
-          return buildDetachedCMS(content, pk, cert);
-        } catch (Exception e) {
-          throw new IOException("CMS build failed", e);
-        }
-      });
-  
-      // In PDFBox 2/3, use the one-arg incremental save
-      ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
-      doc.saveIncremental(out);         // <-- fixed API
+
+      // Certification: DocMDP permission level 1 (no changes allowed)
+      setMDPPermission(doc, sig, 1);  // from SigUtils in the official examples :contentReference[oaicite:5]{index=5}
+
+      // Reserve enough space for CMS
+      SignatureOptions opts = new SignatureOptions();
+      opts.setPreferredSignatureSize(16000);
+
+      // Declare the signature; we'll inject CMS bytes via external-signing API
+      doc.addSignature(sig, null, opts);
+
+      ByteArrayOutputStream out = new ByteArrayOutputStream(hardened.length + 16384);
+
+      // External signing flow recommended by PDFBox examples
+      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out);  // :contentReference[oaicite:6]{index=6}
+      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
+      ext.setSignature(cms);  // inject the PKCS#7/CMS container
       return out.toByteArray();
     }
   }
@@ -893,8 +964,9 @@ async function handleAdmin(env: Env, req: Request){
     if (u.pathname.endsWith("/sign")){
       const file = form.get("file") as File | null;
       if(!file) return json({error:"file missing"}, 400);
-      const buf = await file.arrayBuffer();
-      const sha = await sha256(buf);
+      // const buf = await file.arrayBuffer();
+      // const sha = await sha256(buf);
+      const buf = await file.arrayBuffer();          // original (unsigned)
 
       // HMAC gating to signer
       const { ts, nonce, sig } = await hmac(env, buf, "POST", "/sign");
@@ -910,6 +982,7 @@ async function handleAdmin(env: Env, req: Request){
       });
       if(!res.ok) return json({error:"signer error", detail: await res.text()}, 502);
       const signed = await res.arrayBuffer();
+      const sha = await sha256(signed);              // <-- store hash of *signed* file
 
       const meta = String(form.get("meta")||"").trim();
       const p = env.DB_PREFIX;
