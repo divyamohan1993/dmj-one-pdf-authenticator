@@ -327,7 +327,9 @@ public class SignerServer {
     mac.update((byte)0);
     mac.update(ts.getBytes());
     mac.update((byte)0);
-    mac.update(nonce.getBytes());
+    // mac.update(nonce.getBytes());
+    byte[] nonceRaw = Base64.decode(nonce);
+    mac.update(nonceRaw);
     mac.update((byte)0);
     mac.update(body);
     String expected = java.util.Base64.getEncoder().encodeToString(mac.doFinal());
