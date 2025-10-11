@@ -505,6 +505,7 @@ public class SignerServer {
 
   // --- Sign the original PDF (no protections, no DocMDP) ---
   static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
+    ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
     try (PDDocument doc = Loader.loadPDF(original)) {
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
@@ -520,17 +521,18 @@ public class SignerServer {
       opts.setPreferredSignatureSize(32768);
 
       // Register signature for *external* signing
-      doc.addSignature(sig, opts);  // <-- external-signing overload (no SignatureInterface needed) :contentReference[oaicite:1]{index=1}
-
-      // Write an incremental update; PDFBox returns the exact bytes to sign
-      ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
-      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out); // last update contains only this signature :contentReference[oaicite:2]{index=2}
+      doc.addSignature(sig, opts);
+      
+      // Prepare incremental update and obtain the exact bytes to sign
+      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out);
 
       // Build a PKCS#7/CMS *detached* signature over that content
-      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert); // false/“detached” is what we need :contentReference[oaicite:3]{index=3}
+      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
 
       // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
       ext.setSignature(cms);
+
+      doc.close()
 
       return out.toByteArray();
     }
@@ -807,7 +809,17 @@ async function ensureSchema(env: Env) {
        revoked_at INTEGER,
        revoke_reason TEXT
      )`,
-    `CREATE INDEX IF NOT EXISTS ${p}documents_sha_idx ON ${p}documents(doc_sha256)`,
+    `CREATE INDEX IF NOT EXISTS ${p}documents_sha_idx ON ${p}documents(doc_sha256)`,    
+    `CREATE TABLE IF NOT EXISTS ${p}doc_verifications(
+       doc_sha256 TEXT PRIMARY KEY,
+       has_signature INTEGER,
+       is_valid INTEGER,
+       issued_by_us INTEGER,
+       covers_document INTEGER,
+       subfilter TEXT,
+       issuer TEXT,
+       verified_at INTEGER
+     )`,
     `CREATE TABLE IF NOT EXISTS ${p}audit(
        id TEXT PRIMARY KEY,
        at INTEGER,
@@ -1033,7 +1045,21 @@ async function handleAdmin(env: Env, req: Request){
       });
       if(!res.ok) return json({error:"signer error", detail: await res.text()}, 502);
       const signed = await res.arrayBuffer();
-      const sha = await sha256(signed);              // <-- store hash of *signed* file
+      const sha = await sha256(signed);              // hash of the *signed* file
+
+      // Verify the just-signed file server-side BEFORE persisting or offering for download
+      const vf = new FormData();
+      vf.set("file", new Blob([signed], {type:"application/pdf"}), "signed.pdf");
+      const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
+      if(!vres.ok){
+        return json({error:"verify failed (signer side)"}, 502);
+      }
+      const vinfo = await vres.json() as any;
+      const okEmbedded = vinfo && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
+      if(!okEmbedded){
+        // Do NOT store an unverifiable artifact
+        return json({error:"signer produced an unverifiable PDF", details:vinfo}, 502);
+      }
 
       const meta = String(form.get("meta")||"").trim();
       const p = env.DB_PREFIX;
@@ -1043,6 +1069,14 @@ async function handleAdmin(env: Env, req: Request){
                   (id,doc_sha256,meta_json,signed_at,revoked_at)
                   VALUES(?,?,?,?,NULL)`)
         .bind(crypto.randomUUID(), sha, meta || "{}", now())
+        .run();
+      // Upsert the verification result
+      await env.DB
+        .prepare(`INSERT OR REPLACE INTO ${p}doc_verifications
+                  (doc_sha256,has_signature,is_valid,issued_by_us,covers_document,subfilter,issuer,verified_at)
+                  VALUES(?,?,?,?,?,?,?,?)`)
+        .bind(sha, vinfo.hasSignature?1:0, vinfo.isValid?1:0, vinfo.issuedByUs?1:0, vinfo.coversDocument?1:0,
+              String(vinfo.subFilter||""), String(vinfo.issuer||""), now())
         .run();
       await env.DB
         .prepare(`INSERT INTO ${p}audit
@@ -1056,7 +1090,8 @@ async function handleAdmin(env: Env, req: Request){
           "content-type":"application/pdf",
           "content-disposition":`attachment; filename="signed.pdf"`,
           "x-doc-sha256": sha,
-          "x-issuer": env.ISSUER
+          "x-issuer": env.ISSUER,
+          "x-doc-verified": "true"
         }
       });
     }
@@ -1167,6 +1202,16 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}documents(
   revoke_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_sha_idx ON ${DB_PREFIX}documents(doc_sha256);
+CREATE TABLE IF NOT EXISTS ${DB_PREFIX}doc_verifications(
+  doc_sha256 TEXT PRIMARY KEY,
+  has_signature INTEGER,
+  is_valid INTEGER,
+  issued_by_us INTEGER,
+  covers_document INTEGER,
+  subfilter TEXT,
+  issuer TEXT,
+  verified_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS ${DB_PREFIX}audit(
   id TEXT PRIMARY KEY,
   at INTEGER,
