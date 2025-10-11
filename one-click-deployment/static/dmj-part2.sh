@@ -426,7 +426,7 @@ public class SignerServer {
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
       sig.setName("dmj.one");
       sig.setLocation("IN");
-      sig.setReason("Issued by dmj.one")
+      sig.setReason("Issued by dmj.one");
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());      
 
