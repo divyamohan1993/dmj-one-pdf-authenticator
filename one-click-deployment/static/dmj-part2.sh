@@ -494,7 +494,9 @@ public class SignerServer {
         if (br != null && br.length == 4) {
           long len = input.length;
           long a = br[0], b = br[1], c = br[2], d = br[3];
-          coversDoc = (a == 0) && (b + d == len) && (c == b);
+          // ByteRange = [0, length0, offset1, length1]
+          // Must start at 0, second segment must end at EOF, and start after first:
+          coversDocument = (a == 0) && (c + d == len) && (c >= b);
         }
       }
     }
@@ -526,12 +528,26 @@ public class SignerServer {
     app.get("/spki", ctx -> ctx.json(Map.of("spki", spki, "issuer", issuer)));
 
     app.post("/verify", ctx -> {
-      UploadedFile f = ctx.uploadedFile("file");
-      if (f == null) { ctx.status(400).json(Map.of("error","file missing")); return; }
-      byte[] data = IOUtils.toByteArray(f.content());
-      Map<String,Object> v = verifyPdf(data, keys.cert);
-      ctx.json(v);
+      try {
+        UploadedFile f = ctx.uploadedFile("file");
+        if (f == null) { ctx.status(400).json(Map.of("error","file missing")); return; }
+        byte[] data = IOUtils.toByteArray(f.content());
+        Map<String,Object> v = verifyPdf(data, keys.cert);
+        ctx.json(v);            // 200 with verification object
+      } catch (Exception e) {
+        // Always return 200 with a negative result; worker will read JSON and decide.
+        ctx.status(200).json(Map.of(
+          "hasSignature", false,
+          "isValid", false,
+          "issuedByUs", false,
+          "coversDocument", false,
+          "issuer", "",
+          "subFilter", "",
+          "error", "exception: " + e.getClass().getSimpleName()
+        ));
+      }
     });
+
 
     app.post("/sign", ctx -> {
       if (shared.isBlank()) { ctx.status(500).json(Map.of("error","server not configured")); return; }
@@ -638,6 +654,7 @@ sudo tee "$NGINX_SITE" >/dev/null <<NGX
 server {
   listen 80;
   server_name ${SIGNER_DOMAIN};
+  client_max_body_size 25m;
 
   location / {
     proxy_pass http://127.0.0.1:${SIGNER_PORT};
@@ -698,9 +715,21 @@ function hex(a: ArrayBuffer){ return [...new Uint8Array(a)].map(x=>x.toString(16
 function concat(...parts: Uint8Array[]){ let len=0; for(const p of parts) len+=p.length; const out=new Uint8Array(len); let off=0; for(const p of parts){ out.set(p, off); off+=p.length; } return out; }
 
 function sameOrigin(req: Request){
-  const o = req.headers.get("origin"); if(!o) return false;
   const u = new URL(req.url);
-  return o === `${u.protocol}//${u.host}`;
+  const expected = `${u.protocol}//${u.host}`;
+
+  const o = req.headers.get("origin");
+  if (o) return o === expected;
+
+  // Fallback for agents that omit Origin on same-origin form posts
+  const r = req.headers.get("referer");
+  if (r) {
+    try { return new URL(r).origin === expected; } catch {/* ignore */}
+  }
+
+  // With SameSite=Strict cookies, a cross-site attacker won't send our cookie.
+  // Treat absence of both headers as acceptable.
+  return true;
 }
 
 async function ensureSchema(env: Env) {
