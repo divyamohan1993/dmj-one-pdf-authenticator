@@ -69,6 +69,7 @@ bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pd
 2. **Run Part 2** (provisions and deploys everything)
 
 ```bash
+# rp2.sh
 # set your D1 database id (from `wrangler d1 list`, or Dashboard)
 export CF_D1_DATABASE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
@@ -76,7 +77,11 @@ export CF_D1_DATABASE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 export DMJ_ROOT_DOMAIN="dmj.one"
 export SIGNER_DOMAIN="signer.dmj.one"   # must point to this VM via Cloudflare DNS (proxied)
 
-bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
+# logging: 1 = verbose to console + log; 0 = minimal console, full log only
+export DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+
+sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN,DMJ_VERBOSE \
+  bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
 ```
 
 After Part 2 finishes you’ll see:
