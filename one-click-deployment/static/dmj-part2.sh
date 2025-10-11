@@ -207,11 +207,11 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
 
   <build>
     <plugins>
-      <!-- Build a single executable JAR with all deps -->
+      <!-- Build a single executable JAR with all deps -->      
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
-        <version>3.5.0</version>
+        <version>3.5.2</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -219,10 +219,21 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
             <configuration>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
+                <!-- put your entry point here -->
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>one.dmj.signer.SignerServer</mainClass>
                 </transformer>
               </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
             </configuration>
           </execution>
         </executions>
