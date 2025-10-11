@@ -428,8 +428,8 @@ public class SignerServer {
       sig.setLocation("IN");
       sig.setReason("Issued by dmj.one");
       sig.setContactInfo("contact@dmj.one");
-      sig.setSignDate(Calendar.getInstance());      
-
+      sig.setSignDate(Calendar.getInstance());
+  
       // PDFBox will call our callback with the exact byte range to be signed
       doc.addSignature(sig, content -> {
         try {
@@ -438,15 +438,14 @@ public class SignerServer {
           throw new IOException("CMS build failed", e);
         }
       });
-
-      // Critical: write an incremental update over the *original* bytes
-      ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 8192);
-      try (InputStream originalIn = new ByteArrayInputStream(original)) {
-        doc.saveIncremental(originalIn, out);
-      }
+  
+      // In PDFBox 2/3, use the one-arg incremental save
+      ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
+      doc.saveIncremental(out);         // <-- fixed API
       return out.toByteArray();
     }
   }
+
 
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
     Map<String,Object> out = new LinkedHashMap<>();
