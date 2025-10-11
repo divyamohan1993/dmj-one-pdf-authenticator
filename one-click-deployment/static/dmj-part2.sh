@@ -262,6 +262,7 @@ import org.bouncycastle.cert.X509CertificateHolder;          // <-- added
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.util.encoders.Base64;
 
+
 import org.apache.pdfbox.Loader;                               // <-- added
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
@@ -272,6 +273,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.cert.*;
 import java.time.Instant;
@@ -309,31 +311,39 @@ public class SignerServer {
     return Base64.toBase64String(spki.getEncoded());
   }
 
-  static boolean verifyHmac(String sharedBase64, String method, String path, byte[] body, String ts, String nonce, String provided) throws Exception {
+  static boolean verifyHmac(String sharedBase64, String method, String path, byte[] body, String ts, String nonceB64, String providedB64) throws Exception {
+
     long now = Instant.now().getEpochSecond();
     long t = Long.parseLong(ts);
-    if (Math.abs(now - t) > 300) return false; // 5 min
+    if (Math.abs(now - t) > 300) return false; // 5 min clock skew guard
+
     synchronized (RECENT_NONCES) {
-      if (RECENT_NONCES.contains(nonce)) return false;
-      RECENT_NONCES.add(nonce);
+      if (RECENT_NONCES.contains(nonceB64)) return false;
+      RECENT_NONCES.add(nonceB64);
       if (RECENT_NONCES.size() > 1000) RECENT_NONCES.iterator().remove();
     }
+
     byte[] secret = Base64.decode(sharedBase64);
     Mac mac = Mac.getInstance("HmacSHA256");
     mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-    mac.update(method.getBytes());
-    mac.update((byte)0);
-    mac.update(path.getBytes());
-    mac.update((byte)0);
-    mac.update(ts.getBytes());
-    mac.update((byte)0);
-    // mac.update(nonce.getBytes());
-    byte[] nonceRaw = Base64.decode(nonce);
-    mac.update(nonceRaw);
-    mac.update((byte)0);
+
+    mac.update(method.getBytes(StandardCharsets.UTF_8));
+    mac.update((byte) 0);
+    mac.update(path.getBytes(StandardCharsets.UTF_8));
+    mac.update((byte) 0);
+    mac.update(ts.getBytes(StandardCharsets.UTF_8));
+    mac.update((byte) 0);
+
+    // nonce is sent base64 by the Worker -> verify over the decoded bytes
+    byte[] nonce = Base64.decode(nonceB64);
+    mac.update(nonce);
+    mac.update((byte) 0);
+
     mac.update(body);
-    String expected = java.util.Base64.getEncoder().encodeToString(mac.doFinal());
-    return MessageDigest.isEqual(expected.getBytes(), provided.getBytes());
+
+    byte[] expected = mac.doFinal();
+    byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
+    return MessageDigest.isEqual(expected, provided);
   }
 
   static byte[] signPdf(byte[] input, PrivateKey pk, X509Certificate cert) throws Exception {
