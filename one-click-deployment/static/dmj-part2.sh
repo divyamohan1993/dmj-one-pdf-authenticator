@@ -525,6 +525,8 @@ SERVICE
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-signer.service
+# Restart Signer
+sudo systemctl restart dmj-signer.service
 
 # nginx site (reverse proxy to dynamic port from /etc/dmj/signer.port)
 SIGNER_PORT="$(cat /etc/dmj/signer.port 2>/dev/null || echo 18080)"
@@ -991,7 +993,6 @@ echo "[+] Pushing Worker secrets to Cloudflare..."
   # restore previous xtrace state
   eval "$_xtrace_state"
 )
-
 
 # Deploy Worker (modern command) 
 echo "[+] Deploying Worker..."
