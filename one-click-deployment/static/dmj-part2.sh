@@ -405,6 +405,8 @@ public class SignerServer {
       cfg.showJavalinBanner = false;
     });
 
+    app.get("/", ctx -> ctx.result("ok"));
+
     app.get("/spki", ctx -> ctx.json(Map.of("spki", spki, "issuer", issuer)));
 
     app.post("/verify", ctx -> {
@@ -583,42 +585,48 @@ function sameOrigin(req: Request){
   return o === `${u.protocol}//${u.host}`;
 }
 
-async function ensureSchema(env: Env){
+async function ensureSchema(env: Env) {
   const p = env.DB_PREFIX;
-  await env.DB.exec(`
-    CREATE TABLE IF NOT EXISTS ${p}documents(
-      id TEXT PRIMARY KEY,
-      doc_sha256 TEXT UNIQUE,
-      meta_json TEXT,
-      signed_at INTEGER,
-      revoked_at INTEGER,
-      revoke_reason TEXT
-    );
-    CREATE INDEX IF NOT EXISTS ${p}documents_sha_idx ON ${p}documents(doc_sha256);
-    CREATE TABLE IF NOT EXISTS ${p}audit(
-      id TEXT PRIMARY KEY,
-      at INTEGER,
-      action TEXT,
-      doc_sha256 TEXT,
-      ip TEXT,
-      ua TEXT,
-      detail TEXT
-    );
-    CREATE TABLE IF NOT EXISTS ${p}bootstrap(
-      k TEXT PRIMARY KEY,
-      v TEXT,
-      consumed INTEGER DEFAULT 0,
-      created_at INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS ${p}sessions(
-      sid TEXT PRIMARY KEY,
-      created_at INTEGER,
-      last_seen INTEGER,
-      ip_hash TEXT,
-      ua_hash TEXT
-    );
-  `);
+
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS ${p}documents(
+       id TEXT PRIMARY KEY,
+       doc_sha256 TEXT UNIQUE,
+       meta_json TEXT,
+       signed_at INTEGER,
+       revoked_at INTEGER,
+       revoke_reason TEXT
+     )`,
+    `CREATE INDEX IF NOT EXISTS ${p}documents_sha_idx ON ${p}documents(doc_sha256)`,
+    `CREATE TABLE IF NOT EXISTS ${p}audit(
+       id TEXT PRIMARY KEY,
+       at INTEGER,
+       action TEXT,
+       doc_sha256 TEXT,
+       ip TEXT,
+       ua TEXT,
+       detail TEXT
+     )`,
+    `CREATE TABLE IF NOT EXISTS ${p}bootstrap(
+       k TEXT PRIMARY KEY,
+       v TEXT,
+       consumed INTEGER DEFAULT 0,
+       created_at INTEGER
+     )`,
+    `CREATE TABLE IF NOT EXISTS ${p}sessions(
+       sid TEXT PRIMARY KEY,
+       created_at INTEGER,
+       last_seen INTEGER,
+       ip_hash TEXT,
+       ua_hash TEXT
+     )`
+  ];
+
+  for (const sql of stmts) {
+    await env.DB.prepare(sql).run();
+  }
 }
+
 
 async function sha256(buf: ArrayBuffer){ return hex(await crypto.subtle.digest("SHA-256", buf)); }
 function now(){ return Math.floor(Date.now()/1000); }
@@ -704,7 +712,18 @@ function diagnostics(env: Env, haveDB=true){
 }
 
 async function handleAdmin(env: Env, req: Request){
-  await ensureSchema(env);
+  if (url.pathname.startsWith("/admin")) {
+    try { await ensureSchema(env); }
+    catch (e) {
+      return new Response(
+        "<h1>DB schema error</h1><pre>"+String(e)+"</pre>",
+        { status: 500, headers: { "content-type": "text/html; charset=utf-8" } }
+      );
+    }
+    return handleAdmin(env, req);
+  }
+
+  // await ensureSchema(env);
   const u = new URL(req.url);
   const cookieHeader = req.headers.get("cookie") || "";
   const sid = cookieHeader.split(/;\s*/).find(x=>x.startsWith("admin_session="))?.split("=")[1];
