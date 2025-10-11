@@ -459,36 +459,42 @@ public class SignerServer {
     final String ownerPass = java.util.Base64.getEncoder()
         .encodeToString(SecureRandom.getInstanceStrong().generateSeed(24));
     byte[] hardened;
+    // try (PDDocument doc = Loader.loadPDF(original)) {
+    //   PDDocumentInformation info = doc.getDocumentInformation();
+    //   if (info == null) info = new PDDocumentInformation();
+    //   info.setAuthor("dmj.one");
+    //   info.setCreator("dmj.one");
+    //   doc.setDocumentInformation(info);
+// 
+    //   // AccessPermission ap = new AccessPermission();
+    //   // ap.setCanExtractContent(false);
+    //   // ap.setCanExtractForAccessibility(false);
+    //   // ap.setCanModify(false);
+    //   // ap.setCanModifyAnnotations(false);
+    //   // ap.setCanAssembleDocument(false);
+    //   // ap.setCanFillInForm(false);
+    //   // ap.setCanPrint(false); // uncomment to also forbid printing
+// 
+    //   StandardProtectionPolicy spp = new StandardProtectionPolicy(ownerPass, "", ap);
+    //   spp.setEncryptionKeyLength(256);
+    //   spp.setPreferAES(true);
+    //   doc.protect(spp);
+// 
+    //   // per PDFBox: after protect(), save and REOPEN; don’t reuse the instance
+    //   // javadoc: “If encryption has been activated … do not use the document after saving” :contentReference[oaicite:2]{index=2}
+    //   ByteArrayOutputStream tmp = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
+    //   doc.save(tmp);
+    //   hardened = tmp.toByteArray();
+    // }
+
+    // 2) Re-open with OWNER password so we have full rights, then certify+sign
     try (PDDocument doc = Loader.loadPDF(original)) {
+
       PDDocumentInformation info = doc.getDocumentInformation();
       if (info == null) info = new PDDocumentInformation();
       info.setAuthor("dmj.one");
       info.setCreator("dmj.one");
       doc.setDocumentInformation(info);
-
-      AccessPermission ap = new AccessPermission();
-      // ap.setCanExtractContent(false);
-      // ap.setCanExtractForAccessibility(false);
-      // ap.setCanModify(false);
-      // ap.setCanModifyAnnotations(false);
-      // ap.setCanAssembleDocument(false);
-      // ap.setCanFillInForm(false);
-      ap.setCanPrint(false); // uncomment to also forbid printing
-
-      StandardProtectionPolicy spp = new StandardProtectionPolicy(ownerPass, "", ap);
-      spp.setEncryptionKeyLength(256);
-      spp.setPreferAES(true);
-      doc.protect(spp);
-
-      // per PDFBox: after protect(), save and REOPEN; don’t reuse the instance
-      // javadoc: “If encryption has been activated … do not use the document after saving” :contentReference[oaicite:2]{index=2}
-      ByteArrayOutputStream tmp = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
-      doc.save(tmp);
-      hardened = tmp.toByteArray();
-    }
-
-    // 2) Re-open with OWNER password so we have full rights, then certify+sign
-    try (PDDocument doc = Loader.loadPDF(hardened, ownerPass)) {
 
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
