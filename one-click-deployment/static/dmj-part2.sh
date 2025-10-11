@@ -532,7 +532,7 @@ NGX
 sudo ln -sf "$NGINX_SITE" "$NGINX_SITE_LINK"
 sudo nginx -t && sudo systemctl reload nginx
 
-echo "[+] Signer at http://${SIGNER_DOMAIN}/healthz"
+echo "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 
 ### --- Worker project --------------------------------------------------------
 echo "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
@@ -907,7 +907,7 @@ sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
   ],
   "vars": {
     "ISSUER": "${DMJ_ROOT_DOMAIN}",
-    "SIGNER_API_BASE": "http://${SIGNER_DOMAIN}",
+    "SIGNER_API_BASE": "https://${SIGNER_DOMAIN}",
     "DB_PREFIX": "${DB_PREFIX}"
   }
 }
@@ -981,7 +981,7 @@ WORKER_URL="$("$WR" deployments list --format=json | jq -r '.[0].url' || true)"
 echo "------------------------------------------------------------------"
 echo "[✓] Done."
 echo "Worker URL (temporary workers.dev): ${WORKER_URL:-see dashboard}"
-echo "Signer URL (nginx): http://${SIGNER_DOMAIN}/healthz"
+echo "Signer URL (nginx): https://${SIGNER_DOMAIN}/healthz"
 echo
 echo "NEXT STEPS:"
 echo "1) Visit ${WORKER_URL:-your workers.dev URL}/admin   — you will see the admin key ONCE."
