@@ -574,6 +574,13 @@ public class SignerServer {
 
 
 
+
+
+
+
+
+
+
   // More robust verification:
   // - parse CMS from /Contents
   // - verify signature using the embedded signer cert
