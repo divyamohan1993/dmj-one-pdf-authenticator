@@ -13,6 +13,37 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 # shellcheck disable=SC1090
 [ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
 
+
+### ---------- Logging / Verbosity ----------
+LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
+mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
+LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
+
+# Verbose to console? 1/true = yes, 0/false = minimal
+DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+case "${DMJ_VERBOSE,,}" in
+  1|true|yes) VERBOSE=1 ;;
+  *)          VERBOSE=0 ;;
+esac
+
+# Keep a console FD before we redirect
+exec 3>&1
+if [ "$VERBOSE" -eq 1 ]; then
+  echo "[i] Verbose logging enabled. Log: ${LOG_FILE}" >&3
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  set -x
+else
+  echo "[i] Minimal console output. Full log at: ${LOG_FILE}" >&3
+  exec >>"$LOG_FILE" 2>&1
+fi
+
+# Helper to print minimal progress to console
+say(){ printf "%s\n" "$*" >&3; }
+
+# Error trap prints a friendly pointer to the log
+trap 'rc=$?; say ""; say "[!] Failed at line $LINENO: $BASH_COMMAND (exit $rc)"; say "[i] See full log: $LOG_FILE"; exit $rc' ERR
+
+
 # --- Use the Part 1 service-user Wrangler wrapper ----------------------------
 WR="/usr/local/bin/dmj-wrangler"
 if [ ! -x "$WR" ]; then
