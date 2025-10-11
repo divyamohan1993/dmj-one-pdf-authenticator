@@ -125,10 +125,18 @@ done
 
 
 # Admin portal key (cleartext shown once via GUI). We store a hash as a Worker secret.
-ADMIN_KEY_FILE="${STATE_DIR}/admin-key.txt"
+# ADMIN_KEY_FILE="${STATE_DIR}/admin-key.txt"
+# if [ ! -f "$ADMIN_KEY_FILE" ]; then
+#   ADMIN_PORTAL_KEY="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 28)"
+#   echo "$ADMIN_PORTAL_KEY" | sudo tee "$ADMIN_KEY_FILE" >/dev/null
+# else
+#   ADMIN_PORTAL_KEY="$(cat "$ADMIN_KEY_FILE")"
+# fi
+
 if [ ! -f "$ADMIN_KEY_FILE" ]; then
-  ADMIN_PORTAL_KEY="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 28)"
-  echo "$ADMIN_PORTAL_KEY" | sudo tee "$ADMIN_KEY_FILE" >/dev/null
+  # 28 hex chars, alphanumeric and safe for display/input
+  ADMIN_PORTAL_KEY="$(openssl rand -hex 14)"
+  printf '%s\n' "$ADMIN_PORTAL_KEY" | sudo tee "$ADMIN_KEY_FILE" >/dev/null
 else
   ADMIN_PORTAL_KEY="$(cat "$ADMIN_KEY_FILE")"
 fi
