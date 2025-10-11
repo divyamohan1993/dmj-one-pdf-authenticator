@@ -712,18 +712,7 @@ function diagnostics(env: Env, haveDB=true){
 }
 
 async function handleAdmin(env: Env, req: Request){
-  if (url.pathname.startsWith("/admin")) {
-    try { await ensureSchema(env); }
-    catch (e) {
-      return new Response(
-        "<h1>DB schema error</h1><pre>"+String(e)+"</pre>",
-        { status: 500, headers: { "content-type": "text/html; charset=utf-8" } }
-      );
-    }
-    return handleAdmin(env, req);
-  }
-
-  // await ensureSchema(env);
+  await ensureSchema(env);
   const u = new URL(req.url);
   const cookieHeader = req.headers.get("cookie") || "";
   const sid = cookieHeader.split(/;\s*/).find(x=>x.startsWith("admin_session="))?.split("=")[1];
