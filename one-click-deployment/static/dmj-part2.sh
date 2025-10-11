@@ -537,6 +537,39 @@ public class SignerServer {
       return out.toByteArray();
     }
   }
+  // static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
+  //   ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
+  //   try (PDDocument doc = Loader.loadPDF(original)) {
+  //     PDSignature sig = new PDSignature();
+  //     sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+  //     sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // detached CMS, as viewers expect
+  //     sig.setName("dmj.one");
+  //     sig.setLocation("IN");
+  //     sig.setReason("Contents securely verified by dmj.one against any tampering.");
+  //     sig.setContactInfo("contact@dmj.one");
+  //     sig.setSignDate(Calendar.getInstance());
+// 
+  //     // Reserve generous space for the CMS container
+  //     SignatureOptions opts = new SignatureOptions();
+  //     opts.setPreferredSignatureSize(32768);
+// 
+  //     // Register signature for *external* signing
+  //     doc.addSignature(sig, opts);
+  //     
+  //     // Prepare incremental update and obtain the exact bytes to sign
+  //     ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out);
+// 
+  //     // Build a PKCS#7/CMS *detached* signature over that content
+  //     byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
+// 
+  //     // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
+  //     ext.setSignature(cms);
+// 
+  //     doc.close();
+// 
+  //     return out.toByteArray();
+  //   }
+  // }
 
 
 
