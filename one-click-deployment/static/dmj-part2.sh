@@ -452,27 +452,60 @@ public class SignerServer {
   }
 
   // --- Sign the original PDF (no protections, no DocMDP) ---
+//  static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
+//    try (PDDocument doc = Loader.loadPDF(original)) {
+//
+//      // Read and update document metadata
+//      PDDocumentInformation info = doc.getDocumentInformation();
+//      if (info == null) info = new PDDocumentInformation();
+//      // Use existing title or fallback
+//      String existingTitle = info.getTitle();
+//      if (existingTitle == null || existingTitle.isEmpty()) {
+//          info.setTitle("dmj.one signed document");
+//      } else {
+//          // for example, annotate it
+//          info.setTitle(existingTitle + " (signed)");
+//      }
+//      info.setAuthor("dmj.one");
+//      info.setCreator("dmj.one");
+//      info.setSubject("Document signed by dmj.one");
+//      info.setKeywords("dmj.one, verified document, Divya Mohan");      
+//      info.setProducer("dmj.one PDF Signer");
+//      doc.setDocumentInformation(info);
+//
+//      PDSignature sig = new PDSignature();
+//      sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+//      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // detached CMS, as viewers expect
+//      sig.setName("dmj.one");
+//      sig.setLocation("IN");
+//      sig.setReason("Contents securely verified by dmj.one against any tampering.");
+//      sig.setContactInfo("contact@dmj.one");
+//      sig.setSignDate(Calendar.getInstance());      
+//
+//      // Reserve generous space for the CMS container
+//      SignatureOptions opts = new SignatureOptions();
+//      opts.setPreferredSignatureSize(32768);
+//
+//      // Write an incremental update; PDFBox returns the exact bytes to sign
+//      ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
+//      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out); // last update contains only this signature :contentReference[oaicite:2]{index=2}
+//
+//      // Build a PKCS#7/CMS *detached* signature over that content
+//      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert); // false/'detached' is what we need :contentReference[oaicite:3]{index=3}
+//
+//      // Register signature for *external* signing
+//      doc.addSignature(sig, opts);  // <-- external-signing overload (no SignatureInterface needed) :contentReference[oaicite:1]{index=1}
+//
+//      // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
+//      ext.setSignature(cms);    
+//
+//      return out.toByteArray();
+//    }
+//  }
+
+  // --- Sign the original PDF (no protections, no DocMDP) ---
   static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
     try (PDDocument doc = Loader.loadPDF(original)) {
-
-      // Read and update document metadata
-      PDDocumentInformation info = doc.getDocumentInformation();
-      if (info == null) info = new PDDocumentInformation();
-      // Use existing title or fallback
-      String existingTitle = info.getTitle();
-      if (existingTitle == null || existingTitle.isEmpty()) {
-          info.setTitle("dmj.one signed document");
-      } else {
-          // for example, annotate it
-          info.setTitle(existingTitle + " (signed)");
-      }
-      info.setAuthor("dmj.one");
-      info.setCreator("dmj.one");
-      info.setSubject("Document signed by dmj.one");
-      info.setKeywords("dmj.one, verified document, Divya Mohan");      
-      info.setProducer("dmj.one PDF Signer");
-      doc.setDocumentInformation(info);
-
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // detached CMS, as viewers expect
@@ -480,28 +513,29 @@ public class SignerServer {
       sig.setLocation("IN");
       sig.setReason("Contents securely verified by dmj.one against any tampering.");
       sig.setContactInfo("contact@dmj.one");
-      sig.setSignDate(Calendar.getInstance());      
+      sig.setSignDate(Calendar.getInstance());
 
       // Reserve generous space for the CMS container
       SignatureOptions opts = new SignatureOptions();
       opts.setPreferredSignatureSize(32768);
+
+      // Register signature for *external* signing
+      doc.addSignature(sig, opts);  // <-- external-signing overload (no SignatureInterface needed) :contentReference[oaicite:1]{index=1}
 
       // Write an incremental update; PDFBox returns the exact bytes to sign
       ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out); // last update contains only this signature :contentReference[oaicite:2]{index=2}
 
       // Build a PKCS#7/CMS *detached* signature over that content
-      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert); // false/'detached' is what we need :contentReference[oaicite:3]{index=3}
-
-      // Register signature for *external* signing
-      doc.addSignature(sig, opts);  // <-- external-signing overload (no SignatureInterface needed) :contentReference[oaicite:1]{index=1}
+      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert); // false/“detached” is what we need :contentReference[oaicite:3]{index=3}
 
       // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
-      ext.setSignature(cms);    
+      ext.setSignature(cms);
 
       return out.toByteArray();
     }
   }
+
 
 
 
