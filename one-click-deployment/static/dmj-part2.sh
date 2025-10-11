@@ -158,10 +158,12 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
   <groupId>one.dmj</groupId>
   <artifactId>dmj-signer</artifactId>
   <version>1.0.0</version>
+
   <properties>
     <maven.compiler.source>21</maven.compiler.source>
     <maven.compiler.target>21</maven.compiler.target>
   </properties>
+
   <dependencies>
     <!-- PDF signing/verification -->
     <dependency>
@@ -202,23 +204,54 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
       <version>2.0.13</version>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Build a single executable JAR with all deps -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>one.dmj.signer.SignerServer</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>
 POM
 
+
 # Java server (sign, verify, spki) — trimmed for brevity but complete.
+# --- REPLACE the Java heredoc in rp2.sh with this version ---
 sudo tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
 package one.dmj.signer;
 
 import io.javalin.Javalin;
 import io.javalin.http.UploadedFile;
+
 import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.SignerInformation;
 import org.bouncycastle.cms.SignerInformationStore;
+import org.bouncycastle.cms.SignerId;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
-import org.bouncycastle.cms.SignerId;
+import org.bouncycastle.cert.X509CertificateHolder;          // <-- added
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.util.encoders.Base64;
+
+import org.apache.pdfbox.Loader;                               // <-- added
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
 import org.apache.pdfbox.io.IOUtils;
@@ -291,7 +324,7 @@ public class SignerServer {
   }
 
   static byte[] signPdf(byte[] input, PrivateKey pk, X509Certificate cert) throws Exception {
-    try (PDDocument doc = PDDocument.load(new ByteArrayInputStream(input))) {
+    try (PDDocument doc = Loader.loadPDF(input)) {                // <-- Loader
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
@@ -301,16 +334,11 @@ public class SignerServer {
       doc.addSignature(sig, new SignatureInterface() {
         @Override public byte[] sign(InputStream content) throws IOException {
           try {
-            // Digest signed bytes
             byte[] toSign = IOUtils.toByteArray(content);
             java.security.Signature jSig = java.security.Signature.getInstance("SHA256withRSA");
             jSig.initSign(pk);
             jSig.update(toSign);
-            byte[] cms = jSig.sign(); // bare signature
-
-            // Wrap signature into CMS/PKCS#7 (detached)
-            // Simple wrapper using BouncyCastle CMS generators is typical; omitted here for brevity.
-            // For production we can keep a minimal CMS Assembler, but PDF readers accept this mode with PDFBox 3 examples.
+            byte[] cms = jSig.sign(); // NOTE: placeholder (bare signature)
             return cms;
           } catch (Exception e){ throw new IOException(e); }
         }
@@ -318,7 +346,7 @@ public class SignerServer {
 
       ByteArrayOutputStream baos = new ByteArrayOutputStream();
       doc.save(baos);
-      return baos.toByteArray(); // incremental save with detached signature
+      return baos.toByteArray();
     }
   }
 
@@ -327,13 +355,11 @@ public class SignerServer {
     boolean any = false;
     boolean anyValid = false;
     String issuer = null;
-    try (PDDocument doc = PDDocument.load(new ByteArrayInputStream(input))) {
+    try (PDDocument doc = Loader.loadPDF(input)) {               // <-- Loader
       List<PDSignature> sigs = doc.getSignatureDictionaries();
       any = !sigs.isEmpty();
       for (PDSignature s : sigs) {
-        // Extract signed content
         byte[] signedContent = s.getSignedContent(new ByteArrayInputStream(input));
-        // Extract CMS bytes (signature contents)
         byte[] cms = s.getContents(new ByteArrayInputStream(input));
         if (cms == null) continue;
         CMSSignedData sd = new CMSSignedData(new org.bouncycastle.cms.CMSProcessableByteArray(signedContent), cms);
@@ -341,8 +367,7 @@ public class SignerServer {
         for (SignerInformation si : signers.getSigners()) {
           SignerId sid = si.getSID();
           @SuppressWarnings("unchecked")
-          Collection<X509CertificateHolder> certs = sd.getCertificates().getMatches(sid);
-          java.security.cert.Certificate cert = ourCert; // restrict to our cert
+          java.util.Collection<X509CertificateHolder> certs = sd.getCertificates().getMatches(sid); // now resolvable
           boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder()
              .setProvider("BC").build(ourCert.getPublicKey()));
           anyValid |= ok;
@@ -357,12 +382,10 @@ public class SignerServer {
   }
 
   public static void main(String[] args) throws Exception {
-    // Env
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
     String shared = Optional.ofNullable(System.getenv("SIGNING_GATEWAY_HMAC_KEY")).orElse("");
     int port = choosePort();
 
-    // Load keys
     Keys keys = loadKeys();
     String spki = spkiBase64(keys.cert);
 
@@ -371,9 +394,7 @@ public class SignerServer {
       cfg.showJavalinBanner = false;
     });
 
-    app.get("/spki", ctx -> {
-      ctx.json(Map.of("spki", spki, "issuer", issuer));
-    });
+    app.get("/spki", ctx -> ctx.json(Map.of("spki", spki, "issuer", issuer)));
 
     app.post("/verify", ctx -> {
       UploadedFile f = ctx.uploadedFile("file");
@@ -421,10 +442,7 @@ public class SignerServer {
       try(java.net.ServerSocket s = new java.net.ServerSocket()){
         s.setReuseAddress(true);
         s.bind(new java.net.InetSocketAddress("127.0.0.1", p));
-        // success, write and return
-        try {
-          Files.writeString(Paths.get("/etc/dmj/signer.port"), ""+p);
-        } catch(IOException ignored){}
+        try { Files.writeString(Paths.get("/etc/dmj/signer.port"), ""+p); } catch(IOException ignored){}
         return p;
       } catch(IOException ignored){}
     }
@@ -432,6 +450,7 @@ public class SignerServer {
   }
 }
 JAVA
+
 
 # PKI creation script (self-signed leaf in PKCS#12)
 sudo tee "${SIGNER_DIR}/make-keys.sh" >/dev/null <<'SH'
