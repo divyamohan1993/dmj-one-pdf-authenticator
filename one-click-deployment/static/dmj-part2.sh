@@ -646,8 +646,12 @@ async function sha256(buf: ArrayBuffer){ return hex(await crypto.subtle.digest("
 function now(){ return Math.floor(Date.now()/1000); }
 
 async function setOneTimeAdminKey(env: Env, keyClear: string){
-  const p = env.DB_PREFIX;
-  await env.DB.exec(`INSERT OR REPLACE INTO ${p}bootstrap(k,v,consumed,created_at) VALUES('ADMIN_PORTAL_KEY', ?, 0, ?)`, [keyClear, now()]);
+  const p = env.DB_PREFIX;  
+  await env.DB
+    .prepare(`INSERT OR REPLACE INTO ${p}bootstrap(k,v,consumed,created_at)
+              VALUES('ADMIN_PORTAL_KEY', ?, 0, ?)`)
+    .bind(keyClear, now())
+    .run();
 }
 async function consumeOneTimeAdminKey(env: Env): Promise<string|null>{
   const p = env.DB_PREFIX;
@@ -835,10 +839,19 @@ async function handleAdmin(env: Env, req: Request){
 
       const meta = String(form.get("meta")||"").trim();
       const p = env.DB_PREFIX;
-      await env.DB.exec(`INSERT OR IGNORE INTO ${p}documents(id,doc_sha256,meta_json,signed_at,revoked_at) VALUES(?,?,?,?,NULL)`,
-        [crypto.randomUUID(), sha, meta||"{}", now()]);
-      await env.DB.exec(`INSERT INTO ${p}audit(id,at,action,doc_sha256,ip,ua,detail) VALUES(?,?,?,?,?,?,?)`,
-        [crypto.randomUUID(), now(), "sign", sha, "", "", ""]);
+
+      await env.DB
+        .prepare(`INSERT OR IGNORE INTO ${p}documents
+                  (id,doc_sha256,meta_json,signed_at,revoked_at)
+                  VALUES(?,?,?,?,NULL)`)
+        .bind(crypto.randomUUID(), sha, meta || "{}", now())
+        .run();
+      await env.DB
+        .prepare(`INSERT INTO ${p}audit
+                  (id,at,action,doc_sha256,ip,ua,detail)
+                  VALUES(?,?,?,?,?,?,?)`)
+        .bind(crypto.randomUUID(), now(), "sign", sha, "", "", "")
+        .run();
 
       return new Response(signed, {
         headers:{
@@ -854,9 +867,16 @@ async function handleAdmin(env: Env, req: Request){
       if (!sameOrigin(req)) return json({error:"bad origin"}, 400);
       const p = env.DB_PREFIX;
       const sha = String(form.get("sha")||"");
-      await env.DB.exec(`UPDATE ${p}documents SET revoked_at=? WHERE doc_sha256=?`, [now(), sha]);
-      await env.DB.exec(`INSERT INTO ${p}audit(id,at,action,doc_sha256,ip,ua,detail) VALUES(?,?,?,?,?,?,?)`,
-        [crypto.randomUUID(), now(), "revoke", sha, "", "", ""]);
+      await env.DB
+        .prepare(`UPDATE ${p}documents SET revoked_at=? WHERE doc_sha256=?`)
+        .bind(now(), sha)
+        .run();
+      await env.DB
+        .prepare(`INSERT INTO ${p}audit
+                  (id,at,action,doc_sha256,ip,ua,detail)
+                  VALUES(?,?,?,?,?,?,?)`)
+        .bind(crypto.randomUUID(), now(), "revoke", sha, "", "", "")
+        .run();
       return new Response(null, { status:303, headers:{location:"/admin"} });
     }
   }
