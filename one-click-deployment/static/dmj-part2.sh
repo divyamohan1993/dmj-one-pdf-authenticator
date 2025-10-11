@@ -532,7 +532,7 @@ public class SignerServer {
       // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
       ext.setSignature(cms);
 
-      doc.close()
+      doc.close();
 
       return out.toByteArray();
     }
