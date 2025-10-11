@@ -452,42 +452,44 @@ public class SignerServer {
   }
 
 
+  // Sign + lock + disable copy, with proper owner privileges for the signing pass
   static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
-    // 1) Harden the input (author metadata, optional "no-copy" permissions)
+
+    // 1) Harden: author/creator + viewer restrictions (no copy/edit)
+    final String ownerPass = java.util.Base64.getEncoder()
+        .encodeToString(SecureRandom.getInstanceStrong().generateSeed(24));
     byte[] hardened;
-    {
-      try (PDDocument doc = Loader.loadPDF(original)) {
-        // Author / Creator metadata
-        PDDocumentInformation info = doc.getDocumentInformation();
-        if (info == null) info = new PDDocumentInformation();
-        info.setAuthor("dmj.one");                         // Author = dmj.one
-        info.setCreator("dmj.one");                        // optional
-        doc.setDocumentInformation(info);                  // persist metadata
+    try (PDDocument doc = Loader.loadPDF(original)) {
+      PDDocumentInformation info = doc.getDocumentInformation();
+      if (info == null) info = new PDDocumentInformation();
+      info.setAuthor("dmj.one");
+      info.setCreator("dmj.one");
+      doc.setDocumentInformation(info);
 
-        // (Optional) viewer-enforced "no copy / no modify"
-        // Empty user password keeps the file openable; owner password is random.
-        AccessPermission ap = new AccessPermission();
-        ap.setCanExtractContent(false);
-        ap.setCanExtractForAccessibility(false);
-        ap.setCanModify(false);
-        ap.setCanModifyAnnotations(false);
-        ap.setCanAssembleDocument(false);
-        ap.setCanFillInForm(false);
-        // ap.setCanPrint(false); // uncomment if you also want to forbid printing
-        String ownerPass = Base64.toBase64String(SecureRandom.getInstanceStrong().generateSeed(24));
-        StandardProtectionPolicy spp = new StandardProtectionPolicy(ownerPass, "", ap);
-        spp.setEncryptionKeyLength(256);
-        spp.setPreferAES(true);
-        doc.protect(spp);  // apply permissions
+      AccessPermission ap = new AccessPermission();
+      ap.setCanExtractContent(false);
+      ap.setCanExtractForAccessibility(false);
+      ap.setCanModify(false);
+      ap.setCanModifyAnnotations(false);
+      ap.setCanAssembleDocument(false);
+      ap.setCanFillInForm(false);
+      // ap.setCanPrint(false); // uncomment to also forbid printing
 
-        ByteArrayOutputStream tmp = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
-        doc.save(tmp);     // full save (encrypted content must be fully written)
-        hardened = tmp.toByteArray();
-      }
+      StandardProtectionPolicy spp = new StandardProtectionPolicy(ownerPass, "", ap);
+      spp.setEncryptionKeyLength(256);
+      spp.setPreferAES(true);
+      doc.protect(spp);
+
+      // per PDFBox: after protect(), save and REOPEN; don’t reuse the instance
+      // javadoc: “If encryption has been activated … do not use the document after saving” :contentReference[oaicite:2]{index=2}
+      ByteArrayOutputStream tmp = new ByteArrayOutputStream(Math.max(original.length + 8192, 16384));
+      doc.save(tmp);
+      hardened = tmp.toByteArray();
     }
 
-    // 2) Certification + signature (no changes allowed after signing)
-    try (PDDocument doc = Loader.loadPDF(hardened)) {
+    // 2) Re-open with OWNER password so we have full rights, then certify+sign
+    try (PDDocument doc = Loader.loadPDF(hardened, ownerPass)) {
+
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
@@ -497,55 +499,83 @@ public class SignerServer {
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());
 
-      // Certification: DocMDP permission level 1 (no changes allowed)
-      setMDPPermission(doc, sig, 1);  // from SigUtils in the official examples :contentReference[oaicite:5]{index=5}
+      // Certification signature (DocMDP) — P=1: no changes allowed after signing
+      setMDPPermission(doc, sig, 1); // PDFBox example method (DocMDP) :contentReference[oaicite:3]{index=3}
 
-      // Reserve enough space for CMS
+      // Reserve space for CMS
       SignatureOptions opts = new SignatureOptions();
-      opts.setPreferredSignatureSize(16000);
+      opts.setPreferredSignatureSize(32768);
 
-      // Declare the signature; we'll inject CMS bytes via external-signing API
+      // External signing flow recommended by PDFBox (incremental update) :contentReference[oaicite:4]{index=4}
       doc.addSignature(sig, null, opts);
 
-      ByteArrayOutputStream out = new ByteArrayOutputStream(hardened.length + 16384);
-
-      // External signing flow recommended by PDFBox examples
-      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out);  // :contentReference[oaicite:6]{index=6}
+      ByteArrayOutputStream out = new ByteArrayOutputStream(hardened.length + 40000);
+      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out);
       byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
-      ext.setSignature(cms);  // inject the PKCS#7/CMS container
+      ext.setSignature(cms);
       return out.toByteArray();
     }
   }
 
 
+  // More robust verification:
+  // - parse CMS from /Contents
+  // - verify signature using the embedded signer cert
+  // - check that signer’s SPKI == our service cert (issuedByUs)
+  // - check ByteRange covers whole file
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
     Map<String,Object> out = new LinkedHashMap<>();
-    boolean any = false;
-    boolean anyValid = false;
-    String issuer = null;
-    try (PDDocument doc = Loader.loadPDF(input)) {               // <-- Loader
-      List<PDSignature> sigs = doc.getSignatureDictionaries();
-      any = !sigs.isEmpty();
-      for (PDSignature s : sigs) {
-        byte[] signedContent = s.getSignedContent(new ByteArrayInputStream(input));
-        byte[] cms = s.getContents(new ByteArrayInputStream(input));
+    boolean any = false, anyValid = false, issuedByUs = false, coversDoc = false;
+    String issuerDn = "", subFilter = "";
+
+    try (PDDocument doc = Loader.loadPDF(input)) {
+      for (PDSignature s : doc.getSignatureDictionaries()) {
+        any = true;
+        subFilter = String.valueOf(s.getSubFilter());
+
+        // Use overload returning trimmed contents; avoids hex/padding issues. :contentReference[oaicite:5]{index=5}
+        byte[] cms = s.getContents(input);
         if (cms == null) continue;
+
+        byte[] signedContent = s.getSignedContent(new ByteArrayInputStream(input));
+
         CMSSignedData sd = new CMSSignedData(new org.bouncycastle.cms.CMSProcessableByteArray(signedContent), cms);
         SignerInformationStore signers = sd.getSignerInfos();
+
         for (SignerInformation si : signers.getSigners()) {
-          SignerId sid = si.getSID();
           @SuppressWarnings("unchecked")
-          java.util.Collection<X509CertificateHolder> certs = sd.getCertificates().getMatches(sid); // now resolvable
-          boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder()
-             .setProvider("BC").build(ourCert.getPublicKey()));
+          Collection<X509CertificateHolder> matches = sd.getCertificates().getMatches(si.getSID());
+          if (matches.isEmpty()) continue;
+
+          X509CertificateHolder signerHolder = matches.iterator().next();
+          boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(signerHolder));
           anyValid |= ok;
-          issuer = ourCert.getIssuerX500Principal().getName();
+
+          // Compare SPKI with our server cert to assert “issued by us”
+          String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
+          String ourSpki = Base64.toBase64String(
+              SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
+          if (ok && signerSpki.equals(ourSpki)) issuedByUs = true;
+
+          issuerDn = signerHolder.getSubject().toString();
+        }
+
+        // ByteRange must cover entire file except /Contents gap. :contentReference[oaicite:6]{index=6}
+        int[] br = s.getByteRange();
+        if (br != null && br.length == 4) {
+          long len = input.length;
+          long a = br[0], b = br[1], c = br[2], d = br[3];
+          coversDoc = (a == 0) && (b + d == len) && (c == b);
         }
       }
     }
+
     out.put("hasSignature", any);
     out.put("isValid", anyValid);
-    out.put("issuer", issuer!=null?issuer:"");
+    out.put("issuedByUs", issuedByUs);
+    out.put("coversDocument", coversDoc);
+    out.put("issuer", issuerDn);
+    out.put("subFilter", subFilter);
     return out;
   }
 
@@ -1050,17 +1080,20 @@ async function handleVerify(env: Env, req: Request){
   const vf = new FormData(); vf.set("file", new Blob([buf],{type:"application/pdf"}), "doc.pdf");
   const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
   const vinfo = vres.ok ? await vres.json() : {isValid:false, issuer:""};
-
-  const ok = !!row && !row.revoked_at && vinfo.isValid;
+  
+  const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
   const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
   <body style="font-family:ui-sans-serif;padding:32px">
   <h1>Verification result</h1>
   <p>SHA-256: <code>${sha}</code></p>
   <ul>
-  <li>Registered by dmj.one: ${row? "✅":"❌"}</li>
-  <li>Revoked: ${row?.revoked_at? "❌ (revoked)":"✅ (not revoked)"}</li>
-  <li>Embedded signature valid: ${vinfo.isValid? "✅":"❌"}</li>
-  <li>Issuer reported: <code>${vinfo.issuer||""}</code></li>
+    <li>Registered by dmj.one: ${row ? "✅" : "❌"}</li>
+    <li>Revoked: ${row?.revoked_at ? "❌ (revoked)" : "✅ (not revoked)"}</li>
+    <li>Signature object present: ${vinfo.hasSignature ? "✅" : "❌"}</li>
+    <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>
+    <li>Covers whole document (ByteRange): ${vinfo.coversDocument ? "✅" : "❌"}</li>
+    <li>Signed by our key (dmj.one): ${vinfo.issuedByUs ? "✅" : "❌"}</li>
+    <li>Issuer (from signature): <code>${vinfo.issuer||""}</code></li>
   </ul>
   <h2>${ok? "✅ Genuine (dmj.one)":"❌ Not valid / tampered"}</h2>
   <p><a href="/">Back</a></p></body>`;
