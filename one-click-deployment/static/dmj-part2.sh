@@ -496,7 +496,8 @@ public class SignerServer {
           long a = br[0], b = br[1], c = br[2], d = br[3];
           // ByteRange = [0, length0, offset1, length1]
           // Must start at 0, second segment must end at EOF, and start after first:
-          coversDocument = (a == 0) && (c + d == len) && (c >= b);
+          // coversDocument = (a == 0) && (c + d == len) && (c >= b);
+          coversDoc = (a == 0) && (c + d == len) && (c >= b);
         }
       }
     }
