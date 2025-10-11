@@ -489,7 +489,7 @@ sudo chmod +x "${SIGNER_DIR}/make-keys.sh"
 sudo DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" bash "${SIGNER_DIR}/make-keys.sh"
 
 echo "[+] Building Java signer..."
-( cd "$SIGNER_DIR" && mvn -q -DskipTests package )
+( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
 
 # Systemd service
 sudo tee /etc/systemd/system/dmj-signer.service >/dev/null <<SERVICE
