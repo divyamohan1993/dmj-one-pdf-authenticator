@@ -865,7 +865,7 @@ TS
 # wrangler configuration (use JSONC as per latest recommendation) 
 sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "\$schema": "node_modules/wrangler/config-schema.json",
   "name": "${WORKER_NAME}",
   "main": "src/index.ts",
   "compatibility_date": "2025-10-10",
