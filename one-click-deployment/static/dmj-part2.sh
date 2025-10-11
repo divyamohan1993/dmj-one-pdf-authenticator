@@ -486,9 +486,6 @@ public class SignerServer {
       SignatureOptions opts = new SignatureOptions();
       opts.setPreferredSignatureSize(32768);
 
-      // Register signature for *external* signing
-      doc.addSignature(sig, opts);  // <-- external-signing overload (no SignatureInterface needed) :contentReference[oaicite:1]{index=1}
-
       // Write an incremental update; PDFBox returns the exact bytes to sign
       ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out); // last update contains only this signature :contentReference[oaicite:2]{index=2}
@@ -496,11 +493,11 @@ public class SignerServer {
       // Build a PKCS#7/CMS *detached* signature over that content
       byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert); // false/'detached' is what we need :contentReference[oaicite:3]{index=3}
 
-      // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
-      ext.setSignature(cms);
+      // Register signature for *external* signing
+      doc.addSignature(sig, opts);  // <-- external-signing overload (no SignatureInterface needed) :contentReference[oaicite:1]{index=1}
 
-      // Certification signature (DocMDP) — P=1: no changes allowed after signing
-      setMDPPermission(doc, sig, 1); // PDFBox example method (DocMDP)
+      // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
+      ext.setSignature(cms);    
 
       return out.toByteArray();
     }
