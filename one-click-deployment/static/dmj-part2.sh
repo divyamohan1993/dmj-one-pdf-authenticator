@@ -526,6 +526,7 @@ echo "[+] Signer at http://${SIGNER_DOMAIN}/healthz"
 ### --- Worker project --------------------------------------------------------
 echo "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
 sudo mkdir -p "${WORKER_DIR}/src"
+sudo chown -R dmjsvc:dmjsvc "$WORKER_DIR"
 # Worker TS (admin portal, sign, verify, revoke). Uses Web Crypto + D1.
 sudo tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
 // DMJ Worker — admin portal, sign, verify
