@@ -252,11 +252,11 @@ package one.dmj.signer;
 import io.javalin.Javalin;
 import io.javalin.http.UploadedFile;
 
-// import org.bouncycastle.cms.CMSSignedData;
-// import org.bouncycastle.cms.SignerInformation;
-//import org.bouncycastle.cms.SignerInformationStore;
-//import org.bouncycastle.cms.SignerId;
-//import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
+import org.bouncycastle.cms.CMSSignedData;
+import org.bouncycastle.cms.SignerInformation;
+import org.bouncycastle.cms.SignerInformationStore;
+import org.bouncycastle.cms.SignerId;
+import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
 import org.bouncycastle.cms.*;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
