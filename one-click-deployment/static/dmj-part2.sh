@@ -930,11 +930,20 @@ echo "[+] Storing one-time admin portal key for first GUI access..."
 
 # Upload Worker secrets (pipe, non-interactive) 
 echo "[+] Pushing Worker secrets to Cloudflare..."
-( cd "$WORKER_DIR" && \
-  printf '%s' "${SIGNING_GATEWAY_HMAC_KEY}" | "$WR" secret put SIGNING_GATEWAY_HMAC_KEY --quiet && \
-  printf '%s' "${SESSION_HMAC_KEY}"        | "$WR" secret put SESSION_HMAC_KEY --quiet && \
-  printf '%s' "${TOTP_MASTER_KEY}"         | "$WR" secret put TOTP_MASTER_KEY --quiet && \
-  printf '%s' "${ADMIN_HASH}"              | "$WR" secret put ADMIN_PASS_HASH --quiet )
+(
+  cd "$WORKER_DIR"
+  # turn off xtrace so secrets don't end up in logs
+  _xtrace_state=$(set +o | grep xtrace); set +x
+
+  printf '%s' "${SIGNING_GATEWAY_HMAC_KEY}" | "$WR" secret put SIGNING_GATEWAY_HMAC_KEY --name "${WORKER_NAME}"
+  printf '%s' "${SESSION_HMAC_KEY}"        | "$WR" secret put SESSION_HMAC_KEY        --name "${WORKER_NAME}"
+  printf '%s' "${TOTP_MASTER_KEY}"         | "$WR" secret put TOTP_MASTER_KEY         --name "${WORKER_NAME}"
+  printf '%s' "${ADMIN_HASH}"              | "$WR" secret put ADMIN_PASS_HASH         --name "${WORKER_NAME}"
+
+  # restore previous xtrace state
+  eval "$_xtrace_state"
+)
+
 
 # Deploy Worker (modern command) 
 echo "[+] Deploying Worker..."
