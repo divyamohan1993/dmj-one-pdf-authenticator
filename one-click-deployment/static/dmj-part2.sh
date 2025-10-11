@@ -467,13 +467,13 @@ public class SignerServer {
       doc.setDocumentInformation(info);
 
       AccessPermission ap = new AccessPermission();
-      ap.setCanExtractContent(false);
-      ap.setCanExtractForAccessibility(false);
-      ap.setCanModify(false);
-      ap.setCanModifyAnnotations(false);
-      ap.setCanAssembleDocument(false);
-      ap.setCanFillInForm(false);
-      // ap.setCanPrint(false); // uncomment to also forbid printing
+      // ap.setCanExtractContent(false);
+      // ap.setCanExtractForAccessibility(false);
+      // ap.setCanModify(false);
+      // ap.setCanModifyAnnotations(false);
+      // ap.setCanAssembleDocument(false);
+      // ap.setCanFillInForm(false);
+      ap.setCanPrint(false); // uncomment to also forbid printing
 
       StandardProtectionPolicy spp = new StandardProtectionPolicy(ownerPass, "", ap);
       spp.setEncryptionKeyLength(256);
