@@ -252,18 +252,25 @@ package one.dmj.signer;
 import io.javalin.Javalin;
 import io.javalin.http.UploadedFile;
 
-import org.bouncycastle.cms.CMSSignedData;
-import org.bouncycastle.cms.SignerInformation;
-import org.bouncycastle.cms.SignerInformationStore;
-import org.bouncycastle.cms.SignerId;
-import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
+// import org.bouncycastle.cms.CMSSignedData;
+// import org.bouncycastle.cms.SignerInformation;
+//import org.bouncycastle.cms.SignerInformationStore;
+//import org.bouncycastle.cms.SignerId;
+//import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
+import org.bouncycastle.cms.*;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
-import org.bouncycastle.cert.X509CertificateHolder;          // <-- added
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaCertStore;
+import org.bouncycastle.asn1.ASN1ObjectIdentifier;
+import org.bouncycastle.asn1.cms.CMSObjectIdentifiers;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.util.encoders.Base64;
+import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
-
-import org.apache.pdfbox.Loader;                               // <-- added
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
 import org.apache.pdfbox.io.IOUtils;
@@ -290,6 +297,8 @@ public class SignerServer {
   static final String HMAC_NONCE = "x-worker-nonce";
 
   static final Set<String> RECENT_NONCES = Collections.synchronizedSet(new LinkedHashSet<>());
+
+  static { java.security.Security.addProvider(new BouncyCastleProvider()); }
 
   static class Keys {
     final PrivateKey priv;
@@ -346,30 +355,96 @@ public class SignerServer {
     return MessageDigest.isEqual(expected, provided);
   }
 
-  static byte[] signPdf(byte[] input, PrivateKey pk, X509Certificate cert) throws Exception {
-    try (PDDocument doc = Loader.loadPDF(input)) {                // <-- Loader
+  // static byte[] signPdf(byte[] input, PrivateKey pk, X509Certificate cert) throws Exception {
+  //   try (PDDocument doc = Loader.loadPDF(input)) {                // <-- Loader
+  //     PDSignature sig = new PDSignature();
+  //     sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+  //     sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
+  //     sig.setName("dmj.one");
+  //     sig.setLocation("dmj.one");
+  //     sig.setSignDate(Calendar.getInstance());
+  //     doc.addSignature(sig, new SignatureInterface() {
+  //       @Override public byte[] sign(InputStream content) throws IOException {
+  //         try {
+  //           byte[] toSign = IOUtils.toByteArray(content);
+  //           java.security.Signature jSig = java.security.Signature.getInstance("SHA256withRSA");
+  //           jSig.initSign(pk);
+  //           jSig.update(toSign);
+  //           byte[] cms = jSig.sign(); // NOTE: placeholder (bare signature)
+  //           return cms;
+  //         } catch (Exception e){ throw new IOException(e); }
+  //       }
+  //     });
+  // 
+  //     ByteArrayOutputStream baos = new ByteArrayOutputStream();
+  //     doc.save(baos);
+  //     return baos.toByteArray();
+  //   }
+  // }
+
+  // helper exactly like PDFBox example
+  static class CMSProcessableInputStream implements CMSTypedData {
+    private InputStream in;
+    private final ASN1ObjectIdentifier type;
+
+    CMSProcessableInputStream(InputStream in) {
+      this(in, new ASN1ObjectIdentifier(CMSObjectIdentifiers.data.getId()));
+    }
+    CMSProcessableInputStream(InputStream in, ASN1ObjectIdentifier type) {
+      this.in = in; this.type = type;
+    }
+    @Override public Object getContent() { return null; }
+    @Override public ASN1ObjectIdentifier getContentType() { return type; }
+    @Override public void write(OutputStream out) throws IOException, CMSException {
+      IOUtils.copy(in, out); // from PDFBox IOUtils
+      in.close();
+    }
+  }
+
+  // build a detached CMS/PKCS#7 over the InputStream provided by PDFBox
+  static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, X509Certificate cert) throws Exception {
+    ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
+        .setProvider("BC").build(pk);
+
+    var sigInfoGen = new JcaSignerInfoGeneratorBuilder(
+        new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
+        .build(signer, cert);
+
+    CMSSignedDataGenerator gen = new CMSSignedDataGenerator();
+    gen.addSignerInfoGenerator(sigInfoGen);
+    gen.addCertificates(new JcaCertStore(java.util.List.of(cert)));
+
+    CMSTypedData msg = new CMSProcessableInputStream(content);
+    CMSSignedData cms = gen.generate(msg, false); // false = detached
+    return cms.getEncoded(); // DER
+  }
+
+  static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
+    try (PDDocument doc = Loader.loadPDF(original)) {
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
       sig.setName("dmj.one");
-      sig.setLocation("dmj.one");
-      sig.setSignDate(Calendar.getInstance());
-      doc.addSignature(sig, new SignatureInterface() {
-        @Override public byte[] sign(InputStream content) throws IOException {
-          try {
-            byte[] toSign = IOUtils.toByteArray(content);
-            java.security.Signature jSig = java.security.Signature.getInstance("SHA256withRSA");
-            jSig.initSign(pk);
-            jSig.update(toSign);
-            byte[] cms = jSig.sign(); // NOTE: placeholder (bare signature)
-            return cms;
-          } catch (Exception e){ throw new IOException(e); }
+      sig.setLocation("IN");
+      sig.setReason("Issued by dmj.one")
+      sig.setContactInfo("contact@dmj.one");
+      sig.setSignDate(Calendar.getInstance());      
+
+      // PDFBox will call our callback with the exact byte range to be signed
+      doc.addSignature(sig, content -> {
+        try {
+          return buildDetachedCMS(content, pk, cert);
+        } catch (Exception e) {
+          throw new IOException("CMS build failed", e);
         }
       });
 
-      ByteArrayOutputStream baos = new ByteArrayOutputStream();
-      doc.save(baos);
-      return baos.toByteArray();
+      // Critical: write an incremental update over the *original* bytes
+      ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 8192);
+      try (InputStream originalIn = new ByteArrayInputStream(original)) {
+        doc.saveIncremental(originalIn, out);
+      }
+      return out.toByteArray();
     }
   }
 
