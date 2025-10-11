@@ -769,14 +769,26 @@ async function handleAdmin(env: Env, req: Request){
     if (u.pathname.endsWith("/login")){
       const pass = String(form.get("password")||"");
       const ok = await verifyPBKDF2(env, pass);
-      if(!ok) return text("<h1>Unauthorized</h1>"), {status:401} as any;
+      // if(!ok) return text("<h1>Unauthorized</h1>"), {status:401} as any;
+      if(!ok) {
+        return new Response("<h1>Unauthorized</h1>", {
+          status: 401,
+          headers: { "content-type": "text/html; charset=utf-8" }
+        });
+      }
       const sidv = await signSession(env, {ok:true, t: now()});
       return new Response(null, { status:303, headers:{ "set-cookie": cookie("admin_session", sidv, {Path:"/"}), "location": "/admin" }});
     }
     if (u.pathname.endsWith("/logout")){
       return new Response(null, { status:303, headers:{ "set-cookie": "admin_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict", "location": "/admin" }});
     }
-    if (!session) return text("<h1>Unauthorized</h1>"), {status:401} as any;
+    // if (!session) return text("<h1>Unauthorized</h1>"), {status:401} as any;
+    if (!session) {
+      return new Response("<h1>Unauthorized</h1>", {
+        status: 401,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    }
 
     if (u.pathname.endsWith("/sign")){
       const file = form.get("file") as File | null;
@@ -827,7 +839,11 @@ async function handleAdmin(env: Env, req: Request){
     }
   }
 
-  return text("<h1>Not Found</h1>"), {status:404} as any;
+  // return text("<h1>Not Found</h1>"), {status:404} as any;
+  return new Response("<h1>Not Found</h1>", {
+    status: 404,
+    headers: { "content-type": "text/html; charset=utf-8" }
+  });
 }
 
 async function handleVerify(env: Env, req: Request){
