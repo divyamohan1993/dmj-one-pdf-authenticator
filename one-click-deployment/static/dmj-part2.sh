@@ -554,10 +554,7 @@ public class SignerServer {
       sig.setLocation("IN");
       sig.setReason("Contents securely verified by dmj.one against any tampering.");
       sig.setContactInfo("contact@dmj.one");
-      sig.setSignDate(Calendar.getInstance());
-
-      // Certification signature (DocMDP) — P=1: no changes allowed after signing
-      setMDPPermission(doc, sig, 1); // PDFBox example method (DocMDP)
+      sig.setSignDate(Calendar.getInstance());      
 
       // Reserve generous space for the CMS container
       SignatureOptions opts = new SignatureOptions();
@@ -575,6 +572,9 @@ public class SignerServer {
 
       // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
       ext.setSignature(cms);
+
+      // Certification signature (DocMDP) — P=1: no changes allowed after signing
+      setMDPPermission(doc, sig, 1); // PDFBox example method (DocMDP)
 
       return out.toByteArray();
     }
