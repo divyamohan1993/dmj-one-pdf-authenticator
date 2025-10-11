@@ -146,7 +146,7 @@ fi
 # Compute PBKDF2 hash for the admin key (same format Worker will verify):
 # pbkdf2$sha256$<iters>$<base64(salt)>$<base64(derived)>
 echo "[+] Deriving PBKDF2 hash for admin portal key..."
-ADMIN_HASH="$(node -e 'const c=require("node:crypto");const key=process.argv[1];const iters=210000;const salt=c.randomBytes(16);const dk=c.pbkdf2Sync(Buffer.from(key,"utf8"),salt,iters,32,"sha256");console.log(`pbkdf2$sha256$${iters}$${salt.toString("base64")}$${dk.toString("base64")}`);' "$ADMIN_PORTAL_KEY")"
+ADMIN_HASH="$(node -e 'const c=require("node:crypto");const key=process.argv[1];const iters=100000;const salt=c.randomBytes(16);const dk=c.pbkdf2Sync(Buffer.from(key,"utf8"),salt,iters,32,"sha256");console.log(`pbkdf2$sha256$${iters}$${salt.toString("base64")}$${dk.toString("base64")}`);' "$ADMIN_PORTAL_KEY")"
 
 ### --- Build signer microservice (Java) --------------------------------------
 echo "[+] Preparing signer microservice at ${SIGNER_DIR} ..."
