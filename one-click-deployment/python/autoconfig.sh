@@ -655,12 +655,14 @@ def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn
     # Parse in-memory bytes into ASN.1 certificates for pyHanko
     cert = _asn1_from_pem(cert_pem)
     int_cert = _asn1_from_pem(int_pem)
-    root_cert = _asn1_from_pem(root_pem)
+    root_cert = _asn1_from_pem(root_pem)    
+    cert_registry = SimpleCertificateStore()
+    cert_registry.register_multiple([int_cert, root_cert])
     # SimpleSigner with chain
     signer = signers.SimpleSigner(
         signing_cert=cert,
         signing_key=priv_key,
-        cert_registry=signers.SimpleCertificateStore([int_cert, root_cert]),
+        cert_registry=cert_registry,
         # add name in signature dictionary
         signing_name=subject_cn,
     )
