@@ -697,7 +697,7 @@ PY
   # main.py (FastAPI app)
   cat > "$APP_CODE_DIR/main.py" <<'PY'
 import os, hmac, binascii, hashlib, uuid, datetime
-from fastapi import FastAPI, Request, UploadFile, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -744,9 +744,9 @@ def require_admin_key(admin_key: str = Form(...)):
     return True
 
 @app.post("/admin/sign", response_class=StreamingResponse)
-async def admin_sign(admin_ok: bool = Depends(require_admin_key),
-                     file: UploadFile = Form(...), db: Session = Depends(get_db)):
-    data = await file.read()
+def admin_sign(admin_ok: bool = Depends(require_admin_key), file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # in sync endpoints, read from the underlying SpooledTemporaryFile
+    data = file.file.read()
     if len(data) > UPLOAD_LIMIT_MB * 1024 * 1024:
         raise HTTPException(413, "File too large")
     sha = hashlib.sha256(data).hexdigest()
