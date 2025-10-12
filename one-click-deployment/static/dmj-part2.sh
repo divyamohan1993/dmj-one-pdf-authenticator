@@ -434,6 +434,22 @@ public class SignerServer {
       SignatureOptions opts = new SignatureOptions();
       opts.setPreferredSignatureSize(65536);
 
+<<<<<<< HEAD
+      // Register signature for signing (using SignatureInterface)
+      doc.addSignature(sig, new SignatureInterface() {
+        @Override
+        public byte[] sign(InputStream content) throws IOException {
+          try {
+            return buildDetachedCMS(content, pk, cert);
+          } catch (Exception e) {
+            e.printStackTrace();
+            throw new IOException("Signing failed: " + e.getMessage(), e);
+          }
+        }
+      }, opts);
+      // Write the incremental update (includes the signature)
+      doc.saveIncremental(out);
+=======
       // Register signature for *external* signing
       setMDPPermission(doc, sig, 2); // 1 = no changes allowed (most strict)
       doc.addSignature(sig, opts);
@@ -450,7 +466,9 @@ public class SignerServer {
       doc.close();
 
       return out.toByteArray();
+>>>>>>> 31fdad6ad5dfa1796f94d6bc9468296cde88ca70
     }
+    return out.toByteArray();
   }
 
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
@@ -468,26 +486,35 @@ public class SignerServer {
         if (cms == null) continue;
 
         byte[] signedContent = s.getSignedContent(new ByteArrayInputStream(input));
-
-        CMSSignedData sd = new CMSSignedData(new org.bouncycastle.cms.CMSProcessableByteArray(signedContent), cms);
-        SignerInformationStore signers = sd.getSignerInfos();
-
-        for (SignerInformation si : signers.getSigners()) {
-          @SuppressWarnings("unchecked")
-          Collection<X509CertificateHolder> matches = sd.getCertificates().getMatches(si.getSID());
-          if (matches.isEmpty()) continue;
-
-          X509CertificateHolder signerHolder = matches.iterator().next();
-          boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(signerHolder));
-          anyValid |= ok;
-
-          // Compare SPKI with our server cert to assert “issued by us”
-          String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
-          String ourSpki = Base64.toBase64String(
-              SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
-          if (ok && signerSpki.equals(ourSpki)) issuedByUs = true;
-
-          issuerDn = signerHolder.getSubject().toString();
+        
+        try {
+          CMSSignedData sd = new CMSSignedData(
+              new org.bouncycastle.cms.CMSProcessableByteArray(signedContent), cms);
+          for (SignerInformation si : sd.getSignerInfos().getSigners()) {
+            Collection<X509CertificateHolder> matches =
+                sd.getCertificates().getMatches(si.getSID());
+            if (matches.isEmpty()) continue;
+            X509CertificateHolder signerHolder = matches.iterator().next();
+            boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder()
+                                      .setProvider("BC")
+                                      .build(signerHolder));
+            anyValid |= ok;
+            // Compare SPKI with our server cert to assert "issued by us"
+            String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
+            String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(
+                                       ourCert.getPublicKey().getEncoded()).getEncoded());
+            if (ok && signerSpki.equals(ourSpki)) {
+              issuedByUs = true;
+            }
+            issuerDn = signerHolder.getSubject().toString();
+          }
+        } catch (Exception e) {
+          // Capture verification error details instead of throwing
+          errorMsg = "exception: " + e.getClass().getSimpleName();
+          if (e.getMessage() != null && !e.getMessage().isEmpty()) {
+            errorMsg += " - " + e.getMessage();
+          }
+          e.printStackTrace();
         }
 
         // Replace the current ByteRange logic with this:
@@ -507,13 +534,25 @@ public class SignerServer {
       }
     }
 
+<<<<<<< HEAD
+    out.put("hasSignature", any);
+    out.put("isValid", anyValid);
+    out.put("issuedByUs", issuedByUs);
+    out.put("coversDocument", coversDoc);
+    out.put("issuer", issuerDn);
+    out.put("subFilter", subFilter);
+    if (errorMsg != null) {
+      out.put("error", errorMsg);
+    }
+=======
     out.put("coversSignedRevision", byteRangeSane);
     out.put("noChangesAfterSigning", noChangesAfterSigning);
         
     // Keep the old name for compatibility if you like:
     out.put("coversDocument", byteRangeSane && noChangesAfterSigning);
+>>>>>>> 31fdad6ad5dfa1796f94d6bc9468296cde88ca70
     return out;
-  }
+ }
 
   public static void main(String[] args) throws Exception {
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
@@ -736,6 +775,7 @@ function sameOrigin(req: Request){
   // Treat absence of both headers as acceptable.
   return true;
 }
+
 
 async function ensureSchema(env: Env) {
   const p = env.DB_PREFIX;
@@ -1037,7 +1077,7 @@ async function handleAdmin(env: Env, req: Request){
     }
 
     if (u.pathname.endsWith("/revoke")){
-      if (!sameOrigin(req)) return json({error:"bad origin"}, 400);
+      // if (!sameOrigin(req)) return json({error:"bad origin"}, 400);
       const p = env.DB_PREFIX;
       const sha = String(form.get("sha")||"");
       await env.DB
