@@ -313,7 +313,7 @@ public class SignerServer {
     return new Keys(pk, cert);
   }
 
-  static String spkiBase64(X509Certificate cert) {
+  static String spkiBase64(X509Certificate cert) throws IOException {
     SubjectPublicKeyInfo spki = SubjectPublicKeyInfo.getInstance(cert.getPublicKey().getEncoded());
     return Base64.toBase64String(spki.getEncoded());
   }
