@@ -84,7 +84,7 @@ ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
 COUNTRY="${COUNTRY:-IN}"
 
 # Optional: control AIA/CRL scheme for certificates (keep http as default)
-AIA_SCHEME="${AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
+AIA_SCHEME="${AIA_SCHEME:-https}"   # use http (recommended). Only set to https if you KNOW clients will follow.
 
 PASS="$(openssl rand -hex 24)"
 PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
@@ -744,14 +744,14 @@ basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, nonRepudiation
 extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12
 subjectKeyIdentifier = hash
-authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
-crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
+authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${AIA_SCHEME}://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ ocsp ]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature
 extendedKeyUsage = OCSPSigning
-authorityInfoAccess = OCSP;URI:http://${OCSP_DOMAIN}/
-crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
+authorityInfoAccess = OCSP;URI:${AIA_SCHEME}://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ crl_ext ]
 authorityKeyIdentifier = keyid:always
 EOF
@@ -822,7 +822,7 @@ openssl verify -CAfile <(cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt") "${SIG
 
 
 # Publish chain & CRL for AIA/CDP and build a Trust Kit ZIP + README
-say "[+] Publishing chain & CRL at http://${PKI_DOMAIN}/ ..."
+say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
 sudo cp -f "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
 sudo cp -f "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
 sudo cp -f "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
@@ -852,7 +852,6 @@ System-wide (admins only; trusts the CA for all apps)
 
 Note: Auto-trust without importing requires an AATL/EUTL certificate (commercial).  
 TXT
-# ( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip root.crt ica.crt README.txt )
 ( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip dmj-one-root-ca-r1.crt dmj-one-issuing-ca-r1.crt README.txt )
 
 
