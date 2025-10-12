@@ -294,6 +294,11 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>
       <version>2.0.13</version>
+    </dependency>    
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>xmpbox</artifactId>
+      <version>3.0.5</version>
     </dependency>
   </dependencies>
 
@@ -372,6 +377,7 @@ import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
+import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -388,6 +394,7 @@ import java.util.*;
 
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+
 
 public class SignerServer {
 
@@ -674,6 +681,80 @@ public class SignerServer {
     return out;
   }
 
+  // --- Preprocess PDF: add document info + optional header version, then return bytes (no signing here)
+  static byte[] applyDocInfoPreSign(byte[] in) {
+    // Read optional values from environment. Leave blank to keep originals.
+    String title    = Optional.ofNullable(System.getenv("DMJ_PDF_TITLE")).orElse("").trim();
+    String author   = Optional.ofNullable(System.getenv("DMJ_PDF_AUTHOR")).orElse("").trim();
+    String subject  = Optional.ofNullable(System.getenv("DMJ_PDF_SUBJECT")).orElse("").trim();
+    String keywords = Optional.ofNullable(System.getenv("DMJ_PDF_KEYWORDS")).orElse("").trim();
+    String creator  = Optional.ofNullable(System.getenv("DMJ_PDF_CREATOR")).orElse("").trim();
+    String producer = Optional.ofNullable(System.getenv("DMJ_PDF_PRODUCER")).orElse("").trim();
+    String verStr   = Optional.ofNullable(System.getenv("DMJ_PDF_VERSION")).orElse("").trim(); // e.g. "1.7"
+    String created  = Optional.ofNullable(System.getenv("DMJ_PDF_CREATED_ON")).orElse("").trim();   // ISO-8601 or epoch seconds; blank = keep / set if missing
+    String modified = Optional.ofNullable(System.getenv("DMJ_PDF_MODIFIED_ON")).orElse("").trim();  // ISO-8601 or epoch seconds; blank = "now"
+    boolean setDatesByDefault = !"0".equals(Optional.ofNullable(System.getenv("DMJ_PDF_SET_DATES")).orElse("1"));
+
+    // If literally nothing to change, return original bytes as-is.
+    if (title.isEmpty() && author.isEmpty() && subject.isEmpty() && keywords.isEmpty()
+        && creator.isEmpty() && producer.isEmpty() && verStr.isEmpty()
+        && !setDatesByDefault && created.isEmpty() && modified.isEmpty()) {
+      return in;
+    }
+
+    try (PDDocument doc = Loader.loadPDF(in);
+         ByteArrayOutputStream out = new ByteArrayOutputStream(in.length + 8192)) {
+
+      PDDocumentInformation info = doc.getDocumentInformation();
+
+      if (!title.isEmpty())    info.setTitle(title);
+      if (!author.isEmpty())   info.setAuthor(author);
+      if (!subject.isEmpty())  info.setSubject(subject);
+      if (!keywords.isEmpty()) info.setKeywords(keywords);
+      if (!creator.isEmpty())  info.setCreator(creator);
+      if (!producer.isEmpty()) info.setProducer(producer);
+
+      // Dates
+      Calendar now = Calendar.getInstance();
+      if (setDatesByDefault) {
+        if (info.getCreationDate() == null) info.setCreationDate(now);
+        info.setModificationDate(now);
+      }
+      Calendar c;
+      if (!(c = parseCal(created)).equals(NULL_CAL))  info.setCreationDate(c);
+      if (!(c = parseCal(modified)).equals(NULL_CAL)) info.setModificationDate(c);
+
+      // Optional header PDF version (e.g., 1.7)
+      if (!verStr.isEmpty()) {
+        try { doc.setVersion(Float.parseFloat(verStr)); } catch (Exception ignore) { /* ignore bad value */ }
+      }
+
+      doc.setDocumentInformation(info);
+      doc.save(out);                      // full rewrite with new Info (still unsigned)
+      return out.toByteArray();
+    } catch (Exception e) {
+      // Fail-open: never block signing just because metadata writing failed.
+      return in;
+    }
+  }
+
+  private static final Calendar NULL_CAL = new Calendar.Builder().setInstant(0L).build();
+
+  /** Accepts ISO-8601 (e.g., 2025-10-12T10:30:00Z), or epoch seconds; returns sentinel if cannot parse. */
+  static Calendar parseCal(String txt) {
+    if (txt == null || txt.isBlank()) return NULL_CAL;
+    try {
+      long secs = Long.parseLong(txt.trim());
+      Calendar c = Calendar.getInstance(); c.setTimeInMillis(secs * 1000L); return c;
+    } catch (Exception ignore) {}
+    try {
+      Instant i = Instant.parse(txt.trim());
+      Calendar c = Calendar.getInstance(); c.setTime(Date.from(i)); return c;
+    } catch (Exception ignore) {}
+    return NULL_CAL;
+  }
+
+
   public static void main(String[] args) throws Exception {
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
     String shared = Optional.ofNullable(System.getenv("SIGNING_GATEWAY_HMAC_KEY")).orElse("");
@@ -717,7 +798,9 @@ public class SignerServer {
       if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
 
       // sign and write bundle
-      byte[] signed = signPdf(original, keys.priv, keys.chain);
+      // byte[] signed = signPdf(original, keys.priv, keys.chain);
+      byte[] prepared = applyDocInfoPreSign(original);             // ← NEW
+      byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← unchanged signing
       String base = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
       Path zipPath = writeBundleZip(signed, base);
       String rel = "/dl/" + zipPath.getFileName().toString();
@@ -735,11 +818,12 @@ public class SignerServer {
       if (f==null){ ctx.status(400).json(Map.of("error","file missing")); return; }
       byte[] data = IOUtils.toByteArray(f.content());
       boolean ok = false;
-      try { ok = verifyHmac(shared, "POST", "/sign", data, ts, nonce, hmac); } catch(Exception e){ ok=false; }
-      if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
+      try { ok = verifyHmac(shared, "POST", "/sign", data, ts, nonce, hmac); } catch(Exception e){ ok=false; }      
+      if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }      
 
       try {
-        byte[] signed = signPdf(data, keys.priv, keys.chain); // ← pass chain here
+        byte[] prepared = applyDocInfoPreSign(data);                 // ← NEW, metadata rewrite
+        byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← pass chain here        
         ctx.contentType("application/pdf");
         ctx.header("X-Signed-By", issuer);
         ctx.result(new ByteArrayInputStream(signed));
@@ -1194,6 +1278,16 @@ After=network.target
 
 [Service]
 User=root
+Environment=DMJ_PDF_TITLE=
+Environment=DMJ_PDF_AUTHOR=
+Environment=DMJ_PDF_SUBJECT=
+Environment=DMJ_PDF_KEYWORDS=
+Environment=DMJ_PDF_CREATOR=dmj.one Trust Services
+Environment=DMJ_PDF_PRODUCER=dmj.one Signer (PDFBox 3.0.5)
+Environment=DMJ_PDF_VERSION=1.7            # optional; header like %PDF-1.7
+Environment=DMJ_PDF_SET_DATES=1            # 1=set dates by default, 0=don’t touch
+Environment=DMJ_PDF_CREATED_ON=            # ISO-8601 or epoch secs; blank uses existing/now
+Environment=DMJ_PDF_MODIFIED_ON=           # ISO-8601 or epoch secs; blank -> now
 Environment=SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
 Environment=DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
 Environment=DMJ_PKI_PUB=${PKI_PUB}
@@ -2425,7 +2519,7 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
     if (!session) return renderAdminLogin(env.ISSUER, adminPath);
     return renderAdminDashboard(env.ISSUER, adminPath);
   }
-  
+
 
   if (req.method === "POST"){
     const form = await req.formData();    
