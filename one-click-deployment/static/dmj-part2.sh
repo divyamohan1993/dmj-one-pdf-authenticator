@@ -839,38 +839,176 @@ openssl x509 -in "${SIGNER_DIR}/signer.crt" -noout -text | \
 openssl verify -CAfile <(cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt") "${SIGNER_DIR}/signer.crt"
 
 
-# Publish chain & CRL for AIA/CDP and build a Trust Kit ZIP + README
-say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
-sudo cp -f "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
-sudo cp -f "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
-sudo cp -f "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
+# # Publish chain & CRL for AIA/CDP and build a Trust Kit ZIP + README
+# say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
+# sudo cp -f "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
+# sudo cp -f "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
+# sudo cp -f "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
 
-# Branded copies (in addition to generic file names)
-sudo cp -f "${ROOT_DIR}/root.crt"            "${PKI_PUB}/dmj-one-root-ca-r1.crt"
-sudo cp -f "${ROOT_DIR}/root.crl"            "${PKI_PUB}/dmj-one-root-ca-r1.crl"
-sudo cp -f "${ICA_DIR}/ica.crt"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crt"
-sudo cp -f "${ICA_DIR}/ica.crl"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
+# # Branded copies (in addition to generic file names)
+# sudo cp -f "${ROOT_DIR}/root.crt"            "${PKI_PUB}/dmj-one-root-ca-r1.crt"
+# sudo cp -f "${ROOT_DIR}/root.crl"            "${PKI_PUB}/dmj-one-root-ca-r1.crl"
+# sudo cp -f "${ICA_DIR}/ica.crt"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crt"
+# sudo cp -f "${ICA_DIR}/ica.crl"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
+# cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt" | sudo tee "${PKI_PUB}/dmj-one-ica-chain-r1.pem" >/dev/null
+
+# sudo tee "${PKI_PUB}/README.txt" >/dev/null <<'TXT'
+# dmj.one Trust Kit
+# =================
+# This ZIP contains the dmj.one Root CA and Issuing CA. Importing them makes
+# dmj.one-issued PDF signatures show as trusted in Adobe Acrobat/Reader.
+
+# Quickest (recommended): trust only inside Acrobat
+# - Preferences → Signatures → Identities & Trusted Certificates → More… → Trusted Certificates → Import.
+#   Select "root.crt" then "ica.crt" and mark as trusted for "Signatures".  (Adobe how-to)  
+#   https://www.adobe.com/devnet-docs/acrobatetk/tools/DigSigDC/customcert.html
+
+# System-wide (admins only; trusts the CA for all apps)
+# - Windows: MMC → Certificates (Local Computer) → Trusted Root Certification Authorities → Import "root.crt".
+# - macOS: Keychain Access → System keychain → import "root.crt" and set "Always Trust".
+# - Linux (Debian/Ubuntu): sudo cp root.crt /usr/local/share/ca-certificates/dmj-one-root.crt && sudo update-ca-certificates
+
+# Note: Auto-trust without importing requires an AATL/EUTL certificate (commercial).  
+# TXT
+# ( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip dmj-one-root-ca-r1.crt dmj-one-issuing-ca-r1.crt README.txt )
+
+
+# --- TRUST KIT (publish minimal files + friendly instructions) --------------
+say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
+
+# Publish CRL/chain for relying-party fetch (not zipped for end‑users)
+sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/dmj-one-root-ca-r1.crl"
+sudo install -m 0644 "${ICA_DIR}/ica.crl"   "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
 cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt" | sudo tee "${PKI_PUB}/dmj-one-ica-chain-r1.pem" >/dev/null
 
-sudo tee "${PKI_PUB}/README.txt" >/dev/null <<'TXT'
-dmj.one Trust Kit
-=================
-This ZIP contains the dmj.one Root CA and Issuing CA. Importing them makes
-dmj.one-issued PDF signatures show as trusted in Adobe Acrobat/Reader.
+# Publish branded PEM copies
+sudo install -m 0644 "${ROOT_DIR}/root.crt" "${PKI_PUB}/dmj-one-root-ca-r1.crt"
+sudo install -m 0644 "${ICA_DIR}/ica.crt"   "${PKI_PUB}/dmj-one-issuing-ca-r1.crt"
 
-Quickest (recommended): trust only inside Acrobat
-- Preferences → Signatures → Identities & Trusted Certificates → More… → Trusted Certificates → Import.
-  Select "root.crt" then "ica.crt" and mark as trusted for "Signatures".  (Adobe how-to)  
-  https://www.adobe.com/devnet-docs/acrobatetk/tools/DigSigDC/customcert.html
+# Publish convenient DER (.cer) for Windows double‑click install
+openssl x509 -in "${ROOT_DIR}/root.crt" -outform der -out "${PKI_PUB}/dmj-one-root-ca-r1.cer"
+openssl x509 -in "${ICA_DIR}/ica.crt"   -outform der -out "${PKI_PUB}/dmj-one-issuing-ca-r1.cer"
 
-System-wide (admins only; trusts the CA for all apps)
-- Windows: MMC → Certificates (Local Computer) → Trusted Root Certification Authorities → Import "root.crt".
-- macOS: Keychain Access → System keychain → import "root.crt" and set "Always Trust".
-- Linux (Debian/Ubuntu): sudo cp root.crt /usr/local/share/ca-certificates/dmj-one-root.crt && sudo update-ca-certificates
+# Create simple, step-by-step READMEs (TXT + HTML)
+sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.txt" >/dev/null <<'TXT'
+dmj.one Trust Kit — Quick Guide
+================================
 
-Note: Auto-trust without importing requires an AATL/EUTL certificate (commercial).  
+What you’re installing
+----------------------
+• dmj.one Root CA (R1) — install this to trust dmj.one‑signed PDFs.
+• dmj.one Issuing CA (R1) — optional for Acrobat; do NOT add it to “Trusted Root”.
+
+Most people only need the Root CA. The Issuing CA helps Acrobat and some apps build the chain faster.
+
+Windows (system trust) — easiest
+--------------------------------
+1) Double‑click  dmj-one-root-ca-r1.cer
+2) Click “Install Certificate…”.
+3) Choose “Local Machine” (or “Current User” if you don’t have admin rights) → Next.
+4) Choose “Place all certificates in the following store” → Browse →
+   select “Trusted Root Certification Authorities” → OK → Next → Finish.
+5) Approve the security warning (Yes). Done.
+
+(Advanced) If you also import the Issuing CA:
+• Import dmj-one-issuing-ca-r1.cer into “Intermediate Certification Authorities”, not “Trusted Root”.
+
+macOS (system trust)
+--------------------
+1) Double‑click  dmj-one-root-ca-r1.cer  (opens Keychain Access).
+2) In the left bar, pick the “System” keychain (or “login” if you don’t have admin rights).
+3) Drag the certificate into the list (or File → Import Items…).
+4) Double‑click the dmj.one Root CA → expand “Trust” → set “When using this certificate” to “Always Trust”.
+5) Close the window; enter your password to save. Done.
+
+(Advanced) You may import the Issuing CA too (no need to change its trust).
+
+Linux (Ubuntu/Debian family)
+----------------------------
+1) Copy the Root CA (PEM) into the local trust store:
+     sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/
+2) Update the system CA bundle:
+     sudo update-ca-certificates
+(Advanced) You may copy the Issuing CA similarly (optional).
+
+Acrobat-only (no system changes)
+--------------------------------
+If you prefer to trust dmj.one only inside Adobe Acrobat/Reader:
+1) Open Acrobat → Edit → Preferences → Signatures → Identities & Trusted Certificates → More…
+2) Trusted Certificates → Import → select the Root (and Issuing CA if you want).
+3) In “Trust” settings, tick “Use this certificate as a trusted root”. Save.
+
+Verify it works
+---------------
+• Reopen a dmj.one‑signed PDF. Acrobat should show the signature as valid and untampered.
+• If a document is revoked later, Acrobat can detect it (revocation/OCSP settings must be enabled).
+
+Files in this ZIP
+-----------------
+• dmj-one-root-ca-r1.cer  (DER)     — Windows friendly
+• dmj-one-root-ca-r1.crt  (PEM)     — Linux/others
+• dmj-one-issuing-ca-r1.crt (PEM)   — optional (Acrobat/chain helpers)
+• dmj-one-trust-kit-README.txt / .html
+• dmj-one-trust-kit-SHA256SUMS.txt
+
+Security tip: Only install CAs you trust.
 TXT
-( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip dmj-one-root-ca-r1.crt dmj-one-issuing-ca-r1.crt README.txt )
+
+sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.html" >/dev/null <<'HTML'
+<!doctype html><meta charset="utf-8">
+<title>dmj.one Trust Kit — Quick Guide</title>
+<style>body{font-family:ui-sans-serif,system-ui;margin:40px;max-width:900px}code{background:#f6f6f6;padding:2px 4px;border-radius:4px}</style>
+<h1>dmj.one Trust Kit — Quick Guide</h1>
+<p><b>Install the dmj.one Root CA</b> to make dmj.one‑signed PDFs show as trusted.</p>
+<h2>Windows (system trust)</h2>
+<ol>
+<li>Double‑click <code>dmj-one-root-ca-r1.cer</code>.</li>
+<li>Click <b>Install Certificate…</b>.</li>
+<li>Choose <b>Local Machine</b> (or <b>Current User</b>) → <b>Next</b>.</li>
+<li>Choose <b>Place all certificates in the following store</b> → <b>Browse</b> → pick <b>Trusted Root Certification Authorities</b> → <b>OK</b> → <b>Next</b> → <b>Finish</b>.</li>
+<li>Approve the warning (<b>Yes</b>). Done.</li>
+</ol>
+<p><i>Optional:</i> import <code>dmj-one-issuing-ca-r1.cer</code> into <b>Intermediate Certification Authorities</b>.</p>
+
+<h2>macOS (system trust)</h2>
+<ol>
+<li>Double‑click <code>dmj-one-root-ca-r1.cer</code> (opens Keychain Access).</li>
+<li>Select the <b>System</b> keychain (or <b>login</b>).</li>
+<li>Drag the certificate into the list (or <b>File → Import Items…</b>).</li>
+<li>Double‑click the Root → expand <b>Trust</b> → set <b>When using this certificate</b> to <b>Always Trust</b>.</li>
+<li>Close; enter your password. Done.</li>
+</ol>
+
+<h2>Linux (Ubuntu/Debian)</h2>
+<ol>
+<li>Copy the Root CA (PEM) to the local trust store:<br>
+<code>sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/</code></li>
+<li>Update CA bundle:<br>
+<code>sudo update-ca-certificates</code></li>
+</ol>
+
+<h2>Acrobat-only (no system changes)</h2>
+<ol>
+<li>Acrobat → <b>Edit → Preferences → Signatures → Identities &amp; Trusted Certificates → More…</b></li>
+<li><b>Trusted Certificates → Import</b> → select the Root (and Issuing CA if desired).</li>
+<li>In <b>Trust</b>, tick <b>Use this certificate as a trusted root</b>. Save.</li>
+</ol>
+
+<p><b>After installing</b>: reopen the PDF. It should show as signed by dmj.one and not tampered.</p>
+HTML
+
+# Checksums for the files we ship in the ZIP
+( cd "${PKI_PUB}" && sha256sum \
+  dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
+  dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
+  > dmj-one-trust-kit-SHA256SUMS.txt )
+
+# Build end‑user ZIP: only what users need
+( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip \
+  dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
+  dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
+  dmj-one-trust-kit-README.txt dmj-one-trust-kit-README.html \
+  dmj-one-trust-kit-SHA256SUMS.txt )
 
 
 
@@ -955,7 +1093,10 @@ server {
   autoindex off;
   add_header Cache-Control "public, max-age=3600";
   # correct content types
-  types { application/pkix-cert crt; application/pkix-crl crl; }
+  types {
+    application/pkix-cert crt cer;
+    application/pkix-crl  crl;
+  }
   location / { try_files \$uri =404; }
 }
 NGX
