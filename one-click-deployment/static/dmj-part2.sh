@@ -2176,7 +2176,7 @@ return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
 
 function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
-  return text(`<!doctype html>
+  const html = `<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin Dashboard · dmj.one</title>
