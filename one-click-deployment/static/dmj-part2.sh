@@ -674,31 +674,6 @@ public class SignerServer {
 }
 JAVA
 
-# # PKI creation script (self-signed leaf in PKCS#12)
-# sudo tee "${SIGNER_DIR}/make-keys.sh" >/dev/null <<'SH'
-# #!/usr/bin/env bash
-# set -euo pipefail
-# cd "$(dirname "$0")"
-# if [ -f keystore.p12 ]; then
-#   echo "[*] PKCS#12 already exists, skipping."
-#   exit 0
-# fi
-# PASS="$(openssl rand -hex 24)"
-# CN="${DMJ_ROOT_DOMAIN:-dmj.one} Document Signer"
-# openssl req -x509 -newkey rsa:4096 -sha256 -nodes \
-#   -keyout signer.key -out signer.crt -days 3650 \
-#   -subj "/CN=${CN}/O=dmj.one" -addext "basicConstraints=CA:FALSE" \
-#   -addext "keyUsage = digitalSignature, keyEncipherment" \
-#   -addext "extendedKeyUsage = codeSigning, emailProtection"
-# # Bundle into PKCS12
-# openssl pkcs12 -export -out keystore.p12 -inkey signer.key -in signer.crt -name "dmj-one" -passout pass:"$PASS"
-# echo "$PASS" > keystore.pass
-# chmod 600 keystore.p12 keystore.pass signer.key
-# echo "[✓] Generated keystore.p12"
-# SH
-# sudo chmod +x "${SIGNER_DIR}/make-keys.sh"
-# sudo DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" bash "${SIGNER_DIR}/make-keys.sh"
-
 ### --- Build a branded two-tier PKI + OCSP + signer PKCS#12 -------------------
 say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
 sudo mkdir -p "${ROOT_DIR}/"{certs,newcerts,private} "${ICA_DIR}/"{certs,newcerts,private} "${OCSP_DIR}" "${PKI_PUB}"
@@ -885,41 +860,6 @@ openssl x509 -in "${SIGNER_DIR}/signer.crt" -noout -text | \
 
 # 2) Verify chain (leaf -> ICA -> Root)
 openssl verify -CAfile <(cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt") "${SIGNER_DIR}/signer.crt"
-
-
-# # Publish chain & CRL for AIA/CDP and build a Trust Kit ZIP + README
-# say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
-# sudo cp -f "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
-# sudo cp -f "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
-# sudo cp -f "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
-
-# # Branded copies (in addition to generic file names)
-# sudo cp -f "${ROOT_DIR}/root.crt"            "${PKI_PUB}/dmj-one-root-ca-r1.crt"
-# sudo cp -f "${ROOT_DIR}/root.crl"            "${PKI_PUB}/dmj-one-root-ca-r1.crl"
-# sudo cp -f "${ICA_DIR}/ica.crt"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crt"
-# sudo cp -f "${ICA_DIR}/ica.crl"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
-# cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt" | sudo tee "${PKI_PUB}/dmj-one-ica-chain-r1.pem" >/dev/null
-
-# sudo tee "${PKI_PUB}/README.txt" >/dev/null <<'TXT'
-# dmj.one Trust Kit
-# =================
-# This ZIP contains the dmj.one Root CA and Issuing CA. Importing them makes
-# dmj.one-issued PDF signatures show as trusted in Adobe Acrobat/Reader.
-
-# Quickest (recommended): trust only inside Acrobat
-# - Preferences → Signatures → Identities & Trusted Certificates → More… → Trusted Certificates → Import.
-#   Select "root.crt" then "ica.crt" and mark as trusted for "Signatures".  (Adobe how-to)  
-#   https://www.adobe.com/devnet-docs/acrobatetk/tools/DigSigDC/customcert.html
-
-# System-wide (admins only; trusts the CA for all apps)
-# - Windows: MMC → Certificates (Local Computer) → Trusted Root Certification Authorities → Import "root.crt".
-# - macOS: Keychain Access → System keychain → import "root.crt" and set "Always Trust".
-# - Linux (Debian/Ubuntu): sudo cp root.crt /usr/local/share/ca-certificates/dmj-one-root.crt && sudo update-ca-certificates
-
-# Note: Auto-trust without importing requires an AATL/EUTL certificate (commercial).  
-# TXT
-# ( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip dmj-one-root-ca-r1.crt dmj-one-issuing-ca-r1.crt README.txt )
-
 
 say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
 
@@ -1167,16 +1107,6 @@ sudo chown -R dmjsvc:dmjsvc "$WORKER_DIR"
 # Worker TS (admin portal, sign, verify, revoke). Uses Web Crypto + D1.
 sudo tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
 // DMJ Worker — admin portal, sign, verify
-// export interface Env {
-//   DB: D1Database
-//   ISSUER: string
-//   SIGNER_API_BASE: string
-//   DB_PREFIX: string
-//   SIGNING_GATEWAY_HMAC_KEY: string
-//   SESSION_HMAC_KEY: string
-//   TOTP_MASTER_KEY: string
-//   ADMIN_PASS_HASH: string
-// }
 export interface Env {
   DB: D1Database
   ISSUER: string
@@ -1418,21 +1348,6 @@ async function verifySession(env: Env, b64v: string){
     return obj;
   } catch { return null; }
 }
-
-// function renderHome(issuer: string){
-//   return text(`<!doctype html>
-// <html><head><meta charset="utf-8"><title>dmj.one verifier</title>
-// <style>body{font-family:ui-sans-serif,system-ui;padding:32px;max-width:860px;margin:auto}header{margin-bottom:24px}</style></head>
-// <body>
-// <header><h1>dmj.one — Document Verifier</h1>
-// <p>Upload a PDF to verify it was issued by <b>${issuer}</b>.</p></header>
-// <form method="post" action="/verify" enctype="multipart/form-data">
-//   <input type="file" name="file" accept="application/pdf" required>
-//   <button type="submit">Verify</button>
-// </form>
-// <p><a href="/admin">Admin</a> • <a href="https://pki.${issuer}/dmj-one-trust-kit.zip">Download dmj.one Trust Kit (ZIP)</a></p>
-// </body></html>`);
-// }
 
 function renderHome(issuerDomain: string) {
   const pkiZip = `https://pki.${issuerDomain}/dmj-one-trust-kit.zip`;
@@ -1788,8 +1703,7 @@ async function handleAdmin(env: Env, req: Request){
     }
     if (u.pathname.endsWith("/logout")){
       return new Response(null, { status:303, headers:{ "set-cookie": "admin_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict", "location": "/admin" }});
-    }
-    // if (!session) return text("<h1>Unauthorized</h1>"), {status:401} as any;
+    }    
     if (!session) {
       return new Response("<h1>Unauthorized</h1>", {
         status: 401,
@@ -1857,16 +1771,7 @@ async function handleAdmin(env: Env, req: Request){
                   VALUES(?,?,?,?,?,?,?)`)
         .bind(crypto.randomUUID(), now(), "sign", sha, "", "", "")
         .run();
-
-      // return new Response(signed, {
-      //   headers:{
-      //     "content-type":"application/pdf",
-      //     "content-disposition":`attachment; filename="signed.pdf"`,
-      //     "x-doc-sha256": sha,
-      //     "x-issuer": env.ISSUER,
-      //     "x-doc-verified": "true"
-      //   }
-      // });
+      
       const wantZip = (env.BUNDLE_TRUST_KIT || "0") === "1";
       if (!wantZip) {
         // Old behavior: return the signed PDF directly
@@ -1936,52 +1841,6 @@ async function handleAdmin(env: Env, req: Request){
     headers: { "content-type": "text/html; charset=utf-8" }
   });
 }
-
-// async function handleVerify(env: Env, req: Request){
-//   await ensureSchema(env);
-//   const form = await req.formData();
-//   const f = form.get("file") as File | null;
-//   if (!f) return json({error:"file missing"}, 400);
-//   const buf = await f.arrayBuffer();
-//   const sha = await sha256(buf);
-// 
-//   const p = env.DB_PREFIX;
-//   const row = await env.DB.prepare(`SELECT signed_at, revoked_at FROM ${p}documents WHERE doc_sha256=?`).bind(sha).first() as any;
-// 
-//   // Also ask signer to validate embedded signature/issuer
-//   const vf = new FormData(); vf.set("file", new Blob([buf],{type:"application/pdf"}), "doc.pdf");
-//   const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
-//   const vinfo = vres.ok ? await vres.json() : {isValid:false, issuer:""};
-//   
-//   const issued = !!row;
-//   const tampered = !(vinfo && vinfo.hasSignature && vinfo.isValid && vinfo.coversDocument && vinfo.issuedByUs);
-//   const revoked = !!row?.revoked_at;
-// 
-//   const statusHtml = revoked || tampered ? '❌ <b>Revoked or altered</b>' : '✅ <b>Active</b>';
-// 
-//   const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
-//   const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
-//   <body style="font-family:ui-sans-serif;padding:32px">
-//   <h1>Verification result</h1>
-//   <p>SHA-256: <code>${sha}</code></p>
-//   
-//   <p>Status: ${statusHtml}</p>
-//   
-//   <ul>
-//     <li>Registered by dmj.one: ${issued ? "✅" : "❌"}</li>
-//     <li>Revoked: ${revoked ? "❌ (revoked)" : "✅ (not revoked)"}</li>
-//     <li>Signature object present: ${vinfo.hasSignature ? "✅" : "❌"}</li>
-//     <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>
-//     <li>Covers whole document (ByteRange): ${vinfo.coversDocument ? "✅" : "❌"}</li>
-//     <li>Signed by our key (dmj.one): ${vinfo.issuedByUs ? "✅" : "❌"}</li>
-//     <li>Issuer (from signature): <code>${vinfo.issuer||""}</code></li>
-//   </ul>
-//   
-//   <h2>${revoked || tampered ? "❌ Not valid / tampered" : "✅ Genuine (dmj.one)"}</h2>
-//   <p><a href="/">Back</a></p></body>`;
-// 
-//   return text(html);
-// }
 
 async function handleVerify(env: Env, req: Request){
   await ensureSchema(env);
