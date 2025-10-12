@@ -627,7 +627,7 @@ from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko_certvalidator import ValidationContext, CertificateValidator
 from cryptography.hazmat.primitives import serialization
 from asn1crypto import pem as asn1_pem, x509 as asn1_x509
-from pyhanko.sign.general import SimpleCertificateStore
+from pyhanko_certvalidator.registry import SimpleCertificateStore
 
 # Paths for chain
 APP_BASE = os.path.dirname(__file__)
