@@ -857,10 +857,11 @@ TXT
 
 
 
-echo "[+] Building Java signer..."
+say "[+] Building Java signer..."
 ( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
 
 # Systemd service
+say "[+] Creating dmj-signer Service..."
 sudo tee /etc/systemd/system/dmj-signer.service >/dev/null <<SERVICE
 [Unit]
 Description=DMJ Signer Microservice
@@ -884,6 +885,7 @@ sudo systemctl enable --now dmj-signer.service
 sudo systemctl restart dmj-signer.service
 
 # nginx site (reverse proxy to dynamic port from /etc/dmj/signer.port)
+say "[+] Creating dmj-signer nginx config..."
 SIGNER_PORT="$(cat /etc/dmj/signer.port 2>/dev/null || echo 18080)"
 sudo tee "$NGINX_SITE" >/dev/null <<NGX
 server {
@@ -904,10 +906,11 @@ NGX
 sudo ln -sf "$NGINX_SITE" "$NGINX_SITE_LINK"
 sudo nginx -t && sudo systemctl reload nginx
 
-echo "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
+say "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 
 
 # --- OCSP responder (OpenSSL) behind NGINX ocsp.${DMJ_ROOT_DOMAIN} ----------
+say "[+] Creating OSCP Responder nginx..."
 sudo tee /etc/systemd/system/dmj-ocsp.service >/dev/null <<OCSP
 [Unit]
 Description=dmj.one OCSP Responder
@@ -960,7 +963,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 
 ### --- Worker project --------------------------------------------------------
-echo "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
+say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
 sudo mkdir -p "${WORKER_DIR}/src"
 sudo chown -R dmjsvc:dmjsvc "$WORKER_DIR"
 # Worker TS (admin portal, sign, verify, revoke). Uses Web Crypto + D1.
@@ -1473,16 +1476,16 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}sessions(
 );
 SQL
 
-echo "[+] Applying schema to remote D1..."
+say "[+] Applying schema to remote D1..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
 
 # Insert one-time admin key for first GUI fetch
-echo "[+] Storing one-time admin portal key for first GUI access..."
+say "[+] Storing one-time admin portal key for first GUI access..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command \
 "INSERT OR REPLACE INTO ${DB_PREFIX}bootstrap(k,v,consumed,created_at) VALUES('ADMIN_PORTAL_KEY','${ADMIN_PORTAL_KEY}',0,${EPOCHSECONDS:-$(date +%s)});" )
 
 # Upload Worker secrets (pipe, non-interactive) 
-echo "[+] Pushing Worker secrets to Cloudflare..."
+say "[+] Pushing Worker secrets to Cloudflare..."
 (
   cd "$WORKER_DIR"
   # turn off xtrace so secrets don't end up in logs
@@ -1498,7 +1501,7 @@ echo "[+] Pushing Worker secrets to Cloudflare..."
 )
 
 # Deploy Worker (modern command) 
-echo "[+] Deploying Worker..."
+say "[+] Deploying Worker..."
 ( cd "$WORKER_DIR" && "$WR" deploy )
 
 WORKER_URL="$("$WR" deployments list --format=json | jq -r '.[0].url' || true)"
@@ -1512,3 +1515,4 @@ echo "1) Visit ${WORKER_URL:-your workers.dev URL}/admin   — you will see the 
 echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain (e.g. https://sign.${DMJ_ROOT_DOMAIN}/*)."
 echo "------------------------------------------------------------------"
 
+say "[✓] Done."
