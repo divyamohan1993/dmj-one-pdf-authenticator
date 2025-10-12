@@ -20,7 +20,7 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 
 # Verbose to console? 1/true = yes, 0/false = minimal
-DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 case "${DMJ_VERBOSE,,}" in
   1|true|yes) VERBOSE=1 ;;
   *)          VERBOSE=0 ;;
@@ -75,17 +75,22 @@ ICA_DIR="${PKI_DIR}/ica"
 OCSP_DIR="${PKI_DIR}/ocsp"
 PKI_PUB="${PKI_DIR}/pub"
 
-# Branded subject names
-ROOT_CN="${ROOT_CN:-dmj.one Root CA}"
-ICA_CN="${ICA_CN:-dmj.one Issuing CA v1}"
-OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder}"
-SIGNER_CN="${SIGNER_CN:-dmj.one Document Signer}"
+# Branded subject names (official)
+ROOT_CN="${ROOT_CN:-dmj.one Root CA R1}"
+ICA_CN="${ICA_CN:-dmj.one Issuing CA R1}"
+OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder R1}"
+SIGNER_CN="${SIGNER_CN:-dmj.one Document Signer (Production)}"
 ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
 COUNTRY="${COUNTRY:-IN}"
 
+# Optional: control AIA/CRL scheme for certificates (keep http as default)
+AIA_SCHEME="${AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
+
+PASS="$(openssl rand -hex 24)"
+PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
+
 # Re-issue all PKI artifacts if you set DMJ_REISSUE=1 in the environment
 DMJ_REISSUE="${DMJ_REISSUE:-1}"
-
 
 # Require D1 id (single shared DB)
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
@@ -686,8 +691,8 @@ basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
-crlDistributionPoints = URI:http://${PKI_DOMAIN}/root.crl
-authorityInfoAccess   = caIssuers;URI:http://${PKI_DOMAIN}/root.crt
+crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/root.crl
+authorityInfoAccess   = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/root.crt
 [ crl_ext ]
 authorityKeyIdentifier = keyid:always
 EOF
@@ -732,8 +737,8 @@ basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
-authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
-crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
+authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${AIA_SCHEME}://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, nonRepudiation
@@ -799,9 +804,8 @@ if [ ! -f "${SIGNER_DIR}/keystore.p12" ] || [ "$DMJ_REISSUE" = "1" ]; then
   openssl ca -batch -config "${ICA_DIR}/openssl.cnf" -extensions usr_cert \
     -in "${SIGNER_DIR}/signer.csr" -out "${SIGNER_DIR}/signer.crt" -days 730 -md sha256 -notext
 
-  # Create PKCS#12 with the chain (alias dmj-one) and store password beside it
-  PASS="$(openssl rand -hex 24)"
-  openssl pkcs12 -export -name "dmj-one" \
+  # Create PKCS#12 with the chain (alias dmj-one) and store password beside it  
+  openssl pkcs12 -export -name "${PKCS12_ALIAS}" \
     -inkey "${SIGNER_DIR}/signer.key" -in "${SIGNER_DIR}/signer.crt" \
     -certfile "${ICA_DIR}/ica.crt" -passout pass:"$PASS" \
     -out "${SIGNER_DIR}/keystore.p12"
@@ -822,6 +826,14 @@ say "[+] Publishing chain & CRL at http://${PKI_DOMAIN}/ ..."
 sudo cp -f "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
 sudo cp -f "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
 sudo cp -f "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
+
+# Branded copies (in addition to generic file names)
+sudo cp -f "${ROOT_DIR}/root.crt"            "${PKI_PUB}/dmj-one-root-ca-r1.crt"
+sudo cp -f "${ROOT_DIR}/root.crl"            "${PKI_PUB}/dmj-one-root-ca-r1.crl"
+sudo cp -f "${ICA_DIR}/ica.crt"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crt"
+sudo cp -f "${ICA_DIR}/ica.crl"              "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
+cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt" | sudo tee "${PKI_PUB}/dmj-one-ica-chain-r1.pem" >/dev/null
+
 sudo tee "${PKI_PUB}/README.txt" >/dev/null <<'TXT'
 dmj.one Trust Kit
 =================
@@ -840,7 +852,9 @@ System-wide (admins only; trusts the CA for all apps)
 
 Note: Auto-trust without importing requires an AATL/EUTL certificate (commercial).  
 TXT
-( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip root.crt ica.crt README.txt )
+# ( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip root.crt ica.crt README.txt )
+( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip dmj-one-root-ca-r1.crt dmj-one-issuing-ca-r1.crt README.txt )
+
 
 
 echo "[+] Building Java signer..."
