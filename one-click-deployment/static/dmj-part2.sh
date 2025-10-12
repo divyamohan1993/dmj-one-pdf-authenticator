@@ -9,6 +9,8 @@ CONF_DIR="/etc/dmj"
 INST_ENV="${CONF_DIR}/installer.env"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
+DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
+
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
 [ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
@@ -72,6 +74,7 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_OCSP=1
     DMJ_REISSUE_LEAF=1
     DMJ_REGEN_TRUST_KIT=1
+    DMJ_VERBOSE=1
 fi
 ################## DANGER ENDS ########################
 
@@ -81,7 +84,6 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 
 # Verbose to console? 1/true = yes, 0/false = minimal
-DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 case "${DMJ_VERBOSE,,}" in
   1|true|yes) VERBOSE=1 ;;
   *)          VERBOSE=0 ;;
