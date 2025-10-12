@@ -1190,6 +1190,7 @@ export interface Env {
   ADMIN_PASS_HASH: string
   PKI_BASE?: string
   BUNDLE_TRUST_KIT?: string
+  DOWNLOAD_TTL?: string
 }
 
 // const text = (s: string) => new Response(s, { headers: { "content-type":"text/html; charset=utf-8", "x-frame-options":"DENY", "referrer-policy":"no-referrer", "content-security-policy":"default-src 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'" }});
@@ -1354,13 +1355,58 @@ async function ensureSchema(env: Env) {
        last_seen INTEGER,
        ip_hash TEXT,
        ua_hash TEXT
-     )`
+     )`,     
+    `CREATE TABLE IF NOT EXISTS ${p}downloads(
+       id TEXT PRIMARY KEY,
+       mime TEXT,
+       filename TEXT,
+       body_base64 TEXT,
+       expires_at INTEGER
+     )`,
+    `CREATE INDEX IF NOT EXISTS ${p}downloads_exp_idx ON ${p}downloads(expires_at)`
   ];
 
   for (const sql of stmts) {
     await env.DB.prepare(sql).run();
   }
 }
+
+// Store a short-lived downloadable blob and return its id
+async function putDownload(env: Env, bytes: Uint8Array, mime: string, filename: string){
+  const p = env.DB_PREFIX;
+  const ttl = parseInt(env.DOWNLOAD_TTL || "900", 10); // default 15 min
+  const id = crypto.randomUUID();
+  // Uint8Array -> base64 (chunked to avoid stack limits)
+  let bin = "";
+  const step = 0x8000;
+  for (let i=0; i<bytes.length; i+=step){
+    bin += String.fromCharCode(...bytes.subarray(i, i+step));
+  }
+  const b64 = btoa(bin);
+  await env.DB.prepare(
+    `INSERT INTO ${p}downloads(id,mime,filename,body_base64,expires_at) VALUES(?,?,?,?,?)`
+  ).bind(id, mime, filename, b64, Math.floor(Date.now()/1000) + ttl).run();
+  return id;
+}
+
+// Fetch (and optionally consume) a stored blob by id
+async function getDownload(env: Env, id: string, consume = true){
+  const p = env.DB_PREFIX;
+  const row = await env.DB.prepare(
+    `SELECT mime, filename, body_base64, expires_at FROM ${p}downloads WHERE id=?`
+  ).bind(id).first() as any;
+  if (!row) return null;
+  if (row.expires_at && row.expires_at < Math.floor(Date.now()/1000)) {
+    await env.DB.prepare(`DELETE FROM ${p}downloads WHERE id=?`).bind(id).run();
+    return null;
+  }
+  if (consume) await env.DB.prepare(`DELETE FROM ${p}downloads WHERE id=?`).bind(id).run();
+  const bin = atob(row.body_base64 as string);
+  const data = new Uint8Array(bin.length);
+  for (let i=0; i<bin.length; i++) data[i] = bin.charCodeAt(i);
+  return { bytes: data, mime: String(row.mime), filename: String(row.filename) };
+}
+
 
 
 async function sha256(buf: ArrayBuffer){ return hex(await crypto.subtle.digest("SHA-256", buf)); }
@@ -2094,12 +2140,12 @@ async function handleAdmin(env: Env, req: Request){
         { name: "Trust Kit/dmj-one-trust-kit.zip", data: kit }
       ]);
 
-      return new Response(zipBytes, {
-        headers: {
-          "content-type": "application/zip",
-          "content-disposition": `attachment; filename="dmj-one-signed-bundle-${sha.slice(0,8)}.zip"`,
-          "x-doc-sha256": sha, "x-issuer": env.ISSUER, "x-doc-verified":"true"
-        }
+      // Persist briefly and redirect so download managers see a GET
+      const filename = `dmj-one-signed-bundle-${sha.slice(0,8)}.zip`;
+      const id = await putDownload(env, zipBytes, "application/zip", filename);
+      return new Response(null, {
+        status: 303, // See Other: follow-up with a GET to the Location
+        headers: { "location": `/download/${id}/${encodeURIComponent(filename)}` }
       });
 
     }
@@ -2197,6 +2243,26 @@ async function handleVerify(env: Env, req: Request){
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    // --- IDM-friendly GET download endpoint -------------------------------
+    // Supports GET and HEAD. One-shot: the first GET consumes the token.
+    if (url.pathname.startsWith("/download/") && (req.method === "GET" || req.method === "HEAD")) {
+      const parts = url.pathname.split("/");
+      // /download/<id>[/<filename>]
+      const id = parts[2] || "";
+      const peek = await getDownload(env, id, /*consume*/ req.method === "GET");
+      if (!peek) return new Response("Link expired or invalid", { status: 410 });
+      const headers: Record<string,string> = {
+        "content-type": peek.mime,
+        "content-disposition": `attachment; filename="${peek.filename}"`,
+        "cache-control": "no-store, private",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "accept-ranges": "none",
+        "content-length": String(peek.bytes.length)
+      };
+      if (req.method === "HEAD") return new Response(null, { headers });
+      return new Response(peek.bytes, { headers });
+    }
     if (url.pathname === "/") return renderHome(env.ISSUER);
     if (url.pathname === "/verify" && req.method === "POST") return handleVerify(env, req);
     if (url.pathname.startsWith("/admin")) return handleAdmin(env, req);
