@@ -298,25 +298,6 @@ import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.util.Matrix;
 
-import java.awt.Color;
-
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDBorderStyleDictionary;
-import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
-import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
-import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
-import org.apache.pdfbox.cos.COSName;
-
-
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -403,10 +384,8 @@ public class SignerServer {
     }
     return rect;
   }
-  
-  // Build a minimal visual-appearance template with a small green tick + 1-line text.
-  // Nothing opaque; uses alpha so it doesn't visually block content.
-  // Based on the official CreateVisibleSignature2 approach.  :contentReference[oaicite:3]{index=3}
+
+  // Build a minimal visual-appearance template with text (name, date, reason).
   static InputStream visibleTemplate(PDDocument srcDoc, int pageNum,
                                      PDRectangle rect, PDSignature signature) throws IOException {
     try (PDDocument tpl = new PDDocument()) {
@@ -416,77 +395,54 @@ public class SignerServer {
       PDAcroForm acroForm = new PDAcroForm(tpl);
       tpl.getDocumentCatalog().setAcroForm(acroForm);
       PDSignatureField sigField = new PDSignatureField(acroForm);
+      PDAnnotationWidget widget = sigField.getWidgets().get(0);
       acroForm.setSignaturesExist(true);
       acroForm.setAppendOnly(true);
       acroForm.getCOSObject().setDirect(true);
       acroForm.getFields().add(sigField);
 
-      PDAnnotationWidget widget = sigField.getWidgets().get(0);
       widget.setRectangle(rect);
-      // Make sure the widget behaves like a HUD badge (no zoom/rotate), prints if needed.
-      widget.setNoZoom(true);
-      widget.setNoRotate(true);
-      widget.setPrinted(true);
-      // Remove border
-      PDBorderStyleDictionary border = new PDBorderStyleDictionary();
-      border.setWidth(0); // 0 = no border  :contentReference[oaicite:4]{index=4}
-      widget.setBorderStyle(border);
 
-      // Appearance object
-      PDFormXObject form = new PDFormXObject(tpl);
+      // Appearance form XObject
+      PDStream stream = new PDStream(tpl);
+      PDFormXObject form = new PDFormXObject(stream);
       PDResources res = new PDResources();
       form.setResources(res);
+      form.setFormType(1);
       PDRectangle bbox = new PDRectangle(rect.getWidth(), rect.getHeight());
       form.setBBox(bbox);
 
-      PDAppearanceStream aps = new PDAppearanceStream(form.getCOSObject());
+      // Attach appearance to widget
       PDAppearanceDictionary ap = new PDAppearanceDictionary();
       ap.getCOSObject().setDirect(true);
+      PDAppearanceStream aps = new PDAppearanceStream(form.getCOSObject());
       ap.setNormalAppearance(aps);
       widget.setAppearance(ap);
 
-      // Draw the badge: semi-transparent graphics state (alpha)
+      // Draw simple framed box + text
       try (PDPageContentStream cs = new PDPageContentStream(tpl, aps)) {
-        PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
-        gs.setNonStrokingAlphaConstant(0.85f);
-        gs.setStrokingAlphaConstant(0.85f);
-        cs.setGraphicsStateParameters(gs); // PDFBox 3.x API  :contentReference[oaicite:5]{index=5}
+        // background (white) and border (black)
+        // cs.setNonStrokingColor(Color.WHITE);
+        cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight()); cs.fill();
+        cs.setLineWidth(0.8f);
+        cs.setStrokingColor(Color.BLACK);
+        cs.moveTo(0,0); cs.lineTo(bbox.getWidth(),0); cs.lineTo(bbox.getWidth(),bbox.getHeight());
+        cs.lineTo(0,bbox.getHeight()); cs.closeAndStroke();
 
-        // Layout
-        final float padding = 3f;
-        final float tickR = 6.5f;              // circle radius
-        final float tickCx = padding + tickR;  // circle center x
-        final float tickCy = bbox.getHeight() / 2f;
-        final float textStartX = padding + tickR*2 + 6f;
-
-        // Green circle (approximate with 4 béziers)  :contentReference[oaicite:6]{index=6}
-        float c = 0.5522847498f * tickR;
-        cs.setNonStrokingColor(new Color(0x2E,0x7D,0x32)); // #2E7D32
-        cs.moveTo(tickCx, tickCy + tickR);
-        cs.curveTo(tickCx + c, tickCy + tickR, tickCx + tickR, tickCy + c, tickCx + tickR, tickCy);
-        cs.curveTo(tickCx + tickR, tickCy - c, tickCx + c, tickCy - tickR, tickCx, tickCy - tickR);
-        cs.curveTo(tickCx - c, tickCy - tickR, tickCx - tickR, tickCy - c, tickCx - tickR, tickCy);
-        cs.curveTo(tickCx - tickR, tickCy + c, tickCx - c, tickCy + tickR, tickCx, tickCy + tickR);
-        cs.fill();
-
-        // White check mark
-        cs.setStrokingColor(Color.WHITE);
-        cs.setLineWidth(1.8f);
-        cs.moveTo(tickCx - tickR * 0.55f, tickCy + 0.0f);
-        cs.lineTo(tickCx - tickR * 0.15f, tickCy - tickR * 0.40f);
-        cs.lineTo(tickCx + tickR * 0.65f, tickCy + tickR * 0.45f);
-        cs.stroke();
-
-        // Single-line text (bold)
-        final String line = "Verified by dmj.one";
-        final float fontSize = 9f;
+        // text
+        float fs = 9f, leading = fs * 1.35f;
         cs.beginText();
-        cs.setFont(new PDType1Font(FontName.HELVETICA_BOLD), fontSize);
+        cs.setFont(new PDType1Font(FontName.HELVETICA_BOLD), fs);
         cs.setNonStrokingColor(Color.BLACK);
-        // Vertical centering (approx.)
-        float textY = (bbox.getHeight() - fontSize) / 2f + 1f;
-        cs.newLineAtOffset(textStartX, textY);
-        cs.showText(line);
+        cs.newLineAtOffset(6, bbox.getHeight() - leading - 4);
+        cs.setLeading(leading);
+        String date = signature.getSignDate() != null ? signature.getSignDate().getTime().toString() : "";
+        cs.showText("Digitally signed by dmj.one");
+        cs.newLine();
+        cs.showText(date);
+        cs.newLine();
+        String reason = signature.getReason() != null ? signature.getReason() : "Verified and certified";
+        cs.showText("Reason: " + reason);
         cs.endText();
       }
 
@@ -495,7 +451,6 @@ public class SignerServer {
       return new ByteArrayInputStream(baos.toByteArray());
     }
   }
-
 
 
   static boolean verifyHmac(String sharedBase64, String method, String path, byte[] body, String ts, String nonceB64, String providedB64) throws Exception {
@@ -630,41 +585,53 @@ static String jcaDigestNameFromOid(String oid){
       sig.setReason("Contents securely verified by dmj.one against any tampering.");
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());
-  
-      // Certify (no changes allowed)
-      setMDPPermission(doc, sig, 1);
-  
-      // ---- Visible badge: small, top-right margin, 1 line ----
-      final int pageIndex = 0;
-      PDRectangle pageBox = doc.getPage(pageIndex).getCropBox();
-      float pageW = pageBox.getWidth();
-      float pageH = pageBox.getHeight();
-  
-      // Measure text so our rect fits (Helvetica Bold 9pt).
-      float fs = 9f;
-      float textWidth = new PDType1Font(FontName.HELVETICA_BOLD)
-                          .getStringWidth("Verified by dmj.one") / 1000f * fs;
-      float tickW = 13f;            // diameter (~2 * radius) + padding
-      float pad = 12f;
-      float rectW = Math.min(Math.max(tickW + 6f + textWidth + 8f, 120f), Math.max(160f, pageW * 0.35f));
-      float rectH = 22f;
-  
-      // 12pt from top-right corner
-      float margin = 12f;
-      float xTopLeft = pageW - rectW - margin;
-      float yTopLeft = margin;
-  
-      PDRectangle rect = signatureRectForPage(doc, pageIndex, xTopLeft, yTopLeft, rectW, rectH);
-  
+
+      // Certification: no changes allowed after signing
+      setMDPPermission(doc, sig, 1); // DocMDP P=1 — any change invalidates. :contentReference[oaicite:2]{index=2}
+
+      // ----- Create a visible signature field (no custom appearance) -----
+      int pageIndex = 0;
+      PDPage page = doc.getPage(pageIndex);
+
+      // Ensure there is an AcroForm
+      PDAcroForm acro = doc.getDocumentCatalog().getAcroForm();
+      if (acro == null) {
+        acro = new PDAcroForm(doc);
+        doc.getDocumentCatalog().setAcroForm(acro);
+        // Recommended for appearance generation
+        acro.setSignaturesExist(true);
+        acro.setAppendOnly(true);
+      }
+
+      PDSignatureField field = new PDSignatureField(acro);
+      field.setPartialName("dmj_sig_1");
+      PDAnnotationWidget widget = field.getWidgets().get(0);
+      widget.setPage(page);
+
+      // Small rectangle in the top-right margin, away from content
+      PDRectangle crop = page.getCropBox();
+      float rectW = 160f, rectH = 22f, margin = 12f;
+      PDRectangle rect = signatureRectForPage(doc, pageIndex,
+              crop.getWidth() - rectW - margin,  // x from top-left
+              margin,                             // y from top-left
+              rectW, rectH);
+      widget.setRectangle(rect);
+
+      // Add the widget to the page annotations and field to the form
+      page.getAnnotations().add(widget);
+      acro.getFields().add(field);
+
+      // Bind our signature dictionary to this field
+      field.setValue(sig); // attaches /V to the field. :contentReference[oaicite:3]{index=3}
+
+      // Prepare external signing (no visual appearance is set -> viewer draws default)
       SignatureOptions options = new SignatureOptions();
       options.setPreferredSignatureSize(65536);
-      options.setVisualSignature( visibleTemplate(doc, pageIndex, rect, sig) );
       options.setPage(pageIndex);
-  
-      doc.addSignature(sig, options);
+
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
-      byte[] cmsSignature = buildDetachedCMS(ext.getContent(), pk, cert);
-      ext.setSignature(cmsSignature);
+      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
+      ext.setSignature(cms);
     }
     return baos.toByteArray();
   }
@@ -1330,22 +1297,33 @@ async function handleVerify(env: Env, req: Request){
   const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
   const vinfo = vres.ok ? await vres.json() : {isValid:false, issuer:""};
   
+  const issued = !!row;
+  const tampered = !(vinfo && vinfo.hasSignature && vinfo.isValid && vinfo.coversDocument && vinfo.issuedByUs);
+  const revoked = !!row?.revoked_at;
+
+  const statusHtml = revoked || tampered ? '❌ <b>Revoked or altered</b>' : '✅ <b>Active</b>';
+
   const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
   const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
   <body style="font-family:ui-sans-serif;padding:32px">
   <h1>Verification result</h1>
   <p>SHA-256: <code>${sha}</code></p>
+  
+  <p>Status: ${statusHtml}</p>
+  
   <ul>
-    <li>Registered by dmj.one: ${row ? "✅" : "❌"}</li>
-    <li>Revoked: ${row?.revoked_at ? "❌ (revoked)" : "✅ (not revoked)"}</li>
+    <li>Registered by dmj.one: ${issued ? "✅" : "❌"}</li>
+    <li>Revoked: ${revoked ? "❌ (revoked)" : "✅ (not revoked)"}</li>
     <li>Signature object present: ${vinfo.hasSignature ? "✅" : "❌"}</li>
     <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>
     <li>Covers whole document (ByteRange): ${vinfo.coversDocument ? "✅" : "❌"}</li>
     <li>Signed by our key (dmj.one): ${vinfo.issuedByUs ? "✅" : "❌"}</li>
     <li>Issuer (from signature): <code>${vinfo.issuer||""}</code></li>
   </ul>
-  <h2>${ok? "✅ Genuine (dmj.one)":"❌ Not valid / tampered"}</h2>
+  
+  <h2>${revoked || tampered ? "❌ Not valid / tampered" : "✅ Genuine (dmj.one)"}</h2>
   <p><a href="/">Back</a></p></body>`;
+
   return text(html);
 }
 
