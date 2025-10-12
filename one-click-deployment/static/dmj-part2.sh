@@ -23,7 +23,8 @@ DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
 SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
 
-WORKER_NAME="dmj-${INSTALLATION_ID}-docsign"
+# WORKER_NAME="dmj-${INSTALLATION_ID}-docsign"
+WORKER_NAME="document-signer"
 WORKER_DIR="/opt/dmj/worker"
 SIGNER_DIR="/opt/dmj/signer-vm"
 NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
@@ -1961,7 +1962,12 @@ function renderAdminDashboard(issuer: string){
           <div class="card-body">
             <h2 class="h5 d-flex align-items-center"><i class="bi-pen me-2 text-primary"></i>Sign a new PDF</h2>
             <div id="dz" class="dropzone mt-3 text-secondary text-center">
-              <div class="small"><i class="bi-cloud-arrow-up"></i> Drag & drop PDF here or <label class="link-primary" style="cursor:pointer"><input id="filePick" type="file" class="d-none" accept="application/pdf" />browse</label></div>
+              <div class="small">
+                <i class="bi-cloud-arrow-up"></i>
+                Drag & drop PDF here or
+                <label for="filePick" class="link-primary" style="cursor:pointer">browse</label>
+                <input id="filePick" type="file" class="d-none" accept="application/pdf" />
+              </div>
             </div>
             <div class="mt-3">
               <label class="form-label">Optional metadata (JSON)</label>
@@ -2006,7 +2012,7 @@ function renderAdminDashboard(issuer: string){
       setTimeout(()=>t.classList.remove('show'), 2200);
     };
 
-    // ------- Table (load + filter + revoke)
+    // ------- Table (load + filter + revoke) — unchanged -------
     let rows = [];
     async function loadRows(){
       const res = await fetch('/admin?json=1', {headers:{'Accept':'application/json'}});
@@ -2043,47 +2049,86 @@ function renderAdminDashboard(issuer: string){
       if(!res.ok){ toast('Revoke failed','danger'); return; }
       const r = await res.json();
       toast('Revoked '+sha.slice(0,8)+'…','warning');
-      // reflect locally
       const row = rows.find(x=>x.sha===sha); if(row){ row.revoked_at = r.revoked_at || Math.floor(Date.now()/1000); }
       renderRows();
     });
 
-    // ------- Signer (dropzone + browse + download)
-    const dz = document.getElementById('dz');
-    const fp = document.getElementById('filePick');
+    // ------- Signer (auto-process) -------
+    const dz   = document.getElementById('dz');
+    const fp   = document.getElementById('filePick');
     const meta = document.getElementById('meta');
-    const btn = document.getElementById('signBtn');
+    const btn  = document.getElementById('signBtn');
     const prog = document.getElementById('prog');
+
     let file = null;
-    const setFile = f => { file = f; btn.disabled = !file; toast('Ready to sign: '+(f?.name||'')); };
-    ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault(); dz.classList.add('drag');}));
-    ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault(); dz.classList.remove('drag');}));
-    dz.addEventListener('drop', e=>{ const f = e.dataTransfer.files?.[0]; if(f && f.type==='application/pdf') setFile(f); });
-    fp.addEventListener('change', e=>{ const f = fp.files?.[0]; if(f && f.type==='application/pdf') setFile(f); fp.value=''; });
-    dz.querySelector('label').addEventListener('click', ()=>fp.click());
-    btn.addEventListener('click', async ()=>{
+    const isPDF = f => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name||'')); // NEW
+
+    // Reusable signer — used by auto-flow AND the button
+    async function signNow(){ // CHANGED (extracted from old btn handler)
       if(!file) return;
-      prog.classList.remove('d-none'); btn.disabled=true;
+      prog.classList.remove('d-none');
+      btn.disabled = true;
       try{
-        const fd = new FormData(); fd.set('file', file, file.name);
-        const m = (meta.value||'').trim(); if(m) fd.set('meta', m);
+        const fd = new FormData();
+        fd.set('file', file, file.name);
+        const m = (meta.value||'').trim(); if(m) fd.set('meta', m); // uses whatever is in "Optional metadata" right now
+
         const res = await fetch('/admin/sign', { method:'POST', body:fd });
         if(!res.ok){ const t = await res.text(); throw new Error(t||'sign error'); }
-        const disp = res.headers.get('content-disposition') || '';
-        const match = /filename="?([^"]+)"?/i.exec(disp); const name = match ? match[1] : ('signed-'+(file.name||'document')+(res.headers.get('content-type')?.includes('zip')?'.zip':'')); 
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = Object.assign(document.createElement('a'), { href:url, download:name });
+
+        const disp  = res.headers.get('content-disposition') || '';
+        const match = /filename="?([^"]+)"?/i.exec(disp);
+        const name  = match ? match[1] : ('signed-'+(file.name||'document')+(res.headers.get('content-type')?.includes('zip')?'.zip':''));
+        const blob  = await res.blob();
+        const url   = URL.createObjectURL(blob);
+        const a     = Object.assign(document.createElement('a'), { href:url, download:name });
         document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url); // avoid leaks
+        URL.revokeObjectURL(url);
         toast('Signed & downloaded','success');
-        loadRows(); // refresh list
-      }catch(e){ toast('Signing failed','danger'); }
-      finally{ prog.classList.add('d-none'); btn.disabled=false; file=null; }
+        loadRows(); // refresh issued list
+      }catch(e){
+        toast('Signing failed','danger');
+      }finally{
+        prog.classList.add('d-none');
+        btn.disabled = false;
+        file = null;
+      }
+    }
+
+    // Set & auto-sign immediately
+    const setFile = f => { // CHANGED (auto-trigger)
+      if(!isPDF(f)){ toast('Please select a PDF','warning'); return; }
+      file = f;
+      toast('Processing '+(f?.name||'document')+'…');
+      // no need to wait — start right away
+      void signNow(); // NEW
+    };
+
+    // Drag & drop
+    ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault(); dz.classList.add('drag');}));
+    ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault(); dz.classList.remove('drag');}));
+    dz.addEventListener('drop', e=>{
+      const f = e.dataTransfer.files?.[0];
+      if(f) setFile(f); // CHANGED: auto process on drop
     });
+
+    // File picker
+    fp.addEventListener('change', ()=>{
+      const f = fp.files?.[0];
+      if(f) setFile(f);     // CHANGED: auto process on select
+      fp.value = '';        // keep this so selecting the same file later retriggers "change"  // NEW
+    });
+
+    // REMOVE this line — the label already activates the input and this can cause awkward UX
+    // dz.querySelector('label').addEventListener('click', ()=>fp.click());  // DELETED
+
+    // Keep button as a fallback/manual trigger
+    btn.addEventListener('click', signNow); // CHANGED
+
     // init
     loadRows();
   </script>
+
 </body></html>`);
 }
 
@@ -2496,7 +2541,7 @@ echo "Signer URL (nginx): https://${SIGNER_DOMAIN}/healthz"
 echo
 echo "NEXT STEPS:"
 echo "1) Visit ${WORKER_URL:-your workers.dev URL}/admin   — you will see the admin key ONCE."
-echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain (e.g. https://sign.${DMJ_ROOT_DOMAIN}/*)."
+echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain (e.g. https://document.${DMJ_ROOT_DOMAIN}/*)."
 echo "------------------------------------------------------------------"
 
 say "[✓] Done."
