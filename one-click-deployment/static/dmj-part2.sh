@@ -9,6 +9,67 @@ CONF_DIR="/etc/dmj"
 INST_ENV="${CONF_DIR}/installer.env"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
+DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
+SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
+
+WORKER_NAME="dmj-${INSTALLATION_ID}-docsign"
+WORKER_DIR="/opt/dmj/worker"
+SIGNER_DIR="/opt/dmj/signer-vm"
+NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
+NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
+
+# --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
+PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
+OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
+
+PKI_DIR="/opt/dmj/pki"
+ROOT_DIR="${PKI_DIR}/root"
+ICA_DIR="${PKI_DIR}/ica"
+OCSP_DIR="${PKI_DIR}/ocsp"
+PKI_PUB="${PKI_DIR}/pub"
+
+# Branded subject names (official)
+ROOT_CN="${ROOT_CN:-dmj.one Root CA R1}"
+ICA_CN="${ICA_CN:-dmj.one Issuing CA R1}"
+OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder R1}"
+SIGNER_CN="${SIGNER_CN:-dmj.one Document Signer (Production)}"
+ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
+COUNTRY="${COUNTRY:-IN}"
+
+# Optional: control AIA/CRL scheme for certificates (keep http as default)
+AIA_SCHEME="${AIA_SCHEME:-https}"   # use http (recommended). Only set to https if you KNOW clients will follow.
+
+PASS="$(openssl rand -hex 24)"
+PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
+
+# ---- Shipping policy flags (pin end-user CA kit) ----
+CA_SERIES="${CA_SERIES:-r1}"                    # Active CA on the server (may change in the future)
+DMJ_SHIP_CA_SERIES="${DMJ_SHIP_CA_SERIES:-r1}"  # The end-user kit you ship. Pin this for years.
+DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by default
+DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
+DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
+DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-1}"       # 1 = rotate signer freely
+DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-0}" # 0 = never overwrite user Trust Kit ZIP
+
+# Require D1 id (single shared DB)
+CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
+if [ -z "${CF_D1_DATABASE_ID}" ]; then
+  echo "[x] Please export CF_D1_DATABASE_ID to your D1 database id (UUID)."
+  echo "    You can run:  dmj-wrangler d1 list --json"
+  exit 1
+fi
+
+# Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
+if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
+    DMJ_REISSUE_ROOT=1
+    DMJ_REISSUE_ICA=1
+    DMJ_REISSUE_OCSP=1
+    DMJ_REISSUE_LEAF=1
+    DMJ_REGEN_TRUST_KIT=1
+fi
+
+
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
 [ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
@@ -55,50 +116,6 @@ if [ -z "$WR" ]; then
   exit 1
 fi
 
-
-DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
-SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
-
-WORKER_NAME="dmj-${INSTALLATION_ID}-docsign"
-WORKER_DIR="/opt/dmj/worker"
-SIGNER_DIR="/opt/dmj/signer-vm"
-NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
-NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
-
-# --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
-PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
-OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
-
-PKI_DIR="/opt/dmj/pki"
-ROOT_DIR="${PKI_DIR}/root"
-ICA_DIR="${PKI_DIR}/ica"
-OCSP_DIR="${PKI_DIR}/ocsp"
-PKI_PUB="${PKI_DIR}/pub"
-
-# Branded subject names (official)
-ROOT_CN="${ROOT_CN:-dmj.one Root CA R1}"
-ICA_CN="${ICA_CN:-dmj.one Issuing CA R1}"
-OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder R1}"
-SIGNER_CN="${SIGNER_CN:-dmj.one Document Signer (Production)}"
-ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
-COUNTRY="${COUNTRY:-IN}"
-
-# Optional: control AIA/CRL scheme for certificates (keep http as default)
-AIA_SCHEME="${AIA_SCHEME:-https}"   # use http (recommended). Only set to https if you KNOW clients will follow.
-
-PASS="$(openssl rand -hex 24)"
-PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
-
-# Re-issue all PKI artifacts if you set DMJ_REISSUE=1 in the environment
-DMJ_REISSUE="${DMJ_REISSUE:-1}"
-
-# Require D1 id (single shared DB)
-CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
-if [ -z "${CF_D1_DATABASE_ID}" ]; then
-  echo "[x] Please export CF_D1_DATABASE_ID to your D1 database id (UUID)."
-  echo "    You can run:  dmj-wrangler d1 list --json"
-  exit 1
-fi
 
 echo "[+] Verifying Wrangler auth..."
 if ! "$WR" whoami >/dev/null 2>&1; then
@@ -770,11 +787,11 @@ authorityKeyIdentifier = keyid:always
 EOF
 
 
-if [ "$DMJ_REISSUE" = "1" ]; then
-  say "[i] REISSUE is True. All certificates will be reissued..."
+if [ "$DMJ_REISSUE_ALL_HARD_RESET" = "1" ]; then
+  say "[i] HARD RESET. REISSUE ALL is True. All certificates will be reissued..."
 fi
 
-if [ ! -f "${ROOT_DIR}/root.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
+if [ ! -f "${ROOT_DIR}/root.crt" ] || [ "$DMJ_REISSUE_ROOT" = "1" ]; then
   say "[+] Creating Root CA ..."
   openssl genrsa -out "${ROOT_DIR}/root.key" 4096
   openssl req -new -x509 -days 3650 -sha256 \
@@ -784,7 +801,7 @@ if [ ! -f "${ROOT_DIR}/root.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
   openssl ca -config "${ROOT_DIR}/openssl.cnf" -gencrl -out "${ROOT_DIR}/root.crl"
 fi
 
-if [ ! -f "${ICA_DIR}/ica.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
+if [ ! -f "${ICA_DIR}/ica.crt" ] || [ "$DMJ_REISSUE_ICA" = "1" ]; then
   say "[+] Creating Issuing CA ..."
   openssl genrsa -out "${ICA_DIR}/ica.key" 4096
   openssl req -new -sha256 \
@@ -798,7 +815,7 @@ if [ ! -f "${ICA_DIR}/ica.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
 fi
 
 # OCSP responder cert (EKU=OCSPSigning)
-if [ ! -f "${OCSP_DIR}/ocsp.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
+if [ ! -f "${OCSP_DIR}/ocsp.crt" ] || [ "$DMJ_REISSUE_OCSP" = "1" ]; then
   say "[+] Issuing OCSP responder cert ..."
   openssl genrsa -out "${OCSP_DIR}/ocsp.key" 4096
   openssl req -new -sha256 \
@@ -810,7 +827,7 @@ fi
 
 
 # Signer (leaf) + PKCS#12 used by the Java service
-if [ ! -f "${SIGNER_DIR}/keystore.p12" ] || [ "$DMJ_REISSUE" = "1" ]; then
+if [ ! -f "${SIGNER_DIR}/keystore.p12" ] || [ "$DMJ_REISSUE_LEAF" = "1" ]; then
   sudo rm -f "${SIGNER_DIR}/signer.crt" "${SIGNER_DIR}/signer.csr" "${SIGNER_DIR}/keystore.p12" "${SIGNER_DIR}/keystore.pass"
   # Clean any failed/old leaf artifacts so re-issuing is idempotent
   say "[+] Issuing Document Signer leaf and building PKCS#12 ..."
@@ -873,36 +890,34 @@ openssl verify -CAfile <(cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt") "${SIG
 # ( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip dmj-one-root-ca-r1.crt dmj-one-issuing-ca-r1.crt README.txt )
 
 
-# --- TRUST KIT (publish minimal files + friendly instructions) --------------
 say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
 
-# Publish CRL/chain for relying-party fetch (not zipped for end‑users)
+# Public files (for AIA/CDP/OCSP fetches)
 sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/dmj-one-root-ca-r1.crl"
 sudo install -m 0644 "${ICA_DIR}/ica.crl"   "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
 cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt" | sudo tee "${PKI_PUB}/dmj-one-ica-chain-r1.pem" >/dev/null
 
-# Publish branded PEM copies
+# Branded certs for users (do NOT rename once shipped)
 sudo install -m 0644 "${ROOT_DIR}/root.crt" "${PKI_PUB}/dmj-one-root-ca-r1.crt"
 sudo install -m 0644 "${ICA_DIR}/ica.crt"   "${PKI_PUB}/dmj-one-issuing-ca-r1.crt"
-
-# Publish convenient DER (.cer) for Windows double‑click install
 openssl x509 -in "${ROOT_DIR}/root.crt" -outform der -out "${PKI_PUB}/dmj-one-root-ca-r1.cer"
 openssl x509 -in "${ICA_DIR}/ica.crt"   -outform der -out "${PKI_PUB}/dmj-one-issuing-ca-r1.cer"
 
-# Create simple, step-by-step READMEs (TXT + HTML)
-sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.txt" >/dev/null <<'TXT'
+# Build a “frozen” Trust Kit once per series and keep a stable symlink
+TRUST_KIT_ZIP="${PKI_PUB}/dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip"
+if [ ! -f "$TRUST_KIT_ZIP" ] || [ "$DMJ_REGEN_TRUST_KIT" = "1" ]; then
+  # fresh readmes
+  sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.txt" >/dev/null <<'TXT'
 dmj.one Trust Kit — Quick Guide
 ================================
 
-What you’re installing
-----------------------
-• dmj.one Root CA (R1) — install this to trust dmj.one‑signed PDFs.
-• dmj.one Issuing CA (R1) — optional for Acrobat; do NOT add it to “Trusted Root”.
+What this is
+------------
+• dmj.one Root CA (R1): install this once to trust dmj.one‑signed PDFs.
+• dmj.one Issuing CA (R1): optional helper for some apps. Do NOT add to “Trusted Root”.
 
-Most people only need the Root CA. The Issuing CA helps Acrobat and some apps build the chain faster.
-
-Windows (system trust) — easiest
---------------------------------
+Windows — easiest (system-wide)
+-------------------------------
 1) Double‑click  dmj-one-root-ca-r1.cer
 2) Click “Install Certificate…”.
 3) Choose “Local Machine” (or “Current User” if you don’t have admin rights) → Next.
@@ -910,105 +925,99 @@ Windows (system trust) — easiest
    select “Trusted Root Certification Authorities” → OK → Next → Finish.
 5) Approve the security warning (Yes). Done.
 
-(Advanced) If you also import the Issuing CA:
-• Import dmj-one-issuing-ca-r1.cer into “Intermediate Certification Authorities”, not “Trusted Root”.
+(Advanced) Issuing CA: import dmj-one-issuing-ca-r1.cer into “Intermediate Certification Authorities”.
 
-macOS (system trust)
+macOS — system trust
 --------------------
 1) Double‑click  dmj-one-root-ca-r1.cer  (opens Keychain Access).
-2) In the left bar, pick the “System” keychain (or “login” if you don’t have admin rights).
-3) Drag the certificate into the list (or File → Import Items…).
-4) Double‑click the dmj.one Root CA → expand “Trust” → set “When using this certificate” to “Always Trust”.
+2) In the left bar, click the “System” keychain (or “login” if you don’t have admin rights).
+3) Drag the certificate into the list (or use File → Import Items…).
+4) Double‑click the “dmj.one Root CA R1” → expand “Trust” → set “When using this certificate” to “Always Trust”.
 5) Close the window; enter your password to save. Done.
 
-(Advanced) You may import the Issuing CA too (no need to change its trust).
-
-Linux (Ubuntu/Debian family)
-----------------------------
+Linux (Ubuntu/Debian)
+---------------------
 1) Copy the Root CA (PEM) into the local trust store:
      sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/
 2) Update the system CA bundle:
      sudo update-ca-certificates
-(Advanced) You may copy the Issuing CA similarly (optional).
 
-Acrobat-only (no system changes)
+Acrobat only (no system changes)
 --------------------------------
-If you prefer to trust dmj.one only inside Adobe Acrobat/Reader:
-1) Open Acrobat → Edit → Preferences → Signatures → Identities & Trusted Certificates → More…
-2) Trusted Certificates → Import → select the Root (and Issuing CA if you want).
-3) In “Trust” settings, tick “Use this certificate as a trusted root”. Save.
+1) Adobe Acrobat/Reader → Edit → Preferences → Signatures → Identities & Trusted Certificates → More…
+2) Trusted Certificates → Import → pick the Root (and Issuing CA if you want).
+3) In “Trust”, tick “Use this certificate as a trusted root”. Save.
 
-Verify it works
----------------
-• Reopen a dmj.one‑signed PDF. Acrobat should show the signature as valid and untampered.
-• If a document is revoked later, Acrobat can detect it (revocation/OCSP settings must be enabled).
+After installing
+----------------
+• Open your PDF again. It should show the signature as valid (trusted) and not changed.
+• If a document is later revoked, Acrobat can flag it during verification (enable revocation checks in Preferences).
 
-Files in this ZIP
------------------
-• dmj-one-root-ca-r1.cer  (DER)     — Windows friendly
-• dmj-one-root-ca-r1.crt  (PEM)     — Linux/others
-• dmj-one-issuing-ca-r1.crt (PEM)   — optional (Acrobat/chain helpers)
-• dmj-one-trust-kit-README.txt / .html
-• dmj-one-trust-kit-SHA256SUMS.txt
+Files in this folder
+--------------------
+• dmj-one-root-ca-r1.cer  (DER – Windows)
+• dmj-one-root-ca-r1.crt  (PEM)
+• dmj-one-issuing-ca-r1.crt  (PEM, optional)
+• dmj-one-ica-chain-r1.pem   (PEM chain)
+• this guide (TXT/HTML) and SHA256SUMS
 
-Security tip: Only install CAs you trust.
+Security tip: Only install CAs you trust. This kit is published at pki.dmj.one.
 TXT
-
-sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.html" >/dev/null <<'HTML'
+  sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.html" >/dev/null <<'HTML'
 <!doctype html><meta charset="utf-8">
 <title>dmj.one Trust Kit — Quick Guide</title>
 <style>body{font-family:ui-sans-serif,system-ui;margin:40px;max-width:900px}code{background:#f6f6f6;padding:2px 4px;border-radius:4px}</style>
 <h1>dmj.one Trust Kit — Quick Guide</h1>
-<p><b>Install the dmj.one Root CA</b> to make dmj.one‑signed PDFs show as trusted.</p>
-<h2>Windows (system trust)</h2>
+<p><b>Install the dmj.one Root CA</b> once. Then dmj.one‑signed PDFs show as trusted.</p>
+
+<h2>Windows</h2>
 <ol>
-<li>Double‑click <code>dmj-one-root-ca-r1.cer</code>.</li>
-<li>Click <b>Install Certificate…</b>.</li>
-<li>Choose <b>Local Machine</b> (or <b>Current User</b>) → <b>Next</b>.</li>
-<li>Choose <b>Place all certificates in the following store</b> → <b>Browse</b> → pick <b>Trusted Root Certification Authorities</b> → <b>OK</b> → <b>Next</b> → <b>Finish</b>.</li>
-<li>Approve the warning (<b>Yes</b>). Done.</li>
+  <li>Double‑click <code>dmj-one-root-ca-r1.cer</code> → <b>Install Certificate…</b></li>
+  <li><b>Local Machine</b> (or <b>Current User</b>) → <b>Next</b></li>
+  <li><b>Place all certificates in the following store</b> → <b>Browse</b> → pick <b>Trusted Root Certification Authorities</b> → <b>OK</b> → <b>Next</b> → <b>Finish</b></li>
+  <li>Approve the warning (<b>Yes</b>)</li>
 </ol>
 <p><i>Optional:</i> import <code>dmj-one-issuing-ca-r1.cer</code> into <b>Intermediate Certification Authorities</b>.</p>
 
-<h2>macOS (system trust)</h2>
+<h2>macOS</h2>
 <ol>
-<li>Double‑click <code>dmj-one-root-ca-r1.cer</code> (opens Keychain Access).</li>
-<li>Select the <b>System</b> keychain (or <b>login</b>).</li>
-<li>Drag the certificate into the list (or <b>File → Import Items…</b>).</li>
-<li>Double‑click the Root → expand <b>Trust</b> → set <b>When using this certificate</b> to <b>Always Trust</b>.</li>
-<li>Close; enter your password. Done.</li>
+  <li>Double‑click <code>dmj-one-root-ca-r1.cer</code> (opens Keychain Access)</li>
+  <li>Select the <b>System</b> keychain (or <b>login</b>)</li>
+  <li>Drag the certificate in (or <b>File → Import Items…</b>)</li>
+  <li>Double‑click it → <b>Trust</b> → set <b>Always Trust</b></li>
 </ol>
 
 <h2>Linux (Ubuntu/Debian)</h2>
 <ol>
-<li>Copy the Root CA (PEM) to the local trust store:<br>
-<code>sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/</code></li>
-<li>Update CA bundle:<br>
-<code>sudo update-ca-certificates</code></li>
+  <li>Copy Root (PEM): <code>sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/</code></li>
+  <li>Update: <code>sudo update-ca-certificates</code></li>
 </ol>
 
-<h2>Acrobat-only (no system changes)</h2>
+<h2>Acrobat only (no system changes)</h2>
 <ol>
-<li>Acrobat → <b>Edit → Preferences → Signatures → Identities &amp; Trusted Certificates → More…</b></li>
-<li><b>Trusted Certificates → Import</b> → select the Root (and Issuing CA if desired).</li>
-<li>In <b>Trust</b>, tick <b>Use this certificate as a trusted root</b>. Save.</li>
+  <li>Acrobat → <b>Edit → Preferences → Signatures → Identities &amp; Trusted Certificates → More…</b></li>
+  <li><b>Trusted Certificates → Import</b> → select the Root</li>
+  <li>Tick <b>Use this certificate as a trusted root</b> and save</li>
 </ol>
 
-<p><b>After installing</b>: reopen the PDF. It should show as signed by dmj.one and not tampered.</p>
+<p>Reopen your PDF; it should show as trusted and unchanged.</p>
 HTML
 
-# Checksums for the files we ship in the ZIP
-( cd "${PKI_PUB}" && sha256sum \
-  dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
-  dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
-  > dmj-one-trust-kit-SHA256SUMS.txt )
+  ( cd "${PKI_PUB}" && sha256sum \
+      dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
+      dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
+      > dmj-one-trust-kit-SHA256SUMS.txt )
 
-# Build end‑user ZIP: only what users need
-( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip \
-  dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
-  dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
-  dmj-one-trust-kit-README.txt dmj-one-trust-kit-README.html \
-  dmj-one-trust-kit-SHA256SUMS.txt )
+  ( cd "${PKI_PUB}" && zip -q -r "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" \
+      dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
+      dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
+      dmj-one-trust-kit-README.txt dmj-one-trust-kit-README.html \
+      dmj-one-trust-kit-SHA256SUMS.txt )
+fi
+
+# Always point this public name at the pinned series
+( cd "${PKI_PUB}" && ln -sf "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" dmj-one-trust-kit.zip )
+
 
 
 
@@ -1181,6 +1190,63 @@ function sameOrigin(req: Request){
   return true;
 }
 
+// --- Minimal ZIP (STORE, no compression) for 2-3 files ---
+// CRC32 table
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8: Uint8Array) {
+  let c = 0 ^ -1;
+  for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function encDOSDate(d: Date) {
+  const yr = d.getFullYear(); const mo = d.getMonth()+1; const da = d.getDate();
+  const hh = d.getHours(); const mm = d.getMinutes(); const ss = Math.floor(d.getSeconds()/2);
+  const dost = (hh<<11)|(mm<<5)|ss; const dosd = ((yr-1980)<<9)|(mo<<5)|da;
+  return { time: dost, date: dosd };
+}
+function u16(v: number){ const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v, true); return b; }
+function u32(v: number){ const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; }
+
+type ZipEntry = { name: string, data: Uint8Array };
+async function buildZip(entries: ZipEntry[]): Promise<Uint8Array> {
+  const now = new Date(); const dos = encDOSDate(now);
+  const files: {lfh: Uint8Array, data: Uint8Array, cdh: Uint8Array}[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const n = new TextEncoder().encode(e.name);
+    const c = crc32(e.data); const sz = e.data.length;
+    // Local File Header
+    const lfh = new Uint8Array([
+      ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0),
+      ...u16(dos.time), ...u16(dos.date), ...u32(c), ...u32(sz), ...u32(sz),
+      ...u16(n.length), ...u16(0), ...n
+    ]);
+    // Central Directory Header
+    const cdh = new Uint8Array([
+      ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0),
+      ...u16(dos.time), ...u16(dos.date), ...u32(c), ...u32(sz), ...u32(sz),
+      ...u16(n.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset),
+      ...n
+    ]);
+    files.push({ lfh, data: e.data, cdh });
+    offset += lfh.length + sz;
+  }
+  const central = concat(...files.map(f => f.cdh));
+  const body = concat(...files.flatMap(f => [f.lfh, f.data]));
+  const eocd = new Uint8Array([
+    ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length),
+    ...u32(central.length), ...u32(body.length), ...u16(0)
+  ]);
+  return concat(body, central, eocd);
+}
 
 async function ensureSchema(env: Env) {
   const p = env.DB_PREFIX;
@@ -1472,15 +1538,56 @@ async function handleAdmin(env: Env, req: Request){
         .bind(crypto.randomUUID(), now(), "sign", sha, "", "", "")
         .run();
 
-      return new Response(signed, {
-        headers:{
-          "content-type":"application/pdf",
-          "content-disposition":`attachment; filename="signed.pdf"`,
-          "x-doc-sha256": sha,
-          "x-issuer": env.ISSUER,
-          "x-doc-verified": "true"
+      # return new Response(signed, {
+      #   headers:{
+      #     "content-type":"application/pdf",
+      #     "content-disposition":`attachment; filename="signed.pdf"`,
+      #     "x-doc-sha256": sha,
+      #     "x-issuer": env.ISSUER,
+      #     "x-doc-verified": "true"
+      #   }
+      # });
+      const wantZip = (env.BUNDLE_TRUST_KIT || "0") === "1";
+      if (!wantZip) {
+        // Old behavior: return the signed PDF directly
+        return new Response(signed, {
+          headers: {
+            "content-type":"application/pdf",
+            "content-disposition":`attachment; filename="signed.pdf"`,
+            "x-doc-sha256": sha, "x-issuer": env.ISSUER, "x-doc-verified":"true"
+          }
+        });
+      }
+
+      // New behavior: return one ZIP that contains (1) signed.pdf and (2) Trust Kit ZIP + README-FIRST.txt
+      const kitUrl = new URL("/dmj-one-trust-kit.zip", env.PKI_BASE).toString();
+      const kitRes = await fetch(kitUrl);
+      if (!kitRes.ok) return json({error:"trust-kit fetch failed", detail: await kitRes.text()}, 502);
+      const kit = new Uint8Array(await kitRes.arrayBuffer());
+
+      const readmeFirst = new TextEncoder().encode(
+      `dmj.one — Make the signature show as trusted
+      =============================================
+      Open the "Trust Kit/dmj-one-trust-kit-README.txt" and follow the steps for your device.
+      Install the dmj.one Root CA once. Then any dmj.one-signed PDF will verify as trusted.
+
+      If you'd rather trust only inside Adobe Acrobat/Reader, see the "Acrobat-only" section.
+      `);
+
+      const zipBytes = await buildZip([
+        { name: "Your Document (signed).pdf", data: new Uint8Array(signed) },
+        { name: "Trust Kit/README-FIRST.txt", data: readmeFirst },
+        { name: "Trust Kit/dmj-one-trust-kit.zip", data: kit }
+      ]);
+
+      return new Response(zipBytes, {
+        headers: {
+          "content-type": "application/zip",
+          "content-disposition": `attachment; filename="dmj-one-signed-bundle-${sha.slice(0,8)}.zip"`,
+          "x-doc-sha256": sha, "x-issuer": env.ISSUER, "x-doc-verified":"true"
         }
       });
+
     }
 
     if (u.pathname.endsWith("/revoke")){
@@ -1582,9 +1689,11 @@ sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
     }
   ],
   "vars": {
-    "ISSUER": "${DMJ_ROOT_DOMAIN}",
+    "ISSUER":        "${DMJ_ROOT_DOMAIN}",
     "SIGNER_API_BASE": "https://${SIGNER_DOMAIN}",
-    "DB_PREFIX": "${DB_PREFIX}"
+    "DB_PREFIX":     "${DB_PREFIX}",
+    "PKI_BASE":      "https://${PKI_DOMAIN}",
+    "BUNDLE_TRUST_KIT": "1"            // 1 = return a zip bundle (PDF + Trust Kit)
   }
 }
 JSON
