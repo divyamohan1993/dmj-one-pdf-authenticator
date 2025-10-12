@@ -87,6 +87,7 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REGEN_TRUST_KIT=1
     DMJ_VERBOSE=1
 
+    say "Hard reset confirmed. Proceeding with full PKI reissuance..."
     echo "Hard reset confirmed. Proceeding with full PKI reissuance..."
 fi
 ################## DANGER ENDS ########################
