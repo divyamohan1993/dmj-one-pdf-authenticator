@@ -10,6 +10,11 @@ CONF_DIR="/etc/dmj"
 INST_ENV="${CONF_DIR}/installer.env"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
+### ---------- Logging / Verbosity ----------
+LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
+mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
+LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
+
 DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 
 # Load installation id / DB_PREFIX
@@ -68,7 +73,7 @@ fi
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-0}" # Never enable this
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     read -rp "HARD RESET enabled. This will re-issue ALL PKI artifacts. Type 'y' to proceed: " confirm
     if [[ ! "${confirm,,}" == "y" ]]; then
@@ -86,10 +91,6 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
 fi
 ################## DANGER ENDS ########################
 
-### ---------- Logging / Verbosity ----------
-LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
-mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
-LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 
 # Verbose to console? 1/true = yes, 0/false = minimal
 case "${DMJ_VERBOSE,,}" in
