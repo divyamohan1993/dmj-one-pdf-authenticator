@@ -57,7 +57,7 @@ find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete
 ROOT_CN="${ROOT_CN:-dmj.one Root CA R1}"
 ICA_CN="${ICA_CN:-dmj.one Issuing CA R1}"
 OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder R1}"
-SIGNER_CN="${SIGNER_CN:-dmj.one Document Signer (Production)}"
+SIGNER_CN="${SIGNER_CN:-dmj.one Signer}"
 ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
 COUNTRY="${COUNTRY:-IN}"
 
