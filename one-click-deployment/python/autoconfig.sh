@@ -624,10 +624,11 @@ PY
 
   # pdf_ops.py (pyHanko sign/verify)
   cat > "$APP_CODE_DIR/pdf_ops.py" <<'PY'
-import os, io, tempfile
+import os, io, tempfile, hashlib
 from pyhanko.sign import signers
 from pyhanko.sign.validation import async_validate_pdf_signature
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko_certvalidator import ValidationContext
 from pyhanko.keys import load_cert_from_pemder
 
@@ -675,18 +676,35 @@ async def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subj
 
 async def verify_pdf(pdf_bytes: bytes):
     # Build validation context anchored at our root; allow OCSP/CRL fetching.
-    # Pass a Certificate object, not a file path.
-    with open(ROOT_PEM, "rb") as rf:
-        root_cert = load_cert_from_pemder(rf.read())
+    # load_cert_from_pemder expects a PATH, not bytes.
+    root_cert = load_cert_from_pemder(ROOT_PEM)  # path string
     vc = ValidationContext(trust_roots=[root_cert], allow_fetching=True)
+
+    # Validate the last embedded signature in the file
     bio = io.BytesIO(pdf_bytes)
-    # Use async validator to avoid nested event loop issues
-    status = await async_validate_pdf_signature(bio, -1, validation_context=vc)
-    ok = status.summary().valid
-    chain = status.bottom_line_summary
-    signer_fp = status.signer_cert.sha1.hex().upper() if status.signer_cert else ""
-    issuer = status.signer_cert.issuer.human_friendly if status.signer_cert else "unknown"
-    return ok, {"signer_fp": signer_fp, "issuer": issuer, "ltv": True, "chain": str(chain)}
+    reader = PdfFileReader(bio)
+    if not reader.embedded_signatures:
+        return False, {"signer_fp": "", "issuer": "unknown", "ltv": False, "chain": "No signatures found"}
+    embedded_sig = reader.embedded_signatures[-1]
+
+    status = await async_validate_pdf_signature(
+        embedded_sig,
+        signer_validation_context=vc
+    )
+    ok = bool(status.bottom_line)
+    # Robustly compute signer fingerprint
+    if status.signer_cert is not None:
+        try:
+            signer_fp = status.signer_cert.sha1.hex().upper()
+        except Exception:
+            signer_fp = hashlib.sha1(status.signer_cert.dump()).hexdigest().upper()
+        issuer = status.signer_cert.issuer.human_friendly
+    else:
+        signer_fp = ""
+        issuer = "unknown"
+    # Text report is handy for troubleshooting
+    chain_report = status.pretty_print_details()
+    return ok, {"signer_fp": signer_fp, "issuer": issuer, "ltv": True, "chain": chain_report}
 PY
 
   # main.py (FastAPI app)
