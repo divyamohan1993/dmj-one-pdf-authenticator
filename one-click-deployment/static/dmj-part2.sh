@@ -15,7 +15,7 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 cd $LOG_DIR && sudo rm -rf *
 
-DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
@@ -1279,11 +1279,11 @@ After=network.target
 [Service]
 User=root
 Environment=DMJ_PDF_TITLE=
-Environment=DMJ_PDF_AUTHOR=
-Environment=DMJ_PDF_SUBJECT=
+Environment=DMJ_PDF_AUTHOR=Divya Mohan | dmj.one and its stakeholders.
+Environment=DMJ_PDF_SUBJECT=Verified by ${DMJ_ROOT_DOMAIN} against any tampering.
 Environment=DMJ_PDF_KEYWORDS=
 Environment=DMJ_PDF_CREATOR=dmj.one Trust Services
-Environment=DMJ_PDF_PRODUCER=dmj.one Signer (PDFBox 3.0.5)
+Environment=DMJ_PDF_PRODUCER=dmj.one Signer
 Environment=DMJ_PDF_VERSION=1.7            # optional; header like %PDF-1.7
 Environment=DMJ_PDF_SET_DATES=1            # 1=set dates by default, 0=don’t touch
 Environment=DMJ_PDF_CREATED_ON=            # ISO-8601 or epoch secs; blank uses existing/now
