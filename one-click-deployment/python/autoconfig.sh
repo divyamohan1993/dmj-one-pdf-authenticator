@@ -117,12 +117,25 @@ PY
 
 # Encrypt EC private key with KEK-derived passphrase (in-place, .enc)
 encrypt_key_if_plain() {
+  # Encrypt a PEM private key to PKCS#8 using KEK; shred plaintext
   local key="$1"
   [[ -f "$key" ]] || return 0
-  if grep -q "ENCRYPTED" "$key" 2>/dev/null; then return 0; fi
+  if grep -q "BEGIN ENCRYPTED PRIVATE KEY" "$key" 2>/dev/null || [[ -f "${key}.enc" ]]; then
+    return 0
+  fi
   local kek; kek="$(derive_kek)"
-  $OPENSSL_BIN ec -in "$key" -"${KEY_ENC_ALGO//-}" -passout pass:"$kek" -out "${key}.enc"
+  $OPENSSL_BIN pkcs8 -topk8 -v2 aes-256-cbc -in "$key" -passout pass:"$kek" -out "${key}.enc"
   shred -u "$key"
+}
+
+# Decrypt PKCS#8-encrypted key to a temp file and echo the path
+# Caller must `rm -f` the returned tempfile.
+dec_key_to_tmp() {
+  local keyenc="$1"
+  local kek; kek="$(derive_kek)"
+  local tmp; tmp="$(mktemp)"
+  $OPENSSL_BIN pkcs8 -inform PEM -in "$keyenc" -passin pass:"$kek" -out "$tmp" -nocrypt
+  echo "$tmp"
 }
 
 # Decrypt EC private key to stdout (avoid writing to disk)
@@ -134,79 +147,7 @@ dec_key_to_fd() {
 }
 
 ensure_pki() {
-  # --- ensure OpenSSL config exists ---
-  if [[ ! -f "$OPENSSL_CNF" ]]; then
-    cat > "$OPENSSL_CNF" <<'CONF'
-[ ca ]
-default_ca = dmj_ca
-
-[ dmj_ca ]
-dir               = ./ca
-certs             = $dir/certs
-crl_dir           = $dir/crl
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-crlnumber         = $dir/crlnumber
-default_md        = sha256
-policy            = policy_loose
-email_in_dn       = no
-name_opt          = ca_default
-cert_opt          = ca_default
-copy_extensions   = copy
-default_days      = 825
-
-[ policy_loose ]
-countryName             = optional
-stateOrProvinceName     = optional
-localityName            = optional
-organizationName        = optional
-organizationalUnitName  = optional
-commonName              = supplied
-
-[ req ]
-default_bits       = 256
-default_md         = sha256
-prompt             = no
-distinguished_name = dn
-
-[ dn ]
-C = IN
-O = dmj.one
-CN = dmj.one
-
-[ v3_root ]
-basicConstraints = critical, CA:true
-keyUsage = critical, keyCertSign, cRLSign
-subjectKeyIdentifier = hash
-
-[ v3_intermediate ]
-basicConstraints = critical, CA:true, pathlen:0
-keyUsage = critical, keyCertSign, cRLSign
-authorityKeyIdentifier = keyid:always,issuer
-subjectKeyIdentifier = hash
-crlDistributionPoints = URI:http://DOCSIGN_HOST/.well-known/pki/dmjone.crl
-authorityInfoAccess = caIssuers;URI:http://DOCSIGN_HOST/.well-known/pki/dmjone-int.pem
-
-[ v3_ocsp ]
-basicConstraints = CA:false
-keyUsage = critical, digitalSignature
-extendedKeyUsage = OCSPSigning
-authorityKeyIdentifier=keyid,issuer
-
-[ v3_document ]
-basicConstraints = CA:false
-keyUsage = critical, digitalSignature, nonRepudiation
-extendedKeyUsage = emailProtection, codeSigning
-authorityKeyIdentifier=keyid,issuer
-subjectKeyIdentifier = hash
-crlDistributionPoints = URI:http://DOCSIGN_HOST/.well-known/pki/dmjone.crl
-authorityInfoAccess = OCSP;URI:http://DOCSIGN_HOST/ocsp, caIssuers;URI:http://DOCSIGN_HOST/.well-known/pki/dmjone-int.pem
-CONF
-    sed -i "s/DOCSIGN_HOST/$DOMAIN/g" "$OPENSSL_CNF"
-  fi
-
-  # --- ensure directory skeleton & index/serial files (required by openssl ca/ocsp) ---
+  # skeleton + index/serial/crlnumber (required by openssl ca)
   mkdir -p "$ROOT_DIR"/{certs,crl,newcerts,private} "$INT_DIR"/{certs,crl,csr,newcerts,private}
   [[ -f "$ROOT_DIR/index.txt" ]] || : > "$ROOT_DIR/index.txt"
   [[ -f "$INT_DIR/index.txt"  ]] || : > "$INT_DIR/index.txt"
@@ -215,54 +156,55 @@ CONF
   [[ -f "$ROOT_DIR/crlnumber" ]] || echo 1000 > "$ROOT_DIR/crlnumber"
   [[ -f "$INT_DIR/crlnumber"  ]] || echo 1000 > "$INT_DIR/crlnumber"
 
-  # --- 1) Root CA: create if missing; then ensure encrypted at rest ---
+  # --- Root: create if missing, then encrypt key ---
   if [[ ! -f "$ROOT_DIR/certs/root.pem" ]]; then
     $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$ROOT_DIR/private/root.key"
     $OPENSSL_BIN req -x509 -new -key "$ROOT_DIR/private/root.key" -sha256 -days 3650 \
       -subj "/C=IN/O=dmj.one/CN=dmj.one Root CA" \
       -out "$ROOT_DIR/certs/root.pem" -extensions v3_root -config "$OPENSSL_CNF"
   fi
-  # If the root key is still plain, encrypt it now (produces root.key.enc & shreds .key)
-  if [[ -f "$ROOT_DIR/private/root.key" && ! -f "$ROOT_DIR/private/root.key.enc" ]]; then
-    encrypt_key_if_plain "$ROOT_DIR/private/root.key" || true
+  if [[ ! -f "$ROOT_DIR/private/root.key.enc" ]]; then
+    [[ -f "$ROOT_DIR/private/root.key" ]] || { echo "FATAL: root.key missing"; exit 1; }
+    encrypt_key_if_plain "$ROOT_DIR/private/root.key"
   fi
 
-  # --- 2) Intermediate CA: ensure key, sign with Root, then encrypt ---
+  # --- Intermediate: ensure key, CSR, signed by Root; then encrypt key ---
   if [[ ! -f "$INT_DIR/private/intermediate.key" && ! -f "$INT_DIR/private/intermediate.key.enc" ]]; then
     $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$INT_DIR/private/intermediate.key"
   fi
   if [[ ! -f "$INT_DIR/certs/intermediate.pem" ]]; then
     $OPENSSL_BIN req -new -key "$INT_DIR/private/intermediate.key" \
       -out "$INT_DIR/csr/intermediate.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one Intermediate CA"
-    # Use the (now present) encrypted root key to sign the intermediate
-    $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_intermediate \
+    # Use Root CA section to sign the Intermediate
+    $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -name dmj_root -extensions v3_intermediate \
       -keyfile "$ROOT_DIR/private/root.key.enc" -passin "pass:$(derive_kek)" \
       -cert "$ROOT_DIR/certs/root.pem" \
       -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem"
   fi
   if [[ -f "$INT_DIR/private/intermediate.key" && ! -f "$INT_DIR/private/intermediate.key.enc" ]]; then
-    encrypt_key_if_plain "$INT_DIR/private/intermediate.key" || true
+    encrypt_key_if_plain "$INT_DIR/private/intermediate.key"
   fi
 
-  # --- 3) OCSP signer: ensure key & cert signed by Intermediate; then encrypt ---
+  # --- OCSP signer: ensure key/cert signed by Intermediate; then encrypt key ---
   if [[ ! -f "$INT_DIR/private/ocsp.key" && ! -f "$INT_DIR/private/ocsp.key.enc" ]]; then
     $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$INT_DIR/private/ocsp.key"
   fi
   if [[ ! -f "$INT_DIR/certs/ocsp.pem" ]]; then
     $OPENSSL_BIN req -new -key "$INT_DIR/private/ocsp.key" \
       -out "$INT_DIR/csr/ocsp.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one OCSP"
-    $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_ocsp \
+    # Use Intermediate CA section to sign OCSP signer
+    $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -name dmj_intermediate -extensions v3_ocsp \
       -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
       -cert "$INT_DIR/certs/intermediate.pem" \
       -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem"
   fi
   if [[ -f "$INT_DIR/private/ocsp.key" && ! -f "$INT_DIR/private/ocsp.key.enc" ]]; then
-    encrypt_key_if_plain "$INT_DIR/private/ocsp.key" || true
+    encrypt_key_if_plain "$INT_DIR/private/ocsp.key"
   fi
 
-  # --- 4) CRL & publish AIA/CDP files ---
+  # --- CRL & publish (AIA/CDP) ---
   if [[ ! -f "$INT_DIR/crl/dmjone.crl" ]]; then
-    $OPENSSL_BIN ca -config "$OPENSSL_CNF" -gencrl \
+    $OPENSSL_BIN ca -config "$OPENSSL_CNF" -name dmj_intermediate -gencrl \
       -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
       -cert "$INT_DIR/certs/intermediate.pem" -out "$INT_DIR/crl/dmjone.crl"
   fi
@@ -270,6 +212,7 @@ CONF
   install -m 0644 "$INT_DIR/certs/intermediate.pem" "$STATIC_PKI_DIR/dmjone-int.pem"
   install -m 0644 "$ROOT_DIR/certs/root.pem"        "$STATIC_PKI_DIR/dmjone-root.pem"
 }
+
 
 
 ensure_root
@@ -371,25 +314,36 @@ fi
 # --------------------
 # PKI: Root / Intermediate / OCSP (OpenSSL)
 # --------------------
+# --- OpenSSL config (absolute paths, two CA sections) ---
 OPENSSL_CNF="$PKI_DIR/openssl.cnf"
 if [[ ! -f "$OPENSSL_CNF" ]]; then
-  cat > "$OPENSSL_CNF" <<'CONF'
+  cat > "$OPENSSL_CNF" <<CONF
 [ ca ]
-default_ca = dmj_ca
+default_ca = dmj_root
 
-[ dmj_ca ]
-dir               = ./ca
-certs             = $dir/certs
-crl_dir           = $dir/crl
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-crlnumber         = $dir/crlnumber
+[ dmj_root ]
+dir               = $PKI_DIR/ca
+certs             = \$dir/certs
+crl_dir           = \$dir/crl
+new_certs_dir     = \$dir/newcerts
+database          = \$dir/index.txt
+serial            = \$dir/serial
+crlnumber         = \$dir/crlnumber
 default_md        = sha256
 policy            = policy_loose
-email_in_dn       = no
-name_opt          = ca_default
-cert_opt          = ca_default
+copy_extensions   = copy
+default_days      = 3650
+
+[ dmj_intermediate ]
+dir               = $PKI_DIR/intermediate
+certs             = \$dir/certs
+crl_dir           = \$dir/crl
+new_certs_dir     = \$dir/newcerts
+database          = \$dir/index.txt
+serial            = \$dir/serial
+crlnumber         = \$dir/crlnumber
+default_md        = sha256
+policy            = policy_loose
 copy_extensions   = copy
 default_days      = 825
 
@@ -440,8 +394,9 @@ subjectKeyIdentifier = hash
 crlDistributionPoints = URI:http://DOCSIGN_HOST/.well-known/pki/dmjone.crl
 authorityInfoAccess = OCSP;URI:http://DOCSIGN_HOST/ocsp, caIssuers;URI:http://DOCSIGN_HOST/.well-known/pki/dmjone-int.pem
 CONF
-  sed -i "s/DOCSIGN_HOST/$DOMAIN/g" "$OPENSSL_CNF"
+  sed -i "s|DOCSIGN_HOST|$DOMAIN|g" "$OPENSSL_CNF"
 fi
+
 
 
 if [[ ! -d "$ROOT_DIR" ]]; then
@@ -595,12 +550,12 @@ def issue_doc_cert(doc_uid:str):
     subj = f"/C=IN/O=dmj.one/CN=dmj.one Document Cert {doc_uid}"
     subprocess.check_call([OPENSSL, "ecparam", "-genkey", "-name", "prime256v1", "-out", key_pem])
     csr = os.path.join(tmp, "doc.csr")
-    subprocess.check_call([OPENSSL, "req", "-new", "-key", key_pem, "-out", csr, "-subj", subj])
+    subprocess.check_call([OPENSSL, "req", "-new", "-key", key_pem, "-out", csr, "-subj", subj])    
     subprocess.check_call([
-        OPENSSL, "ca", "-batch", "-config", str(OPENSSL_CNF), "-extensions", "v3_document",
+        OPENSSL, "ca", "-batch", "-config", str(OPENSSL_CNF),
+        "-name", "dmj_intermediate", "-extensions", "v3_document",
         "-keyfile", str(INT_DIR / "private" / "intermediate.key.enc"),
-        "-passin", _passin(),
-        "-cert", str(INT_DIR / "certs" / "intermediate.pem"),
+        "-passin", _passin(), "-cert", str(INT_DIR / "certs" / "intermediate.pem"),
         "-in", csr, "-out", cert_pem
     ])
     # Read serial
@@ -1080,21 +1035,21 @@ if [[ ! -f "$ROOT_DIR/certs/root.pem" || ! -f "$ROOT_DIR/private/root.key.enc" &
   encrypt_key_if_plain "$ROOT_DIR/private/root.key" || true
 fi
 
-if [[ ! -f "$INT_DIR/certs/intermediate.pem" && -f "$INT_DIR/private/intermediate.key" ]]; then
-  $OPENSSL_BIN req -new -key "$INT_DIR/private/intermediate.key" -out "$INT_DIR/csr/intermediate.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one Intermediate CA"
-  $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_intermediate \
-    -keyfile "$ROOT_DIR/private/root.key.enc" -passin "pass:$(derive_kek)" \
-    -cert "$ROOT_DIR/certs/root.pem" \
-    -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem" || true
-fi
+# if [[ ! -f "$INT_DIR/certs/intermediate.pem" && -f "$INT_DIR/private/intermediate.key" ]]; then
+#   $OPENSSL_BIN req -new -key "$INT_DIR/private/intermediate.key" -out "$INT_DIR/csr/intermediate.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one Intermediate CA"
+#   $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_intermediate \
+#     -keyfile "$ROOT_DIR/private/root.key.enc" -passin "pass:$(derive_kek)" \
+#     -cert "$ROOT_DIR/certs/root.pem" \
+#     -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem" || true
+# fi
 
-if [[ ! -f "$INT_DIR/certs/ocsp.pem" && -f "$INT_DIR/private/ocsp.key" ]]; then
-  $OPENSSL_BIN req -new -key "$INT_DIR/private/ocsp.key" -out "$INT_DIR/csr/ocsp.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one OCSP"
-  $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_ocsp \
-    -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
-    -cert "$INT_DIR/certs/intermediate.pem" \
-    -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem" || true
-fi
+# if [[ ! -f "$INT_DIR/certs/ocsp.pem" && -f "$INT_DIR/private/ocsp.key" ]]; then
+#   $OPENSSL_BIN req -new -key "$INT_DIR/private/ocsp.key" -out "$INT_DIR/csr/ocsp.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one OCSP"
+#   $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_ocsp \
+#     -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
+#     -cert "$INT_DIR/certs/intermediate.pem" \
+#     -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem" || true
+# fi
 
 # Always (re)publish CRL if present
 if [[ -f "$INT_DIR/crl/dmjone.crl" ]]; then
