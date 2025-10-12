@@ -74,12 +74,7 @@ fi
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
 DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
-if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
-    read -rp "HARD RESET enabled. This will re-issue ALL PKI artifacts. Type 'y' to proceed: " confirm
-    if [[ ! "${confirm,,}" == "y" ]]; then
-        echo "Aborted by user. Exiting."
-        exit 1
-    fi
+if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then    
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
     DMJ_REISSUE_OCSP=1
