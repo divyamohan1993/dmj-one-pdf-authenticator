@@ -262,6 +262,12 @@ import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.asn1.ASN1OctetString;
+import org.bouncycastle.asn1.ASN1Primitive;
+import org.bouncycastle.asn1.cms.Attribute;
+import org.bouncycastle.asn1.cms.AttributeTable;
+import org.bouncycastle.asn1.cms.CMSAttributes;
+
 
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
@@ -356,6 +362,23 @@ public class SignerServer {
     return MessageDigest.isEqual(expected, provided);
   }
 
+  static String toHex(byte[] b){
+  StringBuilder sb = new StringBuilder(b.length * 2);
+  for (byte x : b) sb.append(String.format("%02x", x));
+  return sb.toString();
+}
+static String jcaDigestNameFromOid(String oid){
+  return switch (oid) {
+    case "1.3.14.3.2.26" -> "SHA-1";
+    case "2.16.840.1.101.3.4.2.1" -> "SHA-256";
+    case "2.16.840.1.101.3.4.2.2" -> "SHA-384";
+    case "2.16.840.1.101.3.4.2.3" -> "SHA-512";
+    case "2.16.840.1.101.3.4.2.4" -> "SHA-224";
+    default -> "SHA-256"; // safe default
+  };
+}
+
+
   // helper exactly like PDFBox example
   static class CMSProcessableInputStream implements CMSTypedData {
     private InputStream in;
@@ -374,9 +397,13 @@ public class SignerServer {
       in.close();
     }
   }
-
-  // build a detached CMS/PKCS#7 over the InputStream provided by PDFBox
+  
+  // build a detached CMS/PKCS#7 over the exact ByteRange bytes
   static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, X509Certificate cert) throws Exception {
+    // 1) Read the exact bytes that PDFBox wants signed
+    byte[] toSign = IOUtils.toByteArray(content);
+
+    // 2) Standard "SHA256withRSA" CMS generator
     ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
         .setProvider("BC").build(pk);
 
@@ -388,10 +415,12 @@ public class SignerServer {
     gen.addSignerInfoGenerator(sigInfoGen);
     gen.addCertificates(new JcaCertStore(java.util.List.of(cert)));
 
-    CMSTypedData msg = new CMSProcessableInputStream(content);
-    CMSSignedData cms = gen.generate(msg, false); // false = detached
+    // 3) Sign the exact bytes as a detached CMS
+    CMSTypedData msg = new org.bouncycastle.cms.CMSProcessableByteArray(toSign);
+    CMSSignedData cms = gen.generate(msg, false);
     return cms.getEncoded(); // DER
   }
+
 
   // Set DocMDP transform so this becomes a *certification* signature.
   // P=1 => no changes allowed; 2 => form fill/annot; 3 => limited edits.
@@ -458,56 +487,82 @@ public class SignerServer {
     boolean any = false, anyValid = false, issuedByUs = false, coversDoc = false;
     String issuerDn = "", subFilter = "", errorMsg = "";
 
+    Map<String,Object> debug = new LinkedHashMap<>();
+
     try (PDDocument doc = Loader.loadPDF(input)) {
+      int sigIndex = 0;
       for (PDSignature s : doc.getSignatureDictionaries()) {
-        any = true;
+        any = true; sigIndex++;
         subFilter = String.valueOf(s.getSubFilter());
 
-        // Use overload returning trimmed contents; avoids hex/padding issues. :contentReference[oaicite:5]{index=5}
-        byte[] cms = s.getContents(input);
-        if (cms == null) continue;
+        int[] br = s.getByteRange();
+        if (br != null && br.length == 4) {
+          long len = input.length;
+          long a = br[0], b = br[1], c = br[2], d = br[3];
+          coversDoc = (a == 0) && (c + d == len) && (c >= b);
+          debug.put("sig"+sigIndex+".byteRange", List.of(br[0],br[1],br[2],br[3]));
+        }
 
+        byte[] cms = s.getContents(input);               // trimmed CMS (no padding)
         byte[] signedContent = s.getSignedContent(new ByteArrayInputStream(input));
-        
+
+        debug.put("sig"+sigIndex+".cms.len", cms != null ? cms.length : 0);
+        debug.put("sig"+sigIndex+".signedContent.len", signedContent.length);
+        debug.put("sig"+sigIndex+".signedContent.prefix32.hex",
+                  toHex(Arrays.copyOf(signedContent, Math.min(32, signedContent.length))));
+
         try {
           CMSSignedData sd = new CMSSignedData(
               new org.bouncycastle.cms.CMSProcessableByteArray(signedContent), cms);
+
           for (SignerInformation si : sd.getSignerInfos().getSigners()) {
-            Collection<X509CertificateHolder> matches =
-                sd.getCertificates().getMatches(si.getSID());
+            String digestAlgOid = si.getDigestAlgOID();
+            String encAlgOid = si.getEncryptionAlgOID();
+
+            // Extract CMS 'message-digest' attribute
+            byte[] mdAttrBytes = null;
+            AttributeTable at = si.getSignedAttributes();
+            if (at != null) {
+              Attribute md = at.get(CMSAttributes.messageDigest);
+              if (md != null) {
+                ASN1Primitive v = md.getAttrValues().getObjectAt(0).toASN1Primitive();
+                mdAttrBytes = ((ASN1OctetString) v).getOctets();
+              }
+            }
+
+            // Recompute digest over ByteRange (signedContent)
+            String jcaName = jcaDigestNameFromOid(digestAlgOid);
+            byte[] calc = MessageDigest.getInstance(jcaName).digest(signedContent);
+
+            debug.put("sig"+sigIndex+".digestAlgOid", digestAlgOid);
+            debug.put("sig"+sigIndex+".encAlgOid", encAlgOid);
+            debug.put("sig"+sigIndex+".cms.messageDigest.hex", mdAttrBytes != null ? toHex(mdAttrBytes) : "");
+            debug.put("sig"+sigIndex+".recalc.messageDigest.hex", toHex(calc));
+
+            // Standard BC verification (this is where CMSSignerDigestMismatchException comes from)
+            Collection<X509CertificateHolder> matches = sd.getCertificates().getMatches(si.getSID());
             if (matches.isEmpty()) continue;
             X509CertificateHolder signerHolder = matches.iterator().next();
             boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder()
                                       .setProvider("BC")
                                       .build(signerHolder));
             anyValid |= ok;
-            // Compare SPKI with our server cert to assert "issued by us"
+
+            // Compare SPKI with our server cert (to set issuedByUs)
             String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
-            String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(
-                                       ourCert.getPublicKey().getEncoded()).getEncoded());
+            String ourSpki = Base64.toBase64String(
+                SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
             if (ok && signerSpki.equals(ourSpki)) {
               issuedByUs = true;
             }
             issuerDn = signerHolder.getSubject().toString();
           }
         } catch (Exception e) {
-          // Capture verification error details instead of throwing
           errorMsg = "exception: " + e.getClass().getSimpleName();
           if (e.getMessage() != null && !e.getMessage().isEmpty()) {
             errorMsg += " - " + e.getMessage();
           }
           e.printStackTrace();
-        }
-
-        // ByteRange must cover entire file except /Contents gap. :contentReference[oaicite:6]{index=6}
-        int[] br = s.getByteRange();
-        if (br != null && br.length == 4) {
-          long len = input.length;
-          long a = br[0], b = br[1], c = br[2], d = br[3];
-          // ByteRange = [0, length0, offset1, length1]
-          // Must start at 0, second segment must end at EOF, and start after first:
-          // coversDocument = (a == 0) && (c + d == len) && (c >= b);
-          coversDoc = (a == 0) && (c + d == len) && (c >= b);
         }
       }
     }
@@ -518,11 +573,11 @@ public class SignerServer {
     out.put("coversDocument", coversDoc);
     out.put("issuer", issuerDn);
     out.put("subFilter", subFilter);
-    if (errorMsg != null) {
-      out.put("error", errorMsg);
-    }
+    if (errorMsg != null) out.put("error", errorMsg);
+    out.put("debug", debug);               // <— detailed diagnostics here
     return out;
- }
+  }
+
 
   public static void main(String[] args) throws Exception {
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
