@@ -246,7 +246,7 @@ retry 3 5 apt-get install -y -q --no-install-recommends \
   git curl ca-certificates nginx openssl build-essential \
   "$PYTHON" "$PYTHON"-venv "$PYTHON"-dev pkg-config \
   libffi-dev libssl-dev libxml2-dev libxslt1-dev \
-  mysql-server libmysqlclient-dev
+  mysql-server libmysqlclient-dev 
 
 # MySQL service
 systemctl enable --now mysql || true
