@@ -76,6 +76,10 @@ if [ -z "${CF_D1_DATABASE_ID}" ]; then
   exit 1
 fi
 
+# Cron job schedule: Every day at 2:00 AM
+CRON_SCHEDULE="0 2 * * *"
+COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
+
 # --- Admin credential rotation flags -----------------------------------------
 # Rotate the admin login key on every deploy (recommended: keep =1)
 DMJ_ROTATE_ADMIN_KEY="${DMJ_ROTATE_ADMIN_KEY:-1}"
@@ -1261,6 +1265,15 @@ sudo ln -sf /etc/nginx/sites-available/dmj-pki  /etc/nginx/sites-enabled/dmj-pki
 sudo ln -sf /etc/nginx/sites-available/dmj-ocsp /etc/nginx/sites-enabled/dmj-ocsp
 sudo nginx -t && sudo systemctl reload nginx
 
+say "Adding Cron Job..."
+# Escape % characters (cron requires them to be escaped)
+CRON_JOB="$CRON_SCHEDULE $COMMAND"
+
+# Add the cron job if it's not already there
+( crontab -l 2>/dev/null | grep -Fv "$COMMAND" ; echo "$CRON_JOB" ) | crontab -
+
+echo "Cron job added:"
+echo "$CRON_JOB"
 
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
