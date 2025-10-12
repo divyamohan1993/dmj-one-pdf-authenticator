@@ -1279,11 +1279,11 @@ After=network.target
 [Service]
 User=root
 Environment=DMJ_PDF_TITLE=
-Environment=DMJ_PDF_AUTHOR=Divya Mohan | dmj.one and its stakeholders.
-Environment=DMJ_PDF_SUBJECT=Verified by ${DMJ_ROOT_DOMAIN} against any tampering.
+Environment=DMJ_PDF_AUTHOR="Divya Mohan | dmj.one and its stakeholders."
+Environment=DMJ_PDF_SUBJECT="Verified by ${DMJ_ROOT_DOMAIN} against any tampering."
 Environment=DMJ_PDF_KEYWORDS=
-Environment=DMJ_PDF_CREATOR=dmj.one Trust Services
-Environment=DMJ_PDF_PRODUCER=dmj.one Signer
+Environment=DMJ_PDF_CREATOR="dmj.one Trust Services"
+Environment=DMJ_PDF_PRODUCER="dmj.one Signer"
 Environment=DMJ_PDF_VERSION=1.7            # optional; header like %PDF-1.7
 Environment=DMJ_PDF_SET_DATES=1            # 1=set dates by default, 0=don’t touch
 Environment=DMJ_PDF_CREATED_ON=            # ISO-8601 or epoch secs; blank uses existing/now
@@ -1298,10 +1298,10 @@ Environment=DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
 Environment=DMJ_HMAC_TS_HEADER=${WORKER_HMAC_TS_HEADER}
 Environment=DMJ_HMAC_NONCE_HEADER=${WORKER_HMAC_NONCE_HEADER}
 Environment=DMJ_SIGNER_PORT_FILE=/etc/dmj/signer.port
-Environment=DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
-Environment=DMJ_SIG_LOCATION=${COUNTRY}
-Environment=DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
-Environment=DMJ_SIG_REASON=Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering.
+Environment=DMJ_SIG_NAME="${DMJ_ROOT_DOMAIN}"
+Environment=DMJ_SIG_LOCATION="${COUNTRY}"
+Environment=DMJ_CONTACT_EMAIL="${SUPPORT_EMAIL}"
+Environment=DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
 ExecStart=/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar
 Restart=on-failure
 WorkingDirectory=${SIGNER_DIR}
@@ -2105,6 +2105,7 @@ function renderHome(issuerDomain: string, nonce: string) {
     async function startVerification(f){
       if(!f) return;
       stateLine.textContent = 'Uploading & verifying…';
+      dropzone.classList.add('d-none');
       fileNameEl.textContent = f.name;
       show('busy');
       try{
