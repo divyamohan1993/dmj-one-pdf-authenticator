@@ -663,9 +663,7 @@ def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn
     signer = signers.SimpleSigner(
         signing_cert=cert,
         signing_key=priv_key,
-        cert_registry=cert_registry,
-        # add name in signature dictionary
-        signing_name=subject_cn,
+        cert_registry=cert_registry,        
     )
     # Prepare PDF writer
     pdf_in = io.BytesIO(pdf_bytes)
