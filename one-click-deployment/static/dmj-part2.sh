@@ -247,76 +247,42 @@ import io.javalin.http.UploadedFile;
 
 import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.SignerInformation;
-import org.bouncycastle.cms.SignerInformationStore;
-import org.bouncycastle.cms.SignerId;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
-import org.bouncycastle.cms.*;
+import org.bouncycastle.cms.CMSTypedData;
+import org.bouncycastle.cms.CMSProcessableByteArray;
+import org.bouncycastle.cms.CMSSignedDataGenerator;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaCertStore;
-import org.bouncycastle.asn1.ASN1ObjectIdentifier;
-import org.bouncycastle.asn1.cms.CMSObjectIdentifiers;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
-import org.bouncycastle.util.encoders.Base64;
-import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.CMSAttributes;
+import org.bouncycastle.util.encoders.Base64;
+import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
-
-import org.apache.pdfbox.pdmodel.PDDocumentInformation;
-import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
-import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
-import org.apache.pdfbox.pdmodel.interactive.digitalsignature.ExternalSigningSupport;
-import org.apache.pdfbox.pdmodel.interactive.digitalsignature.SignatureOptions;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.io.IOUtils;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
-import org.apache.pdfbox.io.IOUtils;
-
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.common.PDStream;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName;
-import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
-import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
-import org.apache.pdfbox.pdmodel.interactive.form.PDField;
-import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
-import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.util.Matrix;
-
-import org.apache.pdfbox.pdmodel.font.PDFont;
-
-import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
-import java.nio.ByteBuffer;
-import java.nio.file.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
 import java.security.*;
 import java.security.cert.*;
 import java.time.Instant;
 import java.util.*;
-
-import java.awt.geom.Rectangle2D;
-import java.awt.Color;
-
 
 public class SignerServer {
 
@@ -347,315 +313,41 @@ public class SignerServer {
     return new Keys(pk, cert);
   }
 
-  static String spkiBase64(X509Certificate cert) throws Exception {
+  static String spkiBase64(X509Certificate cert) {
     SubjectPublicKeyInfo spki = SubjectPublicKeyInfo.getInstance(cert.getPublicKey().getEncoded());
     return Base64.toBase64String(spki.getEncoded());
   }
 
-  // Convert a human rectangle (x,y from top-left) to a PDRectangle on page 0 (handles rotation).
-  static PDRectangle signatureRectForPage(PDDocument doc, int pageIndex,
-                                          float xTopLeft, float yTopLeft,
-                                          float width, float height) {
-    PDPage page = doc.getPage(pageIndex);
-    PDRectangle pageRect = page.getCropBox();
-    PDRectangle rect = new PDRectangle();
-    int rot = page.getRotation();
-    switch (rot) {
-      case 90:
-        rect.setLowerLeftY(xTopLeft);
-        rect.setUpperRightY(xTopLeft + width);
-        rect.setLowerLeftX(yTopLeft);
-        rect.setUpperRightX(yTopLeft + height);
-        break;
-      case 180:
-        rect.setUpperRightX(pageRect.getWidth() - xTopLeft);
-        rect.setLowerLeftX(pageRect.getWidth() - xTopLeft - width);
-        rect.setLowerLeftY(yTopLeft);
-        rect.setUpperRightY(yTopLeft + height);
-        break;
-      case 270:
-        rect.setLowerLeftY(pageRect.getHeight() - xTopLeft - width);
-        rect.setUpperRightY(pageRect.getHeight() - xTopLeft);
-        rect.setLowerLeftX(pageRect.getWidth() - yTopLeft - height);
-        rect.setUpperRightX(pageRect.getWidth() - yTopLeft);
-        break;
-      case 0:
-      default:
-        rect.setLowerLeftX(xTopLeft);
-        rect.setUpperRightX(xTopLeft + width);
-        rect.setLowerLeftY(pageRect.getHeight() - yTopLeft - height);
-        rect.setUpperRightY(pageRect.getHeight() - yTopLeft);
-        break;
-    }
-    return rect;
-  }
-
-  // Build a minimal visual-appearance template with text (name, date, reason).
-  static InputStream visibleTemplate(PDDocument srcDoc, int pageNum,
-                                     PDRectangle rect, PDSignature signature) throws IOException {
-    try (PDDocument tpl = new PDDocument()) {
-      PDPage page = new PDPage(srcDoc.getPage(pageNum).getMediaBox());
-      tpl.addPage(page);
-
-      PDAcroForm acroForm = new PDAcroForm(tpl);
-      tpl.getDocumentCatalog().setAcroForm(acroForm);
-      PDSignatureField sigField = new PDSignatureField(acroForm);
-      PDAnnotationWidget widget = sigField.getWidgets().get(0);
-      acroForm.setSignaturesExist(true);
-      acroForm.setAppendOnly(true);
-      acroForm.getCOSObject().setDirect(true);
-      acroForm.getFields().add(sigField);
-
-      widget.setRectangle(rect);
-
-      // Appearance form XObject
-      PDStream stream = new PDStream(tpl);
-      PDFormXObject form = new PDFormXObject(stream);
-      PDResources res = new PDResources();
-      form.setResources(res);
-      form.setFormType(1);
-      PDRectangle bbox = new PDRectangle(rect.getWidth(), rect.getHeight());
-      form.setBBox(bbox);
-
-      // Attach appearance to widget
-      PDAppearanceDictionary ap = new PDAppearanceDictionary();
-      ap.getCOSObject().setDirect(true);
-      PDAppearanceStream aps = new PDAppearanceStream(form.getCOSObject());
-      ap.setNormalAppearance(aps);
-      widget.setAppearance(ap);
-
-      // Draw simple framed box + text
-      try (PDPageContentStream cs = new PDPageContentStream(tpl, aps)) {
-        // background (white) and border (black)
-        // cs.setNonStrokingColor(Color.WHITE);
-        cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight()); cs.fill();
-        cs.setLineWidth(0.8f);
-        cs.setStrokingColor(Color.BLACK);
-        cs.moveTo(0,0); cs.lineTo(bbox.getWidth(),0); cs.lineTo(bbox.getWidth(),bbox.getHeight());
-        cs.lineTo(0,bbox.getHeight()); cs.closeAndStroke();
-
-        // text
-        float fs = 9f, leading = fs * 1.35f;
-        cs.beginText();
-        cs.setFont(new PDType1Font(FontName.HELVETICA_BOLD), fs);
-        cs.setNonStrokingColor(Color.BLACK);
-        cs.newLineAtOffset(6, bbox.getHeight() - leading - 4);
-        cs.setLeading(leading);
-        String date = signature.getSignDate() != null ? signature.getSignDate().getTime().toString() : "";
-        cs.showText("Digitally signed by dmj.one");
-        cs.newLine();
-        cs.showText(date);
-        cs.newLine();
-        String reason = signature.getReason() != null ? signature.getReason() : "Verified and certified";
-        cs.showText("Reason: " + reason);
-        cs.endText();
-      }
-
-      ByteArrayOutputStream baos = new ByteArrayOutputStream();
-      tpl.save(baos);
-      return new ByteArrayInputStream(baos.toByteArray());
-    }
-  }
-
-
   static boolean verifyHmac(String sharedBase64, String method, String path, byte[] body, String ts, String nonceB64, String providedB64) throws Exception {
-
     long now = Instant.now().getEpochSecond();
     long t = Long.parseLong(ts);
-    if (Math.abs(now - t) > 300) return false; // 5 min clock skew guard
+    if (Math.abs(now - t) > 300) return false; // 5 min skew
 
     synchronized (RECENT_NONCES) {
       if (RECENT_NONCES.contains(nonceB64)) return false;
-        RECENT_NONCES.add(nonceB64);
-        if (RECENT_NONCES.size() > 1000) RECENT_NONCES.iterator().remove();
-      }
-
-      byte[] secret = Base64.decode(sharedBase64);
-      Mac mac = Mac.getInstance("HmacSHA256");
-      mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-
-      mac.update(method.getBytes(StandardCharsets.UTF_8));
-      mac.update((byte) 0);
-      mac.update(path.getBytes(StandardCharsets.UTF_8));
-      mac.update((byte) 0);
-      mac.update(ts.getBytes(StandardCharsets.UTF_8));
-      mac.update((byte) 0);
-
-      // nonce is sent base64 by the Worker -> verify over the decoded bytes
-      byte[] nonce = Base64.decode(nonceB64);
-      mac.update(nonce);
-      mac.update((byte) 0);
-
-      mac.update(body);
-
-      byte[] expected = mac.doFinal();
-      byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
-      return MessageDigest.isEqual(expected, provided);
+      RECENT_NONCES.add(nonceB64);
+      if (RECENT_NONCES.size() > 1000) RECENT_NONCES.iterator().remove();
     }
 
-    static String toHex(byte[] b){
-    StringBuilder sb = new StringBuilder(b.length * 2);
-    for (byte x : b) sb.append(String.format("%02x", x));
-    return sb.toString();
+    byte[] secret = Base64.decode(sharedBase64);
+    Mac mac = Mac.getInstance("HmacSHA256");
+    mac.init(new SecretKeySpec(secret, "HmacSHA256"));
+
+    mac.update(method.getBytes(StandardCharsets.UTF_8)); mac.update((byte) 0);
+    mac.update(path.getBytes(StandardCharsets.UTF_8));   mac.update((byte) 0);
+    mac.update(ts.getBytes(StandardCharsets.UTF_8));     mac.update((byte) 0);
+    mac.update(Base64.decode(nonceB64));                 mac.update((byte) 0);
+    mac.update(body);
+
+    byte[] expected = mac.doFinal();
+    byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
+    return MessageDigest.isEqual(expected, provided);
   }
-  static String jcaDigestNameFromOid(String oid){
-    return switch (oid) {
-      case "1.3.14.3.2.26" -> "SHA-1";
-      case "2.16.840.1.101.3.4.2.1" -> "SHA-256";
-      case "2.16.840.1.101.3.4.2.2" -> "SHA-384";
-      case "2.16.840.1.101.3.4.2.3" -> "SHA-512";
-      case "2.16.840.1.101.3.4.2.4" -> "SHA-224";
-      default -> "SHA-256"; // safe default
-    };
-  }
 
-// Build a PDFBox "visual signature template" as recommended by CreateVisibleSignature2.
-// All drawing happens here (before addSignature), so ByteRange stays intact.
-private static InputStream buildBadgeTemplate(PDDocument srcDoc, int pageNum,
-                                              Rectangle2D.Float humanRect,
-                                              PDSignature signature, String lineText) throws IOException {
-  try (PDDocument t = new PDDocument()) {
-    // Page size identical to target page (PDFBox copies only needed parts)
-    PDPage srcPage = srcDoc.getPage(pageNum);
-    t.addPage(new PDPage(srcPage.getMediaBox()));
-
-    PDAcroForm form = new PDAcroForm(t);
-    t.getDocumentCatalog().setAcroForm(form);
-    PDSignatureField sigField = new PDSignatureField(form);
-    PDAnnotationWidget widget = sigField.getWidgets().get(0);
-
-    // Required bookkeeping flags
-    form.setSignaturesExist(true);
-    form.setAppendOnly(true);
-    form.getCOSObject().setDirect(true);
-    form.getFields().add(sigField);
-
-    // Convert "humanRect" (top-left origin) to proper /Rect for current page rotation
-    PDRectangle rect = createSignatureRectangleForPage(srcDoc, pageNum, humanRect);
-    widget.setRectangle(rect);
-
-    // Appearance stream (badge drawing)
-    PDStream stream = new PDStream(t);
-    PDFormXObject formX = new PDFormXObject(stream);
-    PDResources res = new PDResources();
-    formX.setResources(res);
-    formX.setFormType(1);
-
-    PDRectangle bbox = new PDRectangle(rect.getWidth(), rect.getHeight());
-    formX.setBBox(bbox);
-
-    PDAppearanceDictionary ap = new PDAppearanceDictionary();
-    ap.getCOSObject().setDirect(true);
-    PDAppearanceStream apStream = new PDAppearanceStream(formX.getCOSObject());
-    ap.setNormalAppearance(apStream);
-    widget.setAppearance(ap);
-
-    // We need a resources object on the appearance stream to set alpha state
-    if (apStream.getResources() == null) apStream.setResources(new PDResources());
-
-    try (PDPageContentStream cs = new PDPageContentStream(t, apStream)) {
-      // Translucent background (white @ 60% alpha) — values must be in 0..1
-      PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
-      gs.setNonStrokingAlphaConstant(0.60f);
-      COSName gsName = apStream.getResources().add(gs);
-      cs.setGraphicsStateParameters(gs);
-
-      cs.setNonStrokingColor(1f, 1f, 1f);
-      cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight());
-      cs.fill();
-
-      // Green check icon
-      cs.setStrokingColor(0.18f, 0.70f, 0.22f);
-      cs.setLineWidth(2.0f);
-      float cy = bbox.getHeight() / 2f;
-      cs.moveTo(6f, cy - 2f);
-      cs.lineTo(12f, cy - 8f);
-      cs.lineTo(22f, cy + 4f);
-      cs.stroke();
-
-      // Text
-      PDFont font = new PDType1Font(FontName.HELVETICA_BOLD);
-      cs.beginText();
-      cs.setNonStrokingColor(0f, 0f, 0f);
-      cs.setFont(font, 9.5f);
-      cs.newLineAtOffset(28f, cy - 3.5f);
-      cs.showText(lineText);
-      cs.endText();
-    }
-
-    // Return as stream for SignatureOptions.setVisualSignature(...)
-    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-    t.save(baos);
-    return new ByteArrayInputStream(baos.toByteArray());
-  }
-}
-
-// Helper lifted from the PDFBox example to transform a "humanRect" (top-left origin)
-// to a proper PDRectangle that respects the page rotation. (matches CreateVisibleSignature2)
-private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int pageNum, Rectangle2D humanRect) {
-  float x = (float) humanRect.getX();
-  float y = (float) humanRect.getY();
-  float width = (float) humanRect.getWidth();
-  float height = (float) humanRect.getHeight();
-
-  PDPage page = doc.getPage(pageNum);
-  PDRectangle pageRect = page.getCropBox();
-  PDRectangle rect = new PDRectangle();
-  switch (page.getRotation()) {
-    case 90:
-      rect.setLowerLeftY(x);
-      rect.setUpperRightY(x + width);
-      rect.setLowerLeftX(y);
-      rect.setUpperRightX(y + height);
-      break;
-    case 180:
-      rect.setUpperRightX(pageRect.getWidth() - x);
-      rect.setLowerLeftX(pageRect.getWidth() - x - width);
-      rect.setLowerLeftY(y);
-      rect.setUpperRightY(y + height);
-      break;
-    case 270:
-      rect.setLowerLeftY(pageRect.getHeight() - x - width);
-      rect.setUpperRightY(pageRect.getHeight() - x);
-      rect.setLowerLeftX(pageRect.getWidth() - y - height);
-      rect.setUpperRightX(pageRect.getWidth() - y);
-      break;
-    case 0:
-    default:
-      rect.setLowerLeftX(x);
-      rect.setUpperRightX(x + width);
-      rect.setLowerLeftY(pageRect.getHeight() - y - height);
-      rect.setUpperRightY(pageRect.getHeight() - y);
-      break;
-  }
-  return rect;
-}
-
-  // helper exactly like PDFBox example
-  static class CMSProcessableInputStream implements CMSTypedData {
-    private InputStream in;
-    private final ASN1ObjectIdentifier type;
-
-    CMSProcessableInputStream(InputStream in) {
-      this(in, new ASN1ObjectIdentifier(CMSObjectIdentifiers.data.getId()));
-    }
-    CMSProcessableInputStream(InputStream in, ASN1ObjectIdentifier type) {
-      this.in = in; this.type = type;
-    }
-    @Override public Object getContent() { return null; }
-    @Override public ASN1ObjectIdentifier getContentType() { return type; }
-    @Override public void write(OutputStream out) throws IOException, CMSException {
-      IOUtils.copy(in, out); // from PDFBox IOUtils
-      in.close();
-    }
-  }
-  
-  // build a detached CMS/PKCS#7 over the exact ByteRange bytes
+  // Detached CMS over the exact ByteRange bytes (external signing)
   static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, X509Certificate cert) throws Exception {
-    // 1) Read the exact bytes that PDFBox wants signed
     byte[] toSign = IOUtils.toByteArray(content);
 
-    // 2) Standard "SHA256withRSA" CMS generator
     ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
         .setProvider("BC").build(pk);
 
@@ -667,18 +359,15 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
     gen.addSignerInfoGenerator(sigInfoGen);
     gen.addCertificates(new JcaCertStore(java.util.List.of(cert)));
 
-    // 3) Sign the exact bytes as a detached CMS
-    CMSTypedData msg = new org.bouncycastle.cms.CMSProcessableByteArray(toSign);
-    CMSSignedData cms = gen.generate(msg, false);
-    return cms.getEncoded(); // DER
+    CMSTypedData msg = new CMSProcessableByteArray(toSign);
+    CMSSignedData cms = gen.generate(msg, false); // detached
+    return cms.getEncoded();
   }
 
-
-
-  // Set DocMDP transform so this becomes a *certification* signature.
-  // P=1 => no changes allowed; 2 => form fill/annot; 3 => limited edits.
+  // Optional: make it a certification signature (DocMDP). P=1/2/3.
   static void setMDPPermission(PDDocument doc, PDSignature signature, int accessPermissions) {
     COSDictionary sigDict = signature.getCOSObject();
+
     COSDictionary transformParams = new COSDictionary();
     transformParams.setItem(COSName.TYPE, COSName.getPDFName("TransformParams"));
     transformParams.setName(COSName.V, "1.2");
@@ -698,51 +387,41 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
     if (perms == null) { perms = new COSDictionary(); catalog.setItem(COSName.PERMS, perms); }
     perms.setItem(COSName.DOCMDP, sigDict);
   }
-  
-  // --- Sign the original PDF (external signing, detached PKCS#7) ---
+
+  // Resolve desired signing mode from env
+  static int resolveDocMDP() {
+    String mode = Optional.ofNullable(System.getenv("DMJ_SIGN_MODE")).orElse("approval").toLowerCase(Locale.ROOT);
+    return switch (mode) {
+      case "certify-p1" -> 1;
+      case "certify-p2" -> 2;
+      case "certify-p3" -> 3;
+      default -> 0; // approval (no DocMDP)
+    };
+  }
+
+  // --- Invisible signature (approval by default) using external signing ---
   static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
     try (PDDocument doc = Loader.loadPDF(original);
          ByteArrayOutputStream baos = new ByteArrayOutputStream(original.length + 65536)) {
 
-      // 1) Create signature dictionary (detached CMS)
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
-      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
+      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // classic Adobe-compatible
       sig.setName("dmj.one");
       sig.setLocation("IN");
       sig.setReason("Contents securely verified by dmj.one against any tampering.");
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());
 
-      // 2) Certification (DocMDP) -> no changes allowed after signing (P=1)
-      setMDPPermission(doc, sig, 1);
+      int mdp = resolveDocMDP();
+      if (mdp != 0) setMDPPermission(doc, sig, mdp);  // optional certification
 
-      // 3) Decide placement: small badge in top-right margin of page 0
-      final int pageIndex = 0;
-      PDPage first = doc.getPage(pageIndex);
-      PDRectangle crop = first.getCropBox();
-      float margin = 12f;
-      float badgeW = 180f, badgeH = 22f;
-
-      // Template rectangle from a human viewpoint (top-left origin), as in CreateVisibleSignature2
-      // We'll ask the example helper to convert properly for rotation, etc.
-      Rectangle2D.Float humanRect = new Rectangle2D.Float(
-              Math.max(0, crop.getWidth() - badgeW - margin), // x from top-left
-              margin,                                        // y from top edge
-              badgeW, badgeH);
-
-      // 4) Build visual template (appearance + field) in a tiny separate doc
       SignatureOptions opts = new SignatureOptions();
-      opts.setVisualSignature(buildBadgeTemplate(doc, pageIndex, humanRect, sig,
-          "Verified by dmj.one"));                                  // <= badge text
-      opts.setPage(pageIndex);
       opts.setPreferredSignatureSize(65536);
 
-      // 5) Register signature (this sets the reserved ByteRange placeholder)
-      doc.addSignature(sig, /*SignatureInterface*/ (SignatureInterface) null, opts);
-
-      // 6) External signing (NO document modifications after addSignature!)
-      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
+      // IMPORTANT: register signature first, then prepare & sign (no edits between these calls)
+      doc.addSignature(sig, opts); // invisible signature (no visual template)
+      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos); // prepares ByteRange, etc. (official flow)
       byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
       ext.setSignature(cms);
 
@@ -750,12 +429,22 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
     }
   }
 
+  static String toHex(byte[] b){ StringBuilder sb=new StringBuilder(b.length*2); for(byte x:b) sb.append(String.format("%02x",x)); return sb.toString(); }
+  static String jcaDigestNameFromOid(String oid){
+    return switch (oid) {
+      case "1.3.14.3.2.26" -> "SHA-1";
+      case "2.16.840.1.101.3.4.2.1" -> "SHA-256";
+      case "2.16.840.1.101.3.4.2.2" -> "SHA-384";
+      case "2.16.840.1.101.3.4.2.3" -> "SHA-512";
+      case "2.16.840.1.101.3.4.2.4" -> "SHA-224";
+      default -> "SHA-256";
+    };
+  }
 
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
     Map<String,Object> out = new LinkedHashMap<>();
     boolean any = false, anyValid = false, issuedByUs = false, coversDoc = false;
     String issuerDn = "", subFilter = "", errorMsg = "";
-
     Map<String,Object> debug = new LinkedHashMap<>();
 
     try (PDDocument doc = Loader.loadPDF(input)) {
@@ -772,7 +461,7 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
           debug.put("sig"+sigIndex+".byteRange", List.of(br[0],br[1],br[2],br[3]));
         }
 
-        byte[] cms = s.getContents(input);               // trimmed CMS (no padding)
+        byte[] cms = s.getContents(input);
         byte[] signedContent = s.getSignedContent(new ByteArrayInputStream(input));
 
         debug.put("sig"+sigIndex+".cms.len", cms != null ? cms.length : 0);
@@ -781,14 +470,10 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
                   toHex(Arrays.copyOf(signedContent, Math.min(32, signedContent.length))));
 
         try {
-          CMSSignedData sd = new CMSSignedData(
-              new org.bouncycastle.cms.CMSProcessableByteArray(signedContent), cms);
+          CMSSignedData sd = new CMSSignedData(new CMSProcessableByteArray(signedContent), cms);
 
           for (SignerInformation si : sd.getSignerInfos().getSigners()) {
-            String digestAlgOid = si.getDigestAlgOID();
-            String encAlgOid = si.getEncryptionAlgOID();
-
-            // Extract CMS 'message-digest' attribute
+            // Extract message-digest attr & recompute for diagnostics
             byte[] mdAttrBytes = null;
             AttributeTable at = si.getSignedAttributes();
             if (at != null) {
@@ -798,39 +483,25 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
                 mdAttrBytes = ((ASN1OctetString) v).getOctets();
               }
             }
-
-            // Recompute digest over ByteRange (signedContent)
-            String jcaName = jcaDigestNameFromOid(digestAlgOid);
+            String jcaName = jcaDigestNameFromOid(si.getDigestAlgOID());
             byte[] calc = MessageDigest.getInstance(jcaName).digest(signedContent);
-
-            debug.put("sig"+sigIndex+".digestAlgOid", digestAlgOid);
-            debug.put("sig"+sigIndex+".encAlgOid", encAlgOid);
-            debug.put("sig"+sigIndex+".cms.messageDigest.hex", mdAttrBytes != null ? toHex(mdAttrBytes) : "");
             debug.put("sig"+sigIndex+".recalc.messageDigest.hex", toHex(calc));
 
-            // Standard BC verification (this is where CMSSignerDigestMismatchException comes from)
+            // Verify signer
             Collection<X509CertificateHolder> matches = sd.getCertificates().getMatches(si.getSID());
             if (matches.isEmpty()) continue;
             X509CertificateHolder signerHolder = matches.iterator().next();
-            boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder()
-                                      .setProvider("BC")
-                                      .build(signerHolder));
+            boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(signerHolder));
             anyValid |= ok;
 
-            // Compare SPKI with our server cert (to set issuedByUs)
+            // SPKI match = "issuedByUs"
             String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
-            String ourSpki = Base64.toBase64String(
-                SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
-            if (ok && signerSpki.equals(ourSpki)) {
-              issuedByUs = true;
-            }
+            String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
+            if (ok && signerSpki.equals(ourSpki)) issuedByUs = true;
             issuerDn = signerHolder.getSubject().toString();
           }
         } catch (Exception e) {
-          errorMsg = "exception: " + e.getClass().getSimpleName();
-          if (e.getMessage() != null && !e.getMessage().isEmpty()) {
-            errorMsg += " - " + e.getMessage();
-          }
+          errorMsg = "exception: " + e.getClass().getSimpleName() + (e.getMessage()!=null?(" - " + e.getMessage()):"");
           e.printStackTrace();
         }
       }
@@ -843,10 +514,9 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
     out.put("issuer", issuerDn);
     out.put("subFilter", subFilter);
     if (errorMsg != null) out.put("error", errorMsg);
-    out.put("debug", debug);               // <— detailed diagnostics here
+    out.put("debug", debug);
     return out;
   }
-
 
   public static void main(String[] args) throws Exception {
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
@@ -862,7 +532,6 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
     });
 
     app.get("/", ctx -> ctx.result("ok"));
-
     app.get("/spki", ctx -> ctx.json(Map.of("spki", spki, "issuer", issuer)));
 
     app.post("/verify", ctx -> {
@@ -871,27 +540,15 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
         if (f == null) { ctx.status(400).json(Map.of("error","file missing")); return; }
         byte[] data = IOUtils.toByteArray(f.content());
         Map<String,Object> v = verifyPdf(data, keys.cert);
-        ctx.json(v);            // 200 with verification object
+        ctx.json(v);
       } catch (Exception e) {
-        // Always return 200 with a negative result; worker will read JSON and decide.
-        ctx.status(200).json(Map.of(
-          "hasSignature", false,
-          "isValid", false,
-          "issuedByUs", false,
-          "coversDocument", false,
-          "issuer", "",
-          "subFilter", "",
-          "error", "exception: " + e.getClass().getSimpleName()
-        ));
+        ctx.status(200).json(Map.of("hasSignature", false,"isValid", false,"issuedByUs", false,"coversDocument", false,"issuer","", "subFilter","", "error","exception: " + e.getClass().getSimpleName()));
       }
     });
 
-
     app.post("/sign", ctx -> {
       if (shared.isBlank()) { ctx.status(500).json(Map.of("error","server not configured")); return; }
-      String hmac = ctx.header(HMAC_HEADER);
-      String ts = ctx.header(HMAC_TS);
-      String nonce = ctx.header(HMAC_NONCE);
+      String hmac = ctx.header(HMAC_HEADER), ts = ctx.header(HMAC_TS), nonce = ctx.header(HMAC_NONCE);
       if (hmac==null || ts==null || nonce==null) { ctx.status(401).json(Map.of("error","missing auth")); return; }
       UploadedFile f = ctx.uploadedFile("file");
       if (f==null){ ctx.status(400).json(Map.of("error","file missing")); return; }
@@ -911,11 +568,6 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
     });
 
     app.get("/healthz", ctx -> ctx.result("ok"));
-
-    app.events(e -> e.serverStarted(() -> {
-      System.out.println("Signer listening on " + port);
-    }));
-
     app.start(port);
   }
 
@@ -933,7 +585,6 @@ private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int p
   }
 }
 JAVA
-
 
 # PKI creation script (self-signed leaf in PKCS#12)
 sudo tee "${SIGNER_DIR}/make-keys.sh" >/dev/null <<'SH'
