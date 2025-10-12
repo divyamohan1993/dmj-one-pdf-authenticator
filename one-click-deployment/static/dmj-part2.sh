@@ -2,6 +2,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
 ### --- Config / Inputs -------------------------------------------------------
 LOG_DIR="/var/log/dmj"
 STATE_DIR="/var/lib/dmj"
