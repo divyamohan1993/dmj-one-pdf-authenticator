@@ -1347,25 +1347,31 @@ export interface Env {
   WORKER_HMAC_NONCE_HEADER?: string
 }
 
+function genNonce(): string {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return btoa(String.fromCharCode(...a)).replace(/=+$/,'');
+}
+
 // const text = (s: string) => new Response(s, { headers: { "content-type":"text/html; charset=utf-8", "x-frame-options":"DENY", "referrer-policy":"no-referrer", "content-security-policy":"default-src 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'" }});
-const text = (s: string) =>
-  new Response(s, {
+const text = (html: string, nonce: string) =>
+  new Response(html, {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "x-frame-options": "DENY",
       "referrer-policy": "no-referrer",
-      // allow CSS/fonts from CDNs + our inline script/fetch to same-origin
       "content-security-policy":
         "default-src 'self'; " +
-        "style-src 'self' 'unsafe-inline' https:; " +
+        "style-src 'self' 'unsafe-inline' https:; " + // keep styles simple
         "font-src 'self' https: data:; " +
         "img-src 'self' https: data:; " +
-        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; " +
-        "script-src-elem 'self' https://cdnjs.cloudflare.com; " +
-        "connect-src 'self' https:; " +
+        `script-src 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; ` +
+        `script-src-elem 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; ` +
+        "connect-src 'self' https: https://cloudflareinsights.com; " +
         "frame-ancestors 'none'"
     }
   });
+
 const json = (o: any, status=200) => new Response(JSON.stringify(o), {status, headers: {"content-type":"application/json"}});
 
 async function hmac(env: Env, input: ArrayBuffer, method: string, path: string){
@@ -1622,10 +1628,10 @@ async function verifySession(env: Env, b64v: string){
   } catch { return null; }
 }
 
-function renderHome(issuerDomain: string) {
+function renderHome(issuerDomain: string, nonce: string) {
   const pkiZip = `https://pki.${issuerDomain}/dmj-one-trust-kit.zip`;
 
-  return text(`<!doctype html>
+  const html = `<!doctype html>
 <html lang="en" data-bs-theme="dark">
 <head>
 <meta charset="utf-8">
@@ -1639,7 +1645,7 @@ function renderHome(issuerDomain: string) {
 
 <!-- Animations (cdnjs as requested) -->
 <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
+<script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js" crossorigin="anonymous"></script>
 
 <style>
   :root{
@@ -1919,7 +1925,7 @@ function renderHome(issuerDomain: string) {
     </div>
   </footer>
 
-<script>
+<script nonce="__CSP_NONCE__">
   // particles.js init (disabled if user prefers reduced motion)
   (function(){
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1950,7 +1956,7 @@ function renderHome(issuerDomain: string) {
   })();
 </script>
 
-<script>
+<script nonce="__CSP_NONCE__">
   (function(){
     const fileInput    = document.getElementById('fileInput');
     const dropzone     = document.getElementById('dropzone');
@@ -2074,11 +2080,13 @@ function renderHome(issuerDomain: string) {
   })();
 </script>
 </body>
-</html>`);
+</html>`;
+
+return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
 
-function renderAdminLogin(issuer: string, adminPath: string){
-  return text(`<!doctype html>
+function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
+  const html = `<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin · dmj.one</title>
@@ -2114,18 +2122,19 @@ function renderAdminLogin(issuer: string, adminPath: string){
       </div>
     </div>
   </main>
-  <script>
+  <script nonce="__CSP_NONCE__">
     document.getElementById('togglePw').addEventListener('click', function(){
       const i = document.querySelector('input[name="password"]'); 
       i.type = i.type==='password' ? 'text' : 'password';
       this.firstElementChild.className = i.type==='password' ? 'bi bi-eye' : 'bi bi-eye-slash';
     });
   </script>
-</body></html>`);
+</body></html>`;
+return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
 
-function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string){   
-  return text(`<!doctype html>
+function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string, nonce: string){   
+  const html = `<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin bootstrap · dmj.one</title>
@@ -2154,7 +2163,7 @@ function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string
       </div>
     </div>
   </main>
-  <script>
+  <script nonce="__CSP_NONCE__">
     document.getElementById('copyBtn').addEventListener('click', async ()=>{
       const t = document.getElementById('theKey').innerText.trim();
       try{ await navigator.clipboard.writeText(t); 
@@ -2162,10 +2171,11 @@ function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string
       }catch{}
     });
   </script>
-</body></html>`);
+</body></html>`;
+return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
 
-function renderAdminDashboard(issuer: string, adminPath: string){
+function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
   return text(`<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -2212,7 +2222,7 @@ function renderAdminDashboard(issuer: string, adminPath: string){
               <label class="form-label">Optional metadata (JSON)</label>
               <input id="meta" class="form-control" placeholder='{"orderId":"123","user":"alice"}'>
             </div>
-            <div class="d-grid mt-3"><button id="signBtn" class="btn btn-primary" disabled><i class="bi-check2-square me-2"></i>Sign & Download</button></div>
+            <div class="d-grid mt-3 d-none"><button id="signBtn" class="btn btn-primary" disabled><i class="bi-check2-square me-2"></i>Sign & Download</button></div>
             <div class="progress mt-3 d-none" id="prog"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:100%"></div></div>
             <div class="form-text mt-2">Documents are signed by dmj.one and re‑verified before storing. Bundle includes the Trust Kit.</div>
           </div>
@@ -2242,7 +2252,7 @@ function renderAdminDashboard(issuer: string, adminPath: string){
 
   <div id="toast" class="alert alert-primary shadow-sm" role="status"></div>
 
-  <script>
+  <script nonce="__CSP_NONCE__">
     const AP = "${adminPath}"; // dynamic admin base path
     const toast = (msg, kind='primary') => {
       const t = document.getElementById('toast'); 
@@ -2369,7 +2379,8 @@ function renderAdminDashboard(issuer: string, adminPath: string){
     loadRows();
   </script>
 
-</body></html>`);
+</body></html>`;
+return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
 
 
@@ -2643,6 +2654,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const ap = '/' + (env.ADMIN_PATH || 'admin'); // dynamic admin path
+    const nonce = genNonce();
     // --- IDM-friendly GET download endpoint -------------------------------
     // Supports GET and HEAD. One-shot: the first GET consumes the token.
     if (url.pathname.startsWith("/download/") && (req.method === "GET" || req.method === "HEAD")) {
@@ -2663,9 +2675,9 @@ export default {
       if (req.method === "HEAD") return new Response(null, { headers });
       return new Response(peek.bytes, { headers });
     }
-    if (url.pathname === "/") return renderHome(env.ISSUER);
-    if (url.pathname === "/verify" && req.method === "POST") return handleVerify(env, req);    
-    if (url.pathname === ap || url.pathname.startsWith(ap + "/")) return handleAdmin(env, req, ap);
+    if (url.pathname === "/") return renderHome(env.ISSUER, nonce);
+    if (url.pathname === "/verify" && req.method === "POST") return handleVerify(env, req, nonce);    
+    if (url.pathname === ap || url.pathname.startsWith(ap + "/")) return handleAdmin(env, req, ap, nonce);
     if (url.pathname === "/healthz") return new Response("ok");
     return new Response("Not found", {status:404});
   }
