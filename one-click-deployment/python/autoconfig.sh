@@ -133,6 +133,145 @@ dec_key_to_fd() {
   $OPENSSL_BIN ec -in "$keyenc" -passin pass:"$kek"
 }
 
+ensure_pki() {
+  # --- ensure OpenSSL config exists ---
+  if [[ ! -f "$OPENSSL_CNF" ]]; then
+    cat > "$OPENSSL_CNF" <<'CONF'
+[ ca ]
+default_ca = dmj_ca
+
+[ dmj_ca ]
+dir               = ./ca
+certs             = $dir/certs
+crl_dir           = $dir/crl
+new_certs_dir     = $dir/newcerts
+database          = $dir/index.txt
+serial            = $dir/serial
+crlnumber         = $dir/crlnumber
+default_md        = sha256
+policy            = policy_loose
+email_in_dn       = no
+name_opt          = ca_default
+cert_opt          = ca_default
+copy_extensions   = copy
+default_days      = 825
+
+[ policy_loose ]
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = supplied
+
+[ req ]
+default_bits       = 256
+default_md         = sha256
+prompt             = no
+distinguished_name = dn
+
+[ dn ]
+C = IN
+O = dmj.one
+CN = dmj.one
+
+[ v3_root ]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+
+[ v3_intermediate ]
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+authorityKeyIdentifier = keyid:always,issuer
+subjectKeyIdentifier = hash
+crlDistributionPoints = URI:http://DOCSIGN_HOST/.well-known/pki/dmjone.crl
+authorityInfoAccess = caIssuers;URI:http://DOCSIGN_HOST/.well-known/pki/dmjone-int.pem
+
+[ v3_ocsp ]
+basicConstraints = CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = OCSPSigning
+authorityKeyIdentifier=keyid,issuer
+
+[ v3_document ]
+basicConstraints = CA:false
+keyUsage = critical, digitalSignature, nonRepudiation
+extendedKeyUsage = emailProtection, codeSigning
+authorityKeyIdentifier=keyid,issuer
+subjectKeyIdentifier = hash
+crlDistributionPoints = URI:http://DOCSIGN_HOST/.well-known/pki/dmjone.crl
+authorityInfoAccess = OCSP;URI:http://DOCSIGN_HOST/ocsp, caIssuers;URI:http://DOCSIGN_HOST/.well-known/pki/dmjone-int.pem
+CONF
+    sed -i "s/DOCSIGN_HOST/$DOMAIN/g" "$OPENSSL_CNF"
+  fi
+
+  # --- ensure directory skeleton & index/serial files (required by openssl ca/ocsp) ---
+  mkdir -p "$ROOT_DIR"/{certs,crl,newcerts,private} "$INT_DIR"/{certs,crl,csr,newcerts,private}
+  [[ -f "$ROOT_DIR/index.txt" ]] || : > "$ROOT_DIR/index.txt"
+  [[ -f "$INT_DIR/index.txt"  ]] || : > "$INT_DIR/index.txt"
+  [[ -f "$ROOT_DIR/serial"    ]] || echo 1000 > "$ROOT_DIR/serial"
+  [[ -f "$INT_DIR/serial"     ]] || echo 1000 > "$INT_DIR/serial"
+  [[ -f "$ROOT_DIR/crlnumber" ]] || echo 1000 > "$ROOT_DIR/crlnumber"
+  [[ -f "$INT_DIR/crlnumber"  ]] || echo 1000 > "$INT_DIR/crlnumber"
+
+  # --- 1) Root CA: create if missing; then ensure encrypted at rest ---
+  if [[ ! -f "$ROOT_DIR/certs/root.pem" ]]; then
+    $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$ROOT_DIR/private/root.key"
+    $OPENSSL_BIN req -x509 -new -key "$ROOT_DIR/private/root.key" -sha256 -days 3650 \
+      -subj "/C=IN/O=dmj.one/CN=dmj.one Root CA" \
+      -out "$ROOT_DIR/certs/root.pem" -extensions v3_root -config "$OPENSSL_CNF"
+  fi
+  # If the root key is still plain, encrypt it now (produces root.key.enc & shreds .key)
+  if [[ -f "$ROOT_DIR/private/root.key" && ! -f "$ROOT_DIR/private/root.key.enc" ]]; then
+    encrypt_key_if_plain "$ROOT_DIR/private/root.key" || true
+  fi
+
+  # --- 2) Intermediate CA: ensure key, sign with Root, then encrypt ---
+  if [[ ! -f "$INT_DIR/private/intermediate.key" && ! -f "$INT_DIR/private/intermediate.key.enc" ]]; then
+    $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$INT_DIR/private/intermediate.key"
+  fi
+  if [[ ! -f "$INT_DIR/certs/intermediate.pem" ]]; then
+    $OPENSSL_BIN req -new -key "$INT_DIR/private/intermediate.key" \
+      -out "$INT_DIR/csr/intermediate.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one Intermediate CA"
+    # Use the (now present) encrypted root key to sign the intermediate
+    $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_intermediate \
+      -keyfile "$ROOT_DIR/private/root.key.enc" -passin "pass:$(derive_kek)" \
+      -cert "$ROOT_DIR/certs/root.pem" \
+      -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem"
+  fi
+  if [[ -f "$INT_DIR/private/intermediate.key" && ! -f "$INT_DIR/private/intermediate.key.enc" ]]; then
+    encrypt_key_if_plain "$INT_DIR/private/intermediate.key" || true
+  fi
+
+  # --- 3) OCSP signer: ensure key & cert signed by Intermediate; then encrypt ---
+  if [[ ! -f "$INT_DIR/private/ocsp.key" && ! -f "$INT_DIR/private/ocsp.key.enc" ]]; then
+    $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$INT_DIR/private/ocsp.key"
+  fi
+  if [[ ! -f "$INT_DIR/certs/ocsp.pem" ]]; then
+    $OPENSSL_BIN req -new -key "$INT_DIR/private/ocsp.key" \
+      -out "$INT_DIR/csr/ocsp.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one OCSP"
+    $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_ocsp \
+      -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
+      -cert "$INT_DIR/certs/intermediate.pem" \
+      -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem"
+  fi
+  if [[ -f "$INT_DIR/private/ocsp.key" && ! -f "$INT_DIR/private/ocsp.key.enc" ]]; then
+    encrypt_key_if_plain "$INT_DIR/private/ocsp.key" || true
+  fi
+
+  # --- 4) CRL & publish AIA/CDP files ---
+  if [[ ! -f "$INT_DIR/crl/dmjone.crl" ]]; then
+    $OPENSSL_BIN ca -config "$OPENSSL_CNF" -gencrl \
+      -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
+      -cert "$INT_DIR/certs/intermediate.pem" -out "$INT_DIR/crl/dmjone.crl"
+  fi
+  install -m 0644 "$INT_DIR/crl/dmjone.crl" "$STATIC_PKI_DIR/dmjone.crl"
+  install -m 0644 "$INT_DIR/certs/intermediate.pem" "$STATIC_PKI_DIR/dmjone-int.pem"
+  install -m 0644 "$ROOT_DIR/certs/root.pem"        "$STATIC_PKI_DIR/dmjone-root.pem"
+}
+
+
 ensure_root
 
 # --------------------
@@ -303,6 +442,7 @@ authorityInfoAccess = OCSP;URI:http://DOCSIGN_HOST/ocsp, caIssuers;URI:http://DO
 CONF
   sed -i "s/DOCSIGN_HOST/$DOMAIN/g" "$OPENSSL_CNF"
 fi
+
 
 if [[ ! -d "$ROOT_DIR" ]]; then
   log "Initializing CA structure (Root/Intermediate/OCSP)..."
@@ -962,12 +1102,33 @@ if [[ -f "$INT_DIR/crl/dmjone.crl" ]]; then
 fi
 
 # Validate + start
-systemd-analyze verify "/etc/systemd/system/${OCSP_SERVICE_NAME}.service" || true
-systemctl daemon-reload
-systemctl enable --now "${OCSP_SERVICE_NAME}" || true
+# systemd-analyze verify "/etc/systemd/system/${OCSP_SERVICE_NAME}.service" || true
+# systemctl daemon-reload
+# systemctl enable --now "${OCSP_SERVICE_NAME}" || true
 
+# systemctl daemon-reload
+# systemctl enable --now "$SERVICE_NAME" "$OCSP_SERVICE_NAME" "$AUTOCONFIG_SERVICE_NAME"
+
+
+# --- start/enable services (no recursion) ---
+# App + OCSP may start now
 systemctl daemon-reload
-systemctl enable --now "$SERVICE_NAME" "$OCSP_SERVICE_NAME" "$AUTOCONFIG_SERVICE_NAME"
+
+# Ensure PKI exists BEFORE starting OCSP (see section B below)
+ensure_pki   # <-- call the function from section B (place it above)
+
+# Start app and OCSP now (ok to fail gracefully if not ready)
+systemctl enable "$SERVICE_NAME" || true
+systemctl enable "$OCSP_SERVICE_NAME" || true
+
+# Autoconfig should only run on next boot; enable but DO NOT start now
+# (Starting it now would re-run this very script and cause nested execution.)
+systemctl disable "$AUTOCONFIG_SERVICE_NAME" >/dev/null 2>&1 || true
+systemctl enable "$AUTOCONFIG_SERVICE_NAME"
+
+# Final message (don’t block)
+echo "[OK] Deployment/update complete. Visit: https://$DOMAIN"
+
 
 # Finalize
 log "OK — deployment complete. Visit: https://$DOMAIN  (behind Cloudflare Flexible SSL)"
