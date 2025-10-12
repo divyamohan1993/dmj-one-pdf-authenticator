@@ -282,6 +282,23 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
 import org.apache.pdfbox.io.IOUtils;
 
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.util.Matrix;
+
+
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
@@ -326,6 +343,111 @@ public class SignerServer {
     SubjectPublicKeyInfo spki = SubjectPublicKeyInfo.getInstance(cert.getPublicKey().getEncoded());
     return Base64.toBase64String(spki.getEncoded());
   }
+
+  // Convert a human rectangle (x,y from top-left) to a PDRectangle on page 0 (handles rotation).
+  static PDRectangle signatureRectForPage(PDDocument doc, int pageIndex,
+                                          float xTopLeft, float yTopLeft,
+                                          float width, float height) {
+    PDPage page = doc.getPage(pageIndex);
+    PDRectangle pageRect = page.getCropBox();
+    PDRectangle rect = new PDRectangle();
+    int rot = page.getRotation();
+    switch (rot) {
+      case 90:
+        rect.setLowerLeftY(xTopLeft);
+        rect.setUpperRightY(xTopLeft + width);
+        rect.setLowerLeftX(yTopLeft);
+        rect.setUpperRightX(yTopLeft + height);
+        break;
+      case 180:
+        rect.setUpperRightX(pageRect.getWidth() - xTopLeft);
+        rect.setLowerLeftX(pageRect.getWidth() - xTopLeft - width);
+        rect.setLowerLeftY(yTopLeft);
+        rect.setUpperRightY(yTopLeft + height);
+        break;
+      case 270:
+        rect.setLowerLeftY(pageRect.getHeight() - xTopLeft - width);
+        rect.setUpperRightY(pageRect.getHeight() - xTopLeft);
+        rect.setLowerLeftX(pageRect.getWidth() - yTopLeft - height);
+        rect.setUpperRightX(pageRect.getWidth() - yTopLeft);
+        break;
+      case 0:
+      default:
+        rect.setLowerLeftX(xTopLeft);
+        rect.setUpperRightX(xTopLeft + width);
+        rect.setLowerLeftY(pageRect.getHeight() - yTopLeft - height);
+        rect.setUpperRightY(pageRect.getHeight() - yTopLeft);
+        break;
+    }
+    return rect;
+  }
+
+  // Build a minimal visual-appearance template with text (name, date, reason).
+  static InputStream visibleTemplate(PDDocument srcDoc, int pageNum,
+                                     PDRectangle rect, PDSignature signature) throws IOException {
+    try (PDDocument tpl = new PDDocument()) {
+      PDPage page = new PDPage(srcDoc.getPage(pageNum).getMediaBox());
+      tpl.addPage(page);
+
+      PDAcroForm acroForm = new PDAcroForm(tpl);
+      tpl.getDocumentCatalog().setAcroForm(acroForm);
+      PDSignatureField sigField = new PDSignatureField(acroForm);
+      PDAnnotationWidget widget = sigField.getWidgets().get(0);
+      acroForm.setSignaturesExist(true);
+      acroForm.setAppendOnly(true);
+      acroForm.getCOSObject().setDirect(true);
+      acroForm.getFields().add(sigField);
+
+      widget.setRectangle(rect);
+
+      // Appearance form XObject
+      PDStream stream = new PDStream(tpl);
+      PDFormXObject form = new PDFormXObject(stream);
+      PDResources res = new PDResources();
+      form.setResources(res);
+      form.setFormType(1);
+      PDRectangle bbox = new PDRectangle(rect.getWidth(), rect.getHeight());
+      form.setBBox(bbox);
+
+      // Attach appearance to widget
+      PDAppearanceDictionary ap = new PDAppearanceDictionary();
+      ap.getCOSObject().setDirect(true);
+      PDAppearanceStream aps = new PDAppearanceStream(form.getCOSObject());
+      ap.setNormalAppearance(aps);
+      widget.setAppearance(ap);
+
+      // Draw simple framed box + text
+      try (PDPageContentStream cs = new PDPageContentStream(tpl, aps)) {
+        // background (white) and border (black)
+        cs.setNonStrokingColor(255,255,255);
+        cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight()); cs.fill();
+        cs.setLineWidth(0.8f);
+        cs.moveTo(0,0); cs.lineTo(bbox.getWidth(),0); cs.lineTo(bbox.getWidth(),bbox.getHeight());
+        cs.lineTo(0,bbox.getHeight()); cs.closeAndStroke();
+
+        // text
+        float fs = 9f, leading = fs * 1.35f;
+        cs.beginText();
+        cs.setFont(new PDType1Font(FontName.HELVETICA_BOLD), fs);
+        cs.setNonStrokingColor(0,0,0);
+        cs.newLineAtOffset(6, bbox.getHeight() - leading - 4);
+        cs.setLeading(leading);
+        String date = signature.getSignDate() != null ? signature.getSignDate().getTime().toString() : "";
+        cs.showText("Digitally signed by dmj.one");
+        cs.newLine();
+        cs.showText(date);
+        cs.newLine();
+        String reason = signature.getReason() != null ? signature.getReason() : "Verified and certified";
+        cs.showText("Reason: " + reason);
+        cs.endText();
+      }
+
+      ByteArrayOutputStream baos = new ByteArrayOutputStream();
+      tpl.save(baos);
+      return new ByteArrayInputStream(baos.toByteArray());
+    }
+  }
+
 
   static boolean verifyHmac(String sharedBase64, String method, String path, byte[] body, String ts, String nonceB64, String providedB64) throws Exception {
 
@@ -453,35 +575,34 @@ static String jcaDigestNameFromOid(String oid){
     try (PDDocument doc = Loader.loadPDF(originalPdf)) {
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
-      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // detached CMS as required
+      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
       sig.setName("dmj.one");
       sig.setLocation("IN");
       sig.setReason("Contents securely verified by dmj.one against any tampering.");
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());
 
-      // Certification signature: disallow changes after signing (DocMDP P=1)
+      // Certification: no changes allowed after signing
       setMDPPermission(doc, sig, 1);
 
-      // Prepare for external signing (reserve ample space for CMS container)
+      // --- NEW: make it visible on page 1 (top-left coords, width x height) ---
+      int pageIndex = 0; // first page
+      PDRectangle rect = signatureRectForPage(doc, pageIndex,
+          36, 36,            // x=36pt, y=36pt from top-left (≈0.5 inch margins)
+          250, 70);          // width, height in points
       SignatureOptions options = new SignatureOptions();
       options.setPreferredSignatureSize(65536);
+      options.setVisualSignature( visibleTemplate(doc, pageIndex, rect, sig) );
+      options.setPage(pageIndex);
+
+      // Register signature + options, then external signing
       doc.addSignature(sig, options);
-
-      // External signing: get the exact byte ranges to be signed
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
-      InputStream contentToSign = ext.getContent();
-
-      // Build PKCS#7 detached over the provided stream (no extra hashing or wrapping)
-      byte[] cmsSignature = buildDetachedCMS(contentToSign, pk, cert);
-
-      // Inject CMS into the reserved /Contents gap; ByteRange is handled by PDFBox
+      byte[] cmsSignature = buildDetachedCMS(ext.getContent(), pk, cert);
       ext.setSignature(cmsSignature);
     }
     return baos.toByteArray();
   }
-
-
 
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
     Map<String,Object> out = new LinkedHashMap<>();
