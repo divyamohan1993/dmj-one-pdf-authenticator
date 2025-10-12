@@ -328,17 +328,20 @@ public class SignerServer {
   static class Keys {
     final PrivateKey priv;
     final X509Certificate cert;
-    Keys(PrivateKey p, X509Certificate c){ this.priv=p; this.cert=c; }
+    final List<X509Certificate> chain;
+    Keys(PrivateKey p, X509Certificate c, List<X509Certificate> ch){ this.priv=p; this.cert=c; this.chain=ch; }
   }
-  
 
   static Keys loadKeys() throws Exception {
     char[] pass = Files.readString(P12_PASS).trim().toCharArray();
     KeyStore ks = KeyStore.getInstance("PKCS12");
-    try(InputStream in = Files.newInputStream(P12_PATH)) { ks.load(in, pass); }
+    try (InputStream in = Files.newInputStream(P12_PATH)) { ks.load(in, pass); }
     PrivateKey pk = (PrivateKey) ks.getKey(P12_ALIAS, pass);
-    X509Certificate cert = (X509Certificate) ks.getCertificate(P12_ALIAS);
-    return new Keys(pk, cert);
+    X509Certificate leaf = (X509Certificate) ks.getCertificate(P12_ALIAS);
+    Certificate[] chainArr = ks.getCertificateChain(P12_ALIAS);
+    List<X509Certificate> chain = new ArrayList<>();
+    if (chainArr != null) for (Certificate c : chainArr) chain.add((X509Certificate)c);
+    return new Keys(pk, leaf, chain);
   }
 
   static String spkiBase64(X509Certificate cert) throws IOException {
@@ -373,22 +376,16 @@ public class SignerServer {
   }
 
   // Detached CMS over the exact ByteRange bytes (external signing)
-  static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, X509Certificate cert) throws Exception {
+  static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, List<X509Certificate> chain) throws Exception {
     byte[] toSign = IOUtils.toByteArray(content);
-
-    ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
-        .setProvider("BC").build(pk);
-
-    var sigInfoGen = new JcaSignerInfoGeneratorBuilder(
-        new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
-        .build(signer, cert);
-
+    ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(pk);
     CMSSignedDataGenerator gen = new CMSSignedDataGenerator();
-    gen.addSignerInfoGenerator(sigInfoGen);
-    gen.addCertificates(new JcaCertStore(java.util.List.of(cert)));
-
-    CMSTypedData msg = new CMSProcessableByteArray(toSign);
-    CMSSignedData cms = gen.generate(msg, false); // detached
+    gen.addSignerInfoGenerator(
+      new JcaSignerInfoGeneratorBuilder(new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
+        .build(signer, chain.get(0))
+    );
+    gen.addCertificates(new JcaCertStore(chain));       // <-- include ICA here
+    CMSSignedData cms = gen.generate(new CMSProcessableByteArray(toSign), false);
     return cms.getEncoded();
   }
 
@@ -450,7 +447,8 @@ public class SignerServer {
       // IMPORTANT: register signature first, then prepare & sign (no edits between these calls)
       doc.addSignature(sig, opts); // invisible signature (no visual template)
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos); // prepares ByteRange, etc. (official flow)
-      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
+      // byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
+      byte[] cms = buildDetachedCMS(ext.getContent(), keys.priv, keys.chain);
       ext.setSignature(cms);
 
       return baos.toByteArray();
