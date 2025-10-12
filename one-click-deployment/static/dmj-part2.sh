@@ -422,6 +422,7 @@ static String jcaDigestNameFromOid(String oid){
   }
 
 
+
   // Set DocMDP transform so this becomes a *certification* signature.
   // P=1 => no changes allowed; 2 => form fill/annot; 3 => limited edits.
   static void setMDPPermission(PDDocument doc, PDSignature signature, int accessPermissions) {
