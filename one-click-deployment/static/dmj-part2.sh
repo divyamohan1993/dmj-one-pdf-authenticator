@@ -71,6 +71,7 @@ if [ -z "${CF_D1_DATABASE_ID}" ]; then
   exit 1
 fi
 
+
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
 DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
