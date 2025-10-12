@@ -74,7 +74,7 @@ DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by defaul
 DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
 DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
 DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-1}"       # 1 = rotate signer freely
-DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-0}" # 0 = never overwrite user Trust Kit ZIP
+DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
 
 # Require D1 id (single shared DB)
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
@@ -1177,7 +1177,7 @@ echo --------------------------------------------
 
 if defined ROOT_CERT (
   echo [+] Installing Root CA: "%ROOT_CERT%"
-  certutil -addstore -f "Root" "%ROOT_CERT%"
+  certutil -addstore -enterprise -f "Root" "%ROOT_CERT%"
 ) else (
   echo [x] Root certificate not found in folder. Looked for:
   echo     %ROOT_CANDIDATES%
@@ -1185,7 +1185,7 @@ if defined ROOT_CERT (
 
 if defined ICA_CERT (
   echo [+] Installing Intermediate CA: "%ICA_CERT%"
-  certutil -addstore -f "CA" "%ICA_CERT%"
+  certutil -addstore -enterprise -f "CA" "%ICA_CERT%"
 ) else (
   echo [x] Intermediate certificate not found in folder. Looked for:
   echo     %ICA_CANDIDATES%
@@ -2645,12 +2645,21 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
       const kit = new Uint8Array(await kitRes.arrayBuffer());
 
       const readmeFirst = new TextEncoder().encode(
-      `dmj.one — Make the signature show as trusted
-      =============================================
-      Open the "Trust Kit/dmj-one-trust-kit-README.txt" and follow the steps for your device.
-      Install the dmj.one Root CA once. Then any dmj.one-signed PDF will verify as trusted.
+      `dmj.one - Digital Signature Root Certificate
+=====================================================
+1. Automatic Method
+    - Unzip and Open the dmj-one-trust-kit folder. 
+    - Double click "install-dmj-certificates.bat" to automatically install all certificates.
 
-      If you'd rather trust only inside Adobe Acrobat/Reader, see the "Acrobat-only" section.
+2. Manual Method
+    - Unzip and Open the dmj-one-trust-kit folder.
+    - Open the "dmj-one-trust-kit-README.html" and follow the steps for your device.
+            
+Install the dmj.one Root CA once. Then any dmj.one-signed PDF will verify as trusted.
+
+You can reivew the codes to verify for any discrepencies. Use ChatGPT to check its authenticty!
+
+Having problems installing? Mail us at contact@dmj.one 
       `);
 
       const zipBytes = await buildZip([
