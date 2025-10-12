@@ -12,7 +12,7 @@ set -euo pipefail
 # --------------------
 # Verbose tracing
 # --------------------
-VERBOSE="${VERBOSE:-1}"
+VERBOSE="${VERBOSE:-0}"
 if [[ "$VERBOSE" == "1" ]]; then set -x; fi
 
 # --------------------
@@ -603,7 +603,8 @@ PY
 import os, io, binascii
 from datetime import datetime, timezone
 from pyhanko.sign import signers
-from pyhanko.sign.signers import sign_pdf, PdfSignatureMetadat
+from pyhanko.sign.signers import sign_pdf
+from pyhanko.keys import load_cert_from_pemder
 from pyhanko.sign.validation import validate_pdf_signature
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko_certvalidator import ValidationContext, CertificateValidator
@@ -621,9 +622,12 @@ def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn
     # Load certs for chain
     with open(INT_PEM, 'rb') as f: int_pem = f.read()
     with open(ROOT_PEM, 'rb') as f: root_pem = f.read()
-    cert = signers.load_cert_from_pem(cert_pem)
-    int_cert = signers.load_cert_from_pem(int_pem)
-    root_cert = signers.load_cert_from_pem(root_pem)
+    # cert = signers.load_cert_from_pem(cert_pem)
+    # int_cert = signers.load_cert_from_pem(int_pem)
+    # root_cert = signers.load_cert_from_pem(root_pem)
+    cert = load_cert_from_pemder(cert_pem)
+    int_cert = load_cert_from_pemder(int_pem)
+    root_cert = load_cert_from_pemder(root_pem)
     # SimpleSigner with chain
     signer = signers.SimpleSigner(
         signing_cert=cert,
@@ -642,14 +646,14 @@ def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn
         # PAdES baseline B-T: include timestamp if TSA configured; else B-B
     )
     out = io.BytesIO()
-    # Sign (pyHanko will embed chain; OCSP/CRL URLs are in cert extensions)
+    # Sign (pyHanko will embed chain; OCSP/CRL URLs are in cert extensions)    
     sign_pdf(w, signer=signer, signature_meta=meta, output=out)
     return out.getvalue()
 
 def verify_pdf(pdf_bytes: bytes):
     # Build validation context anchored at our root; allow OCSP/CRL fetching
-    with open(ROOT_PEM,'rb') as f: root_pem = f.read()
-    vc = ValidationContext(trust_roots=[root_pem], allow_fetching=True)
+    root_cert = load_cert_from_pemder(ROOT_PEM)
+    vc = ValidationContext(trust_roots=[root_cert], allow_fetching=True)
     # Validate
     bio = io.BytesIO(pdf_bytes)
     status = validate_pdf_signature(bio, -1, validation_context=vc)
@@ -1082,6 +1086,7 @@ ensure_pki   # <-- call the function from section B (place it above)
 # Start app and OCSP now (ok to fail gracefully if not ready)
 systemctl enable "$SERVICE_NAME" || true
 systemctl enable "$OCSP_SERVICE_NAME" || true
+systemctl restart "$SERVICE_NAME" || true
 
 # Autoconfig should only run on next boot; enable but DO NOT start now
 # (Starting it now would re-run this very script and cause nested execution.)
@@ -1093,4 +1098,9 @@ echo "[OK] Deployment/update complete. Visit: https://$DOMAIN"
 
 
 # Finalize
-log "OK — deployment complete. Visit: https://$DOMAIN  (behind Cloudflare Flexible SSL)"
+log <<-EOF
+OK — deployment complete.
+Visit: https://$DOMAIN  (behind Cloudflare Flexible SSL)
+Service Name: $SERVICE_NAME
+Live Logs: sudo journalctl -u $SERVICE_NAME -f
+EOF
