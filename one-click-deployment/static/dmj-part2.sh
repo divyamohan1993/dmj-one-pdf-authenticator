@@ -2026,7 +2026,7 @@ async function handleVerify(env: Env, req: Request){
 
   // existing HTML path (unchanged), but you can keep your current markup here
   const statusHtml = revoked || !okSig ? '❌ <b>Revoked or altered</b>' : '✅ <b>Active</b>';
-  const html = \`<!doctype html><meta charset="utf-8"><title>Verify</title>
+  const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
   <body style="font-family:ui-sans-serif;padding:32px">
   <h1>Verification result</h1>
   <p>SHA-256: <code>\${sha}</code></p>
@@ -2041,7 +2041,7 @@ async function handleVerify(env: Env, req: Request){
     <li>Issuer (from signature): <code>\${vinfo.issuer||""}</code></li>
   </ul>
   <h2>\${(verdict === "valid") ? "✅ Genuine (dmj.one)" : "❌ Not valid / tampered"}</h2>
-  <p><a href="/">Back</a></p></body>\`;
+  <p><a href="/">Back</a></p></body>`;
   return text(html);
 }
 
