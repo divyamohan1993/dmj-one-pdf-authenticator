@@ -434,7 +434,6 @@ public class SignerServer {
       SignatureOptions opts = new SignatureOptions();
       opts.setPreferredSignatureSize(65536);
 
-<<<<<<< HEAD
       // Register signature for signing (using SignatureInterface)
       doc.addSignature(sig, new SignatureInterface() {
         @Override
@@ -449,24 +448,6 @@ public class SignerServer {
       }, opts);
       // Write the incremental update (includes the signature)
       doc.saveIncremental(out);
-=======
-      // Register signature for *external* signing
-      setMDPPermission(doc, sig, 2); // 1 = no changes allowed (most strict)
-      doc.addSignature(sig, opts);
-      
-      // Prepare incremental update and obtain the exact bytes to sign
-      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(out);
-
-      // Build a PKCS#7/CMS *detached* signature over that content
-      byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
-
-      // Inject signature bytes; PDFBox will patch /Contents and finalize the xref
-      ext.setSignature(cms);
-
-      doc.close();
-
-      return out.toByteArray();
->>>>>>> 31fdad6ad5dfa1796f94d6bc9468296cde88ca70
     }
     return out.toByteArray();
   }
@@ -517,24 +498,19 @@ public class SignerServer {
           e.printStackTrace();
         }
 
-        // Replace the current ByteRange logic with this:
-        boolean byteRangeSane = false;
-        boolean noChangesAfterSigning = false;
-
+        // ByteRange must cover entire file except /Contents gap. :contentReference[oaicite:6]{index=6}
         int[] br = s.getByteRange();
         if (br != null && br.length == 4) {
           long len = input.length;
           long a = br[0], b = br[1], c = br[2], d = br[3];
-          long signedRevisionLen = b + d;  // the EOF at signing time
-          // Sanity: first segment starts at 0, second segment starts after first segment
-          byteRangeSane = (a == 0) && (c >= b);
-          // Whether no bytes were appended after the signature was created
-          noChangesAfterSigning = (signedRevisionLen == len);
-        }        
+          // ByteRange = [0, length0, offset1, length1]
+          // Must start at 0, second segment must end at EOF, and start after first:
+          // coversDocument = (a == 0) && (c + d == len) && (c >= b);
+          coversDoc = (a == 0) && (c + d == len) && (c >= b);
+        }
       }
     }
 
-<<<<<<< HEAD
     out.put("hasSignature", any);
     out.put("isValid", anyValid);
     out.put("issuedByUs", issuedByUs);
@@ -544,13 +520,6 @@ public class SignerServer {
     if (errorMsg != null) {
       out.put("error", errorMsg);
     }
-=======
-    out.put("coversSignedRevision", byteRangeSane);
-    out.put("noChangesAfterSigning", noChangesAfterSigning);
-        
-    // Keep the old name for compatibility if you like:
-    out.put("coversDocument", byteRangeSane && noChangesAfterSigning);
->>>>>>> 31fdad6ad5dfa1796f94d6bc9468296cde88ca70
     return out;
  }
 
@@ -1117,9 +1086,7 @@ async function handleVerify(env: Env, req: Request){
   const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
   const vinfo = vres.ok ? await vres.json() : {isValid:false, issuer:""};
   
-  // const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
-  const ok = !!row && !row?.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && (vinfo.coversSignedRevision ?? vinfo.coversDocument === true); // backward compat
-
+  const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
   const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
   <body style="font-family:ui-sans-serif;padding:32px">
   <h1>Verification result</h1>
@@ -1127,10 +1094,8 @@ async function handleVerify(env: Env, req: Request){
   <ul>
     <li>Registered by dmj.one: ${row ? "✅" : "❌"}</li>
     <li>Revoked: ${row?.revoked_at ? "❌ (revoked)" : "✅ (not revoked)"}</li>
-    <li>Signature covers signed revision: ${vinfo.coversSignedRevision ? "✅" : "❌"}</li>
-    <li>No changes after signing: ${vinfo.noChangesAfterSigning ? "✅" : "❌"}</li>
     <li>Signature object present: ${vinfo.hasSignature ? "✅" : "❌"}</li>
-    <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>    
+    <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>
     <li>Covers whole document (ByteRange): ${vinfo.coversDocument ? "✅" : "❌"}</li>
     <li>Signed by our key (dmj.one): ${vinfo.issuedByUs ? "✅" : "❌"}</li>
     <li>Issuer (from signature): <code>${vinfo.issuer||""}</code></li>
