@@ -2,7 +2,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-
 ### --- Config / Inputs -------------------------------------------------------
 LOG_DIR="/var/log/dmj"
 STATE_DIR="/var/lib/dmj"
@@ -1789,27 +1788,3 @@ echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain
 echo "------------------------------------------------------------------"
 
 say "[✓] Done."
-
-
-
-
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"
-echo "Cache busting"

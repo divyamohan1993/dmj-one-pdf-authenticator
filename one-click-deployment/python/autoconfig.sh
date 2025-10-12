@@ -691,14 +691,12 @@ async def verify_pdf(pdf_bytes: bytes):
         embedded_sig,
         signer_validation_context=vc
     )
-    ok = bool(status.bottom_line)
-    # Robustly compute signer fingerprint
-    if status.signer_cert is not None:
-        try:
-            signer_fp = status.signer_cert.sha1.hex().upper()
-        except Exception:
-            signer_fp = hashlib.sha1(status.signer_cert.dump()).hexdigest().upper()
-        issuer = status.signer_cert.issuer.human_friendly
+    ok = bool(status.bottom_line)  # high-level verdict
+    # Robustly compute signer fingerprint from DER
+    if status.signing_cert is not None:
+        der = status.signing_cert.dump()
+        signer_fp = hashlib.sha1(der).hexdigest().upper()
+        issuer = status.signing_cert.issuer.human_friendly
     else:
         signer_fp = ""
         issuer = "unknown"
