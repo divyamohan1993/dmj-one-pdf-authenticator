@@ -84,7 +84,7 @@ ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
 COUNTRY="${COUNTRY:-IN}"
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE=1 in the environment
-DMJ_REISSUE="${DMJ_REISSUE:-0}"
+DMJ_REISSUE="${DMJ_REISSUE:-1}"
 
 
 # Require D1 id (single shared DB)
@@ -666,6 +666,7 @@ countryName             = optional
 stateOrProvinceName     = optional
 organizationName        = supplied
 commonName              = supplied
+organizationalUnitName  = optional
 [ req ]
 default_bits        = 4096
 string_mask         = utf8only
@@ -680,6 +681,13 @@ basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
+[ v3_intermediate_ca ]
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+crlDistributionPoints = URI:http://${PKI_DOMAIN}/root.crl
+authorityInfoAccess   = caIssuers;URI:http://${PKI_DOMAIN}/root.crt
 [ crl_ext ]
 authorityKeyIdentifier = keyid:always
 EOF
