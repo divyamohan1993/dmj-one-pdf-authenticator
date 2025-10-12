@@ -82,11 +82,10 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_LEAF=1
     DMJ_REGEN_TRUST_KIT=1
     DMJ_VERBOSE=1
-        
+
     echo "Hard reset confirmed. Proceeding with full PKI reissuance..."
 fi
 ################## DANGER ENDS ########################
-
 
 # Verbose to console? 1/true = yes, 0/false = minimal
 case "${DMJ_VERBOSE,,}" in
