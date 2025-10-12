@@ -455,7 +455,7 @@ public class SignerServer {
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
     Map<String,Object> out = new LinkedHashMap<>();
     boolean any = false, anyValid = false, issuedByUs = false, coversDoc = false;
-    String issuerDn = "", subFilter = "";
+    String issuerDn = "", subFilter = "", errorMsg = "";
 
     try (PDDocument doc = Loader.loadPDF(input)) {
       for (PDSignature s : doc.getSignatureDictionaries()) {
