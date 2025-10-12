@@ -65,6 +65,28 @@ SIGNER_DIR="/opt/dmj/signer-vm"
 NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
 
+# --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
+PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
+OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
+
+PKI_DIR="/opt/dmj/pki"
+ROOT_DIR="${PKI_DIR}/root"
+ICA_DIR="${PKI_DIR}/ica"
+OCSP_DIR="${PKI_DIR}/ocsp"
+PKI_PUB="${PKI_DIR}/pub"
+
+# Branded subject names
+ROOT_CN="${ROOT_CN:-dmj.one Root CA}"
+ICA_CN="${ICA_CN:-dmj.one Issuing CA v1}"
+OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder}"
+SIGNER_CN="${SIGNER_CN:-dmj.one Document Signer}"
+ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
+COUNTRY="${COUNTRY:-IN}"
+
+# Re-issue all PKI artifacts if you set DMJ_REISSUE=1 in the environment
+DMJ_REISSUE="${DMJ_REISSUE:-0}"
+
+
 # Require D1 id (single shared DB)
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
 if [ -z "${CF_D1_DATABASE_ID}" ]; then
@@ -586,30 +608,218 @@ public class SignerServer {
 }
 JAVA
 
-# PKI creation script (self-signed leaf in PKCS#12)
-sudo tee "${SIGNER_DIR}/make-keys.sh" >/dev/null <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-if [ -f keystore.p12 ]; then
-  echo "[*] PKCS#12 already exists, skipping."
-  exit 0
+# # PKI creation script (self-signed leaf in PKCS#12)
+# sudo tee "${SIGNER_DIR}/make-keys.sh" >/dev/null <<'SH'
+# #!/usr/bin/env bash
+# set -euo pipefail
+# cd "$(dirname "$0")"
+# if [ -f keystore.p12 ]; then
+#   echo "[*] PKCS#12 already exists, skipping."
+#   exit 0
+# fi
+# PASS="$(openssl rand -hex 24)"
+# CN="${DMJ_ROOT_DOMAIN:-dmj.one} Document Signer"
+# openssl req -x509 -newkey rsa:4096 -sha256 -nodes \
+#   -keyout signer.key -out signer.crt -days 3650 \
+#   -subj "/CN=${CN}/O=dmj.one" -addext "basicConstraints=CA:FALSE" \
+#   -addext "keyUsage = digitalSignature, keyEncipherment" \
+#   -addext "extendedKeyUsage = codeSigning, emailProtection"
+# # Bundle into PKCS12
+# openssl pkcs12 -export -out keystore.p12 -inkey signer.key -in signer.crt -name "dmj-one" -passout pass:"$PASS"
+# echo "$PASS" > keystore.pass
+# chmod 600 keystore.p12 keystore.pass signer.key
+# echo "[✓] Generated keystore.p12"
+# SH
+# sudo chmod +x "${SIGNER_DIR}/make-keys.sh"
+# sudo DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" bash "${SIGNER_DIR}/make-keys.sh"
+
+### --- Build a branded two-tier PKI + OCSP + signer PKCS#12 -------------------
+say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
+sudo mkdir -p "${ROOT_DIR}/"{certs,newcerts,private} "${ICA_DIR}/"{certs,newcerts,private} "${OCSP_DIR}" "${PKI_PUB}"
+sudo touch "${ROOT_DIR}/index.txt" "${ICA_DIR}/index.txt"
+[ -f "${ROOT_DIR}/serial" ] || echo 1000 | sudo tee "${ROOT_DIR}/serial" >/dev/null
+[ -f "${ROOT_DIR}/crlnumber" ] || echo 1000 | sudo tee "${ROOT_DIR}/crlnumber" >/dev/null
+[ -f "${ICA_DIR}/serial" ] || echo 2000 | sudo tee "${ICA_DIR}/serial" >/dev/null
+[ -f "${ICA_DIR}/crlnumber" ] || echo 2000 | sudo tee "${ICA_DIR}/crlnumber" >/dev/null
+
+# OpenSSL configs (root + issuing)
+sudo tee "${ROOT_DIR}/openssl.cnf" >/dev/null <<EOF
+[ ca ] default_ca = CA_default
+[ CA_default ]
+dir               = ${ROOT_DIR}
+database          = \$dir/index.txt
+new_certs_dir     = \$dir/newcerts
+certificate       = \$dir/root.crt
+private_key       = \$dir/root.key
+serial            = \$dir/serial
+crlnumber         = \$dir/crlnumber
+default_md        = sha256
+policy            = policy_strict
+unique_subject    = no
+x509_extensions   = v3_ca
+crl_extensions    = crl_ext
+default_days      = 3650
+default_crl_days  = 30
+[ policy_strict ]
+countryName             = optional
+stateOrProvinceName     = optional
+organizationName        = supplied
+commonName              = supplied
+[ req ]
+default_bits        = 4096
+string_mask         = utf8only
+distinguished_name  = dn
+[ dn ]
+organizationName            = Organization (O)
+organizationName_default    = ${ORG_NAME}
+commonName                  = Common Name (CN)
+commonName_default          = ${ROOT_CN}
+[ v3_ca ]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always
+EOF
+
+sudo tee "${ICA_DIR}/openssl.cnf" >/dev/null <<EOF
+[ ca ] default_ca = CA_default
+[ CA_default ]
+dir               = ${ICA_DIR}
+database          = \$dir/index.txt
+new_certs_dir     = \$dir/newcerts
+certificate       = \$dir/ica.crt
+private_key       = \$dir/ica.key
+serial            = \$dir/serial
+crlnumber         = \$dir/crlnumber
+default_md        = sha256
+policy            = policy_loose
+unique_subject    = no
+x509_extensions   = v3_intermediate_ca
+crl_extensions    = crl_ext
+default_days      = 1825
+default_crl_days  = 7
+[ policy_loose ]
+countryName             = optional
+stateOrProvinceName     = optional
+organizationName        = supplied
+commonName              = supplied
+[ req ]
+default_bits        = 4096
+string_mask         = utf8only
+distinguished_name  = dn
+[ dn ]
+organizationName            = Organization (O)
+organizationName_default    = ${ORG_NAME}
+organizationalUnitName      = OU
+organizationalUnitName_default = Public CA
+commonName                  = Common Name (CN)
+commonName_default          = ${ICA_CN}
+[ v3_intermediate_ca ]
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+# AIA/CRL so viewers know where to fetch chain/OCSP/CRL
+authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
+[ usr_cert ]
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = nonRepudiation
+authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
+[ ocsp ]
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = OCSPSigning
+authorityInfoAccess = OCSP;URI:http://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always
+EOF
+
+if [ ! -f "${ROOT_DIR}/root.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
+  say "[+] Creating Root CA ..."
+  openssl genrsa -out "${ROOT_DIR}/root.key" 4096
+  openssl req -new -x509 -days 3650 -sha256 \
+    -subj "/C=${COUNTRY}/O=${ORG_NAME}/CN=${ROOT_CN}" \
+    -key "${ROOT_DIR}/root.key" -out "${ROOT_DIR}/root.crt" \
+    -config "${ROOT_DIR}/openssl.cnf" -extensions v3_ca
+  openssl ca -config "${ROOT_DIR}/openssl.cnf" -gencrl -out "${ROOT_DIR}/root.crl"
 fi
-PASS="$(openssl rand -hex 24)"
-CN="${DMJ_ROOT_DOMAIN:-dmj.one} Document Signer"
-openssl req -x509 -newkey rsa:4096 -sha256 -nodes \
-  -keyout signer.key -out signer.crt -days 3650 \
-  -subj "/CN=${CN}/O=dmj.one" -addext "basicConstraints=CA:FALSE" \
-  -addext "keyUsage = digitalSignature, keyEncipherment" \
-  -addext "extendedKeyUsage = codeSigning, emailProtection"
-# Bundle into PKCS12
-openssl pkcs12 -export -out keystore.p12 -inkey signer.key -in signer.crt -name "dmj-one" -passout pass:"$PASS"
-echo "$PASS" > keystore.pass
-chmod 600 keystore.p12 keystore.pass signer.key
-echo "[✓] Generated keystore.p12"
-SH
-sudo chmod +x "${SIGNER_DIR}/make-keys.sh"
-sudo DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" bash "${SIGNER_DIR}/make-keys.sh"
+
+if [ ! -f "${ICA_DIR}/ica.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
+  say "[+] Creating Issuing CA ..."
+  openssl genrsa -out "${ICA_DIR}/ica.key" 4096
+  openssl req -new -sha256 \
+    -subj "/C=${COUNTRY}/O=${ORG_NAME}/OU=Public CA/CN=${ICA_CN}" \
+    -key "${ICA_DIR}/ica.key" -out "${ICA_DIR}/ica.csr"
+  openssl ca -batch -config "${ROOT_DIR}/openssl.cnf" \
+    -extensions v3_intermediate_ca -in "${ICA_DIR}/ica.csr" \
+    -out "${ICA_DIR}/ica.crt" -days 1825 -md sha256 -notext
+  cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt" > "${PKI_PUB}/dmj-one-ica-chain.pem"
+  openssl ca -config "${ICA_DIR}/openssl.cnf" -gencrl -out "${ICA_DIR}/ica.crl"
+fi
+
+# OCSP responder cert (EKU=OCSPSigning)
+if [ ! -f "${OCSP_DIR}/ocsp.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
+  say "[+] Issuing OCSP responder cert ..."
+  openssl genrsa -out "${OCSP_DIR}/ocsp.key" 4096
+  openssl req -new -sha256 \
+    -subj "/C=${COUNTRY}/O=${ORG_NAME}/CN=${OCSP_CN}" \
+    -key "${OCSP_DIR}/ocsp.key" -out "${OCSP_DIR}/ocsp.csr"
+  openssl ca -batch -config "${ICA_DIR}/openssl.cnf" -extensions ocsp \
+    -in "${OCSP_DIR}/ocsp.csr" -out "${OCSP_DIR}/ocsp.crt" -days 825 -md sha256 -notext
+fi
+
+# Signer (leaf) + PKCS#12 used by the Java service
+if [ ! -f "${SIGNER_DIR}/keystore.p12" ] || [ "$DMJ_REISSUE" = "1" ]; then
+  say "[+] Issuing Document Signer leaf and building PKCS#12 ..."
+  openssl genrsa -out "${SIGNER_DIR}/signer.key" 3072
+  openssl req -new -sha256 \
+    -subj "/C=${COUNTRY}/O=${ORG_NAME}/OU=Document Signing/CN=${SIGNER_CN}" \
+    -key "${SIGNER_DIR}/signer.key" -out "${SIGNER_DIR}/signer.csr"
+  # Use usr_cert extension (digitalSignature + nonRepudiation) + AIA/CDP
+  openssl ca -batch -config "${ICA_DIR}/openssl.cnf" -extensions usr_cert \
+    -in "${SIGNER_DIR}/signer.csr" -out "${SIGNER_DIR}/signer.crt" -days 730 -md sha256 -notext
+
+  # Create PKCS#12 with the chain (alias dmj-one) and store password beside it
+  PASS="$(openssl rand -hex 24)"
+  openssl pkcs12 -export -name "dmj-one" \
+    -inkey "${SIGNER_DIR}/signer.key" -in "${SIGNER_DIR}/signer.crt" \
+    -certfile "${ICA_DIR}/ica.crt" -passout pass:"$PASS" \
+    -out "${SIGNER_DIR}/keystore.p12"
+  echo "$PASS" | sudo tee "${SIGNER_DIR}/keystore.pass" >/dev/null
+  sudo chmod 600 "${SIGNER_DIR}/keystore.p12" "${SIGNER_DIR}/keystore.pass" "${SIGNER_DIR}/signer.key"
+fi
+
+# Publish chain & CRL for AIA/CDP and build a Trust Kit ZIP + README
+say "[+] Publishing chain & CRL at http://${PKI_DOMAIN}/ ..."
+sudo cp -f "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
+sudo cp -f "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
+sudo cp -f "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
+sudo tee "${PKI_PUB}/README.txt" >/dev/null <<'TXT'
+dmj.one Trust Kit
+=================
+This ZIP contains the dmj.one Root CA and Issuing CA. Importing them makes
+dmj.one-issued PDF signatures show as trusted in Adobe Acrobat/Reader.
+
+Quickest (recommended): trust only inside Acrobat
+- Preferences → Signatures → Identities & Trusted Certificates → More… → Trusted Certificates → Import.
+  Select "root.crt" then "ica.crt" and mark as trusted for "Signatures".  (Adobe how-to)  
+  https://www.adobe.com/devnet-docs/acrobatetk/tools/DigSigDC/customcert.html
+
+System-wide (admins only; trusts the CA for all apps)
+- Windows: MMC → Certificates (Local Computer) → Trusted Root Certification Authorities → Import "root.crt".
+- macOS: Keychain Access → System keychain → import "root.crt" and set "Always Trust".
+- Linux (Debian/Ubuntu): sudo cp root.crt /usr/local/share/ca-certificates/dmj-one-root.crt && sudo update-ca-certificates
+
+Note: Auto-trust without importing requires an AATL/EUTL certificate (commercial).  
+TXT
+( cd "${PKI_PUB}" && zip -q -r dmj-one-trust-kit.zip root.crt ica.crt README.txt )
+
 
 echo "[+] Building Java signer..."
 ( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
@@ -659,6 +869,59 @@ sudo ln -sf "$NGINX_SITE" "$NGINX_SITE_LINK"
 sudo nginx -t && sudo systemctl reload nginx
 
 echo "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
+
+
+# --- OCSP responder (OpenSSL) behind NGINX ocsp.${DMJ_ROOT_DOMAIN} ----------
+sudo tee /etc/systemd/system/dmj-ocsp.service >/dev/null <<OCSP
+[Unit]
+Description=dmj.one OCSP Responder
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/openssl ocsp -port 127.0.0.1:9080 \
+ -index ${ICA_DIR}/index.txt -rsigner ${OCSP_DIR}/ocsp.crt -rkey ${OCSP_DIR}/ocsp.key \
+ -CA ${ICA_DIR}/ica.crt -ignore_err -text
+Restart=always
+WorkingDirectory=${OCSP_DIR}
+
+[Install]
+WantedBy=multi-user.target
+OCSP
+sudo systemctl daemon-reload
+sudo systemctl enable --now dmj-ocsp.service
+
+# --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
+sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
+server {
+  listen 80;
+  server_name ${PKI_DOMAIN};
+  root ${PKI_PUB};
+  autoindex off;
+  add_header Cache-Control "public, max-age=3600";
+  # correct content types
+  types { application/pkix-cert crt; application/pkix-crl crl; }
+  location / { try_files \$uri =404; }
+}
+NGX
+
+sudo tee /etc/nginx/sites-available/dmj-ocsp >/dev/null <<NGX
+server {
+  listen 80;
+  server_name ${OCSP_DOMAIN};
+  client_max_body_size 2m;
+  # OCSP requests are small POST/GET; just proxy raw to OpenSSL ocsp at / 
+  location / {
+    proxy_pass http://127.0.0.1:9080;
+    proxy_buffering off;
+    proxy_set_header Connection "";
+  }
+}
+NGX
+
+sudo ln -sf /etc/nginx/sites-available/dmj-pki  /etc/nginx/sites-enabled/dmj-pki
+sudo ln -sf /etc/nginx/sites-available/dmj-ocsp /etc/nginx/sites-enabled/dmj-ocsp
+sudo nginx -t && sudo systemctl reload nginx
+
 
 ### --- Worker project --------------------------------------------------------
 echo "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
@@ -838,14 +1101,16 @@ function renderHome(issuer: string){
 <html><head><meta charset="utf-8"><title>dmj.one verifier</title>
 <style>body{font-family:ui-sans-serif,system-ui;padding:32px;max-width:860px;margin:auto}header{margin-bottom:24px}</style></head>
 <body>
-<header><h1>dmj.one — Document Verifier</h1><p>Upload a PDF to verify it was issued by <b>${issuer}</b>.</p></header>
+<header><h1>dmj.one — Document Verifier</h1>
+<p>Upload a PDF to verify it was issued by <b>${issuer}</b>.</p></header>
 <form method="post" action="/verify" enctype="multipart/form-data">
   <input type="file" name="file" accept="application/pdf" required>
   <button type="submit">Verify</button>
 </form>
-<p><a href="/admin">Admin</a></p>
+<p><a href="/admin">Admin</a> • <a href="https://pki.${issuer}/dmj-one-trust-kit.zip">Download dmj.one Trust Kit (ZIP)</a></p>
 </body></html>`);
 }
+
 
 function diagnostics(env: Env, haveDB=true){
   const reqd = [
