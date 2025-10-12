@@ -422,7 +422,7 @@ public class SignerServer {
       // Draw simple framed box + text
       try (PDPageContentStream cs = new PDPageContentStream(tpl, aps)) {
         // background (white) and border (black)
-        cs.setNonStrokingColor(Color.WHITE);
+        // cs.setNonStrokingColor(Color.WHITE);
         cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight()); cs.fill();
         cs.setLineWidth(0.8f);
         cs.setStrokingColor(Color.BLACK);
