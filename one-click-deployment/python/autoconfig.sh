@@ -769,48 +769,136 @@ Restart=always
 WantedBy=multi-user.target
 UNIT
 
-# OCSP responder (openssl-ocsp) with runtime pass-in
+# # OCSP responder (openssl-ocsp) with runtime pass-in
+# cat > "/etc/systemd/system/${OCSP_SERVICE_NAME}.service" <<UNIT
+# [Unit]
+# Description=dmj.one OCSP Responder
+# After=network-online.target
+# Wants=network-online.target
+
+# [Service]
+# Type=simple
+# EnvironmentFile=$ENV_FILE
+# ExecStart=/bin/bash -lc '\
+#   KEK=\$( "$PYTHON" - "\$KEY_DERIVATION_SALT_HEX" <<PY
+# import sys, binascii, hashlib, hmac, requests
+# from hashlib import sha256
+# salt_hex=sys.argv[1]
+# headers={"Metadata-Flavor":"Google"}
+# def meta(p,d="no"):
+#   try:
+#     r=requests.get("http://metadata/computeMetadata/v1/"+p,headers=headers,timeout=2); r.raise_for_status(); return r.text
+#   except Exception: return d
+# ikm=(meta("instance/id")+"|"+meta("project/numeric-project-id")+"|"+meta("instance/zone").split("/")[-1]+"|'+$DOMAIN+'").encode()
+# salt=binascii.unhexlify(salt_hex)
+# def hkdf_extract(salt,ikm): return hmac.new(salt, ikm, sha256).digest()
+# def hkdf_expand(prk, info, l):
+#   t=b""; okm=b""; i=0
+#   while len(okm)<l:
+#     i+=1; import hmac as _h; t=_h.new(prk, t+info+bytes([i]), sha256).digest(); okm+=t
+#   return okm[:l]
+# prk=hkdf_extract(salt, ikm)
+# print(binascii.hexlify(hkdf_expand(prk,b"dmj-docsigner-kek",32)).decode())
+# PY
+# ); \
+#   exec $OPENSSL_BIN ocsp -port $OCSP_PORT \
+#     -index $INT_DIR/index.txt \
+#     -rkey $INT_DIR/private/ocsp.key.enc -passin pass:\$KEK \
+#     -rsigner $INT_DIR/certs/ocsp.pem \
+#     -CA $ROOT_DIR/certs/root.pem -nmin 1 -ndays 7 -ignore_err -text'
+# Restart=always
+
+# [Install]
+# WantedBy=multi-user.target
+# UNIT
+
+
+
+# --------------------
+# OCSP runner script + unit (robust, single-line ExecStart)
+# --------------------
+install -d -o "$APP_USER" -g "$APP_USER" /usr/local/sbin
+
+cat > /usr/local/sbin/dmj-ocsp-runner.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="${APP_DIR:-/opt/dmj-docsigner}"
+PKI_DIR="${PKI_DIR:-$APP_DIR/pki}"
+ROOT_DIR="$PKI_DIR/ca"
+INT_DIR="$PKI_DIR/intermediate"
+OCSP_PORT="${OCSP_PORT:-2560}"
+
+# Ensure index file exists so openssl-ocsp can read it even if empty
+mkdir -p "$INT_DIR" "$ROOT_DIR"
+touch "$INT_DIR/index.txt"
+
+# Derive KEK from GCE metadata + salt (HKDF-SHA256), all stdlib only
+: "${KEY_DERIVATION_SALT_HEX:?KEY_DERIVATION_SALT_HEX missing in env (.env))}"
+
+md() { curl -fsSL -H "Metadata-Flavor: Google" "http://metadata/computeMetadata/v1/$1" || echo "na"; }
+IID="$(md instance/id)"
+PROJ="$(md project/numeric-project-id)"
+ZONE="$(md instance/zone | awk -F/ '{print $NF}')"
+IKM="${IID}|${PROJ}|${ZONE}|${DOMAIN:-docsigner.dmj.one}"
+
+KEK="$(python3 - "$IKM" "$KEY_DERIVATION_SALT_HEX" <<'PY'
+import sys, binascii, hmac, hashlib
+ikm=sys.argv[1].encode(); salt=binascii.unhexlify(sys.argv[2])
+def hkdf_extract(salt,ikm): return hmac.new(salt, ikm, hashlib.sha256).digest()
+def hkdf_expand(prk,info,L):
+    t=b""; okm=b""; i=0
+    while len(okm)<L:
+        i+=1; t=hmac.new(prk, t+info+bytes([i]), hashlib.sha256).digest(); okm+=t
+    return okm[:L]
+prk=hkdf_extract(salt,ikm)
+print(binascii.hexlify(hkdf_expand(prk,b"dmj-docsigner-kek",32)).decode())
+PY
+)"
+
+# Run OCSP responder (key is encrypted; supply -passin)
+exec /usr/bin/openssl ocsp \
+  -port "$OCSP_PORT" \
+  -index "$INT_DIR/index.txt" \
+  -rkey "$INT_DIR/private/ocsp.key.enc" -passin "pass:${KEK}" \
+  -rsigner "$INT_DIR/certs/ocsp.pem" \
+  -CA "$ROOT_DIR/certs/root.pem" \
+  -nmin 1 -ndays 7 -ignore_err -text
+SH
+chmod 0755 /usr/local/sbin/dmj-ocsp-runner.sh
+chown "$APP_USER":"$APP_USER" /usr/local/sbin/dmj-ocsp-runner.sh
+
+# Unit file: keep ExecStart simple + add conditions so it waits until PKI exists
 cat > "/etc/systemd/system/${OCSP_SERVICE_NAME}.service" <<UNIT
 [Unit]
 Description=dmj.one OCSP Responder
 After=network-online.target
 Wants=network-online.target
+# Don’t try to start until core PKI artifacts exist
+ConditionPathExists=$INT_DIR/certs/ocsp.pem
+ConditionPathExists=$INT_DIR/index.txt
 
 [Service]
 Type=simple
+User=$APP_USER
+Group=$APP_USER
 EnvironmentFile=$ENV_FILE
-ExecStart=/bin/bash -lc '\
-  KEK=\$( "$PYTHON" - "\$KEY_DERIVATION_SALT_HEX" <<PY
-import sys, binascii, hashlib, hmac, requests
-from hashlib import sha256
-salt_hex=sys.argv[1]
-headers={"Metadata-Flavor":"Google"}
-def meta(p,d="no"):
-  try:
-    r=requests.get("http://metadata/computeMetadata/v1/"+p,headers=headers,timeout=2); r.raise_for_status(); return r.text
-  except Exception: return d
-ikm=(meta("instance/id")+"|"+meta("project/numeric-project-id")+"|"+meta("instance/zone").split("/")[-1]+"|'+$DOMAIN+'").encode()
-salt=binascii.unhexlify(salt_hex)
-def hkdf_extract(salt,ikm): return hmac.new(salt, ikm, sha256).digest()
-def hkdf_expand(prk, info, l):
-  t=b""; okm=b""; i=0
-  while len(okm)<l:
-    i+=1; import hmac as _h; t=_h.new(prk, t+info+bytes([i]), sha256).digest(); okm+=t
-  return okm[:l]
-prk=hkdf_extract(salt, ikm)
-print(binascii.hexlify(hkdf_expand(prk,b"dmj-docsigner-kek",32)).decode())
-PY
-); \
-  exec $OPENSSL_BIN ocsp -port $OCSP_PORT \
-    -index $INT_DIR/index.txt \
-    -rkey $INT_DIR/private/ocsp.key.enc -passin pass:\$KEK \
-    -rsigner $INT_DIR/certs/ocsp.pem \
-    -CA $ROOT_DIR/certs/root.pem -nmin 1 -ndays 7 -ignore_err -text'
+Environment=APP_DIR=$APP_DIR
+Environment=PKI_DIR=$PKI_DIR
+Environment=OCSP_PORT=$OCSP_PORT
+ExecStart=/usr/local/sbin/dmj-ocsp-runner.sh
 Restart=always
+RestartSec=2s
+# Hardening (can be relaxed if needed)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+
 
 # Autoconfig self-update at boot (fetch latest script from your repo)
 cat > "/usr/local/bin/${AUTOCONFIG_SERVICE_NAME}.sh" <<'SH'
@@ -835,6 +923,48 @@ ExecStart=/usr/local/bin/${AUTOCONFIG_SERVICE_NAME}.sh
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+# --- PKI self-heal: ensure minimal files exist for OCSP to start ---
+# Create basics if someone deleted them between runs.
+mkdir -p "$ROOT_DIR"/{certs,crl,newcerts,private} "$INT_DIR"/{certs,crl,csr,newcerts,private}
+[[ -f "$ROOT_DIR/index.txt" ]] || touch "$ROOT_DIR/index.txt"
+[[ -f "$INT_DIR/index.txt"  ]] || touch "$INT_DIR/index.txt"
+[[ -f "$ROOT_DIR/serial"    ]] || echo 1000 > "$ROOT_DIR/serial"
+[[ -f "$INT_DIR/serial"     ]] || echo 1000 > "$INT_DIR/serial"
+[[ -f "$ROOT_DIR/crlnumber" ]] || echo 1000 > "$ROOT_DIR/crlnumber"
+[[ -f "$INT_DIR/crlnumber"  ]] || echo 1000 > "$INT_DIR/crlnumber"
+
+# If core certs are missing, (re)create them idempotently
+if [[ ! -f "$ROOT_DIR/certs/root.pem" || ! -f "$ROOT_DIR/private/root.key.enc" && -f "$ROOT_DIR/private/root.key" ]]; then
+  # Encrypt root key if still plain from some earlier run
+  encrypt_key_if_plain "$ROOT_DIR/private/root.key" || true
+fi
+
+if [[ ! -f "$INT_DIR/certs/intermediate.pem" && -f "$INT_DIR/private/intermediate.key" ]]; then
+  $OPENSSL_BIN req -new -key "$INT_DIR/private/intermediate.key" -out "$INT_DIR/csr/intermediate.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one Intermediate CA"
+  $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_intermediate \
+    -keyfile "$ROOT_DIR/private/root.key.enc" -passin "pass:$(derive_kek)" \
+    -cert "$ROOT_DIR/certs/root.pem" \
+    -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem" || true
+fi
+
+if [[ ! -f "$INT_DIR/certs/ocsp.pem" && -f "$INT_DIR/private/ocsp.key" ]]; then
+  $OPENSSL_BIN req -new -key "$INT_DIR/private/ocsp.key" -out "$INT_DIR/csr/ocsp.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one OCSP"
+  $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_ocsp \
+    -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
+    -cert "$INT_DIR/certs/intermediate.pem" \
+    -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem" || true
+fi
+
+# Always (re)publish CRL if present
+if [[ -f "$INT_DIR/crl/dmjone.crl" ]]; then
+  install -m 0644 "$INT_DIR/crl/dmjone.crl" "$STATIC_PKI_DIR/dmjone.crl"
+fi
+
+# Validate + start
+systemd-analyze verify "/etc/systemd/system/${OCSP_SERVICE_NAME}.service" || true
+systemctl daemon-reload
+systemctl enable --now "${OCSP_SERVICE_NAME}" || true
 
 systemctl daemon-reload
 systemctl enable --now "$SERVICE_NAME" "$OCSP_SERVICE_NAME" "$AUTOCONFIG_SERVICE_NAME"
