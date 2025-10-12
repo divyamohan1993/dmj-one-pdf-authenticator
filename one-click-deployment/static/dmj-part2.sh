@@ -13,8 +13,9 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
+cd $LOG_DIR && sudo rm -rf *
 
-DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
+DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
@@ -22,6 +23,12 @@ DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 
 DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
 SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
+
+# Support/contact & Worker<->Signer header names (overrideable)
+SUPPORT_EMAIL="${SUPPORT_EMAIL:-contact@${DMJ_ROOT_DOMAIN}}"
+WORKER_HMAC_HEADER="${WORKER_HMAC_HEADER:-x-worker-hmac}"
+WORKER_HMAC_TS_HEADER="${WORKER_HMAC_TS_HEADER:-x-worker-ts}"
+WORKER_HMAC_NONCE_HEADER="${WORKER_HMAC_NONCE_HEADER:-x-worker-nonce}"
 
 # WORKER_NAME="dmj-${INSTALLATION_ID}-docsign"
 WORKER_NAME="document-signer"
@@ -190,6 +197,16 @@ fi
 # (Re)load to ensure current shell sees any rotation above
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
+
+# --- Ephemeral randomized admin path (rotates on each run) -------------------
+# Example: admin-1a2b3c4d5e6f  (12 hex chars)
+ADMIN_PATH="admin-$(openssl rand -hex 6)"
+ADMIN_PATH_FILE="${STATE_DIR}/admin-path.txt"
+printf '%s\n' "$ADMIN_PATH" | sudo tee "$ADMIN_PATH_FILE" >/dev/null
+sudo chmod 600 "$ADMIN_PATH_FILE"
+say "[i] Admin portal path for this deploy: /${ADMIN_PATH}"
+
+# ----------------------------------------------------------------------------
 
 
 # Sanity-check: do not proceed with empty secrets (prevents bad deploys)
@@ -374,13 +391,13 @@ import java.util.zip.ZipOutputStream;
 
 public class SignerServer {
 
-  static final String WORK_DIR = "/opt/dmj/signer-vm";
+  static final String WORK_DIR = Optional.ofNullable(System.getenv("DMJ_SIGNER_WORK_DIR")).orElse("/opt/dmj/signer-vm");
   static final Path P12_PATH = Paths.get(WORK_DIR, "keystore.p12");
   static final Path P12_PASS = Paths.get(WORK_DIR, "keystore.pass");
-  static final String P12_ALIAS = "dmj-one";
-  static final String HMAC_HEADER = "x-worker-hmac";
-  static final String HMAC_TS = "x-worker-ts";
-  static final String HMAC_NONCE = "x-worker-nonce";
+  static final String P12_ALIAS = Optional.ofNullable(System.getenv("DMJ_P12_ALIAS")).orElse("dmj-one");
+  static final String HMAC_HEADER = Optional.ofNullable(System.getenv("DMJ_HMAC_HEADER")).orElse("x-worker-hmac");
+  static final String HMAC_TS = Optional.ofNullable(System.getenv("DMJ_HMAC_TS_HEADER")).orElse("x-worker-ts");
+  static final String HMAC_NONCE = Optional.ofNullable(System.getenv("DMJ_HMAC_NONCE_HEADER")).orElse("x-worker-nonce");
 
   static final Set<String> RECENT_NONCES = Collections.synchronizedSet(new LinkedHashSet<>());
 
@@ -499,16 +516,21 @@ public class SignerServer {
 
   // Invisible approval/certification signature using external signing
   static byte[] signPdf(byte[] original, PrivateKey pk, List<X509Certificate> chain) throws Exception {
+    String sigName = Optional.ofNullable(System.getenv("DMJ_SIG_NAME")).orElse("dmj.one");
+    String sigLoc = Optional.ofNullable(System.getenv("DMJ_SIG_LOCATION")).orElse("IN");
+    String sigReason = Optional.ofNullable(System.getenv("DMJ_SIG_REASON")).orElse("Contents securely verified by dmj.one against any tampering.");
+    String contact = Optional.ofNullable(System.getenv("DMJ_CONTACT_EMAIL")).orElse("contact@dmj.one");
+     
     try (PDDocument doc = Loader.loadPDF(original);
          ByteArrayOutputStream baos = new ByteArrayOutputStream(original.length + 65536)) {
 
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // Adobe-compatible detached CMS
-      sig.setName("dmj.one");
-      sig.setLocation("IN");
-      sig.setReason("Contents securely verified by dmj.one against any tampering.");
-      sig.setContactInfo("contact@dmj.one");
+      sig.setName(sigName);
+      sig.setLocation(sigLoc);
+      sig.setReason(sigReason);
+      sig.setContactInfo(contact);
       sig.setSignDate(Calendar.getInstance());
 
       int mdp = resolveDocMDP();
@@ -731,12 +753,19 @@ public class SignerServer {
   }
 
   static int choosePort(){
-    int[] candidates = {18080,18081,18100,18200,19080,28080};
+    int[] candidates;
+    String portsEnv = Optional.ofNullable(System.getenv("DMJ_SIGNER_PORTS")).orElse("");
+    if (!portsEnv.isBlank()) {
+      String[] parts = portsEnv.split(",");
+      int[] arr = new int[parts.length];
+      for (int i=0;i<parts.length;i++) arr[i] = Integer.parseInt(parts[i].trim());
+      candidates = arr;
+    } else { candidates = new int[]{18080,18081,18100,18200,19080,28080}; }
     for(int p: candidates){
       try(java.net.ServerSocket s = new java.net.ServerSocket()){
         s.setReuseAddress(true);
         s.bind(new java.net.InetSocketAddress("127.0.0.1", p));
-        try { Files.writeString(Paths.get("/etc/dmj/signer.port"), ""+p); } catch(IOException ignored){}
+        try { Files.writeString(Paths.get(Optional.ofNullable(System.getenv("DMJ_SIGNER_PORT_FILE")).orElse("/etc/dmj/signer.port")), ""+p); } catch(IOException ignored){}
         return p;
       } catch(IOException ignored){}
     }
@@ -1169,6 +1198,16 @@ Environment=SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
 Environment=DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
 Environment=DMJ_PKI_PUB=${PKI_PUB}
 Environment=DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
+Environment=DMJ_SIGNER_WORK_DIR=${SIGNER_DIR}
+Environment=DMJ_P12_ALIAS=${PKCS12_ALIAS}
+Environment=DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
+Environment=DMJ_HMAC_TS_HEADER=${WORKER_HMAC_TS_HEADER}
+Environment=DMJ_HMAC_NONCE_HEADER=${WORKER_HMAC_NONCE_HEADER}
+Environment=DMJ_SIGNER_PORT_FILE=/etc/dmj/signer.port
+Environment=DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
+Environment=DMJ_SIG_LOCATION=${COUNTRY}
+Environment=DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
+Environment=DMJ_SIG_REASON=Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering.
 ExecStart=/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar
 Restart=on-failure
 WorkingDirectory=${SIGNER_DIR}
@@ -1302,6 +1341,10 @@ export interface Env {
   PKI_BASE?: string
   BUNDLE_TRUST_KIT?: string
   DOWNLOAD_TTL?: string
+  ADMIN_PATH?: string
+  WORKER_HMAC_HEADER?: string
+  WORKER_HMAC_TS_HEADER?: string
+  WORKER_HMAC_NONCE_HEADER?: string
 }
 
 // const text = (s: string) => new Response(s, { headers: { "content-type":"text/html; charset=utf-8", "x-frame-options":"DENY", "referrer-policy":"no-referrer", "content-security-policy":"default-src 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'" }});
@@ -1317,7 +1360,8 @@ const text = (s: string) =>
         "style-src 'self' 'unsafe-inline' https:; " +
         "font-src 'self' https: data:; " +
         "img-src 'self' https: data:; " +
-        "script-src 'self' 'unsafe-inline'; " +
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; " +
+        "script-src-elem 'self' https://cdnjs.cloudflare.com; " +
         "connect-src 'self' https:; " +
         "frame-ancestors 'none'"
     }
@@ -2004,11 +2048,13 @@ function renderHome(issuerDomain: string) {
       }
     }
 
-    // Click / keyboard activation
-    dropzone.addEventListener('click', () => fileInput.click());
+    // Keyboard activation only (let the <label for=...> handle pointer clicks)
     dropzone.addEventListener('keydown', (e) => {
       if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
     });
+  
+    // Ensure selecting the *same* file fires 'change' next time
+    fileInput.addEventListener('click', () => { fileInput.value = ''; });
 
     // Drag & drop support
     ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.add('dragover'); }));
@@ -2031,7 +2077,7 @@ function renderHome(issuerDomain: string) {
 </html>`);
 }
 
-function renderAdminLogin(issuer: string){
+function renderAdminLogin(issuer: string, adminPath: string){
   return text(`<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -2052,7 +2098,7 @@ function renderAdminLogin(issuer: string){
               <h1 class="h4 mb-0">dmj.one Admin</h1>
             </div>
             <p class="text-secondary">Enter the <b>admin portal key</b> to access the dashboard for <span class="text-nowrap">${issuer}</span>.</p>
-            <form method="post" action="/admin/login" class="mt-3">
+            <form method="post" action="${adminPath}/login" class="mt-3">
               <div class="mb-3">
                 <label class="form-label">Admin key</label>
                 <div class="input-group">
@@ -2078,7 +2124,7 @@ function renderAdminLogin(issuer: string){
 </body></html>`);
 }
 
-function renderAdminBootstrapOnce(key: string, issuer: string){
+function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string){   
   return text(`<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -2102,7 +2148,7 @@ function renderAdminBootstrapOnce(key: string, issuer: string){
             <button class="btn btn-outline-secondary mt-3" id="copyBtn"><i class="bi-clipboard me-2"></i>Copy</button>
             <hr class="my-4" />
             <p class="text-secondary small mb-0">Treat this like a password. Rotation is automatic at each deploy; you’ll see a new key here next time.</p>
-            <a class="btn btn-primary mt-3" href="/admin">Continue to Admin login</a>
+            <a class="btn btn-primary mt-3" href="${adminPath}">Continue to Admin login</a>
           </div>
         </div>
       </div>
@@ -2119,7 +2165,7 @@ function renderAdminBootstrapOnce(key: string, issuer: string){
 </body></html>`);
 }
 
-function renderAdminDashboard(issuer: string){
+function renderAdminDashboard(issuer: string, adminPath: string){
   return text(`<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -2144,7 +2190,7 @@ function renderAdminDashboard(issuer: string){
   <nav class="navbar navbar-expand-lg bg-white border-bottom">
     <div class="container">
       <a class="navbar-brand d-flex align-items-center" href="#"><i class="bi-shield-check me-2" style="color:#0d6efd"></i>dmj.one Admin</a>
-      <form method="post" action="/admin/logout" class="ms-auto"><button class="btn btn-outline-secondary"><i class="bi-box-arrow-right me-2"></i>Logout</button></form>
+      <form method="post" action="${adminPath}/logout" class="ms-auto"><button class="btn btn-outline-secondary"><i class="bi-box-arrow-right me-2"></i>Logout</button></form>
     </div>
   </nav>
 
@@ -2197,6 +2243,7 @@ function renderAdminDashboard(issuer: string){
   <div id="toast" class="alert alert-primary shadow-sm" role="status"></div>
 
   <script>
+    const AP = "${adminPath}"; // dynamic admin base path
     const toast = (msg, kind='primary') => {
       const t = document.getElementById('toast'); 
       t.className = 'alert alert-' + kind + ' shadow-sm'; 
@@ -2208,7 +2255,7 @@ function renderAdminDashboard(issuer: string){
     // ------- Table (load + filter + revoke) — unchanged -------
     let rows = [];
     async function loadRows(){
-      const res = await fetch('/admin?json=1', {headers:{'Accept':'application/json'}});
+      const res = await fetch(AP+'?json=1', {headers:{'Accept':'application/json'}});      
       if(!res.ok){ toast('Failed to load documents','danger'); return; }
       const data = await res.json();
       rows = (data.documents||[]);
@@ -2237,8 +2284,8 @@ function renderAdminDashboard(issuer: string){
     document.getElementById('tbody').addEventListener('click', async (e)=>{
       const b = e.target.closest('button.revoke'); if(!b) return;
       const sha = b.getAttribute('data-sha');
-      const fd = new FormData(); fd.set('sha', sha);
-      const res = await fetch('/admin/revoke', {method:'POST', body:fd, headers:{'Accept':'application/json'}});
+      const fd = new FormData(); fd.set('sha', sha);      
+      const res = await fetch(AP+'/revoke', {method:'POST', body:fd, headers:{'Accept':'application/json'}});
       if(!res.ok){ toast('Revoke failed','danger'); return; }
       const r = await res.json();
       toast('Revoked '+sha.slice(0,8)+'…','warning');
@@ -2265,8 +2312,8 @@ function renderAdminDashboard(issuer: string){
         const fd = new FormData();
         fd.set('file', file, file.name);
         const m = (meta.value||'').trim(); if(m) fd.set('meta', m); // uses whatever is in "Optional metadata" right now
-
-        const res = await fetch('/admin/sign', { method:'POST', body:fd });
+        
+        const res = await fetch(AP+'/sign', { method:'POST', body:fd });
         if(!res.ok){ const t = await res.text(); throw new Error(t||'sign error'); }
 
         const disp  = res.headers.get('content-disposition') || '';
@@ -2342,7 +2389,7 @@ function diagnostics(env: Env, haveDB=true){
   return `<ul>${li}</ul>`;
 }
 
-async function handleAdmin(env: Env, req: Request){
+async function handleAdmin(env: Env, req: Request, adminPath: string){
   await ensureSchema(env);
   const u = new URL(req.url);
   const cookieHeader = req.headers.get("cookie") || "";
@@ -2352,8 +2399,8 @@ async function handleAdmin(env: Env, req: Request){
   if (req.method === "GET"){
     // one-time admin portal key display (first visit)
     const show = await consumeOneTimeAdminKey(env);
-    if (show){
-      return renderAdminBootstrapOnce(show, env.ISSUER);
+    if (show){      
+      return renderAdminBootstrapOnce(show, env.ISSUER, adminPath);
     }
     // JSON feed for dashboard data
     if (u.searchParams.get("json") === "1") {
@@ -2364,13 +2411,13 @@ async function handleAdmin(env: Env, req: Request){
       const active = docs.filter((d:any)=>!d.revoked_at).length;
       return json({ documents: docs, counts: { total: docs.length, active, revoked: docs.length-active } });
     }
-    if (!session) return renderAdminLogin(env.ISSUER);
-    return renderAdminDashboard(env.ISSUER);
+    if (!session) return renderAdminLogin(env.ISSUER, adminPath);
+    return renderAdminDashboard(env.ISSUER, adminPath);
   }
 
   if (req.method === "POST"){
-    const form = await req.formData();
-    if (u.pathname.endsWith("/login")){
+    const form = await req.formData();    
+    if (u.pathname === adminPath + "/login"){
       const pass = String(form.get("password")||"");
       const ok = await verifyPBKDF2(env, pass);      
       if(!ok) {
@@ -2380,10 +2427,10 @@ async function handleAdmin(env: Env, req: Request){
         });
       }
       const sidv = await signSession(env, {ok:true, t: now()});
-      return new Response(null, { status:303, headers:{ "set-cookie": cookie("admin_session", sidv, {Path:"/"}), "location": "/admin" }});
+      return new Response(null, { status:303, headers:{ "set-cookie": cookie("admin_session", sidv, {Path: adminPath}), "location": adminPath }});     
     }
-    if (u.pathname.endsWith("/logout")){
-      return new Response(null, { status:303, headers:{ "set-cookie": "admin_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict", "location": "/admin" }});
+    if (u.pathname === adminPath + "/logout"){
+      return new Response(null, { status:303, headers:{ "set-cookie": "admin_session=; Max-Age=0; Path="+adminPath+"; HttpOnly; SameSite=Strict", "location": adminPath }});     
     }    
     if (!session) {
       return new Response("<h1>Unauthorized</h1>", {
@@ -2392,7 +2439,7 @@ async function handleAdmin(env: Env, req: Request){
       });
     }
 
-    if (u.pathname.endsWith("/sign")){
+    if (u.pathname === adminPath + "/sign"){
       const file = form.get("file") as File | null;
       if(!file) return json({error:"file missing"}, 400);
       // const buf = await file.arrayBuffer();
@@ -2402,12 +2449,16 @@ async function handleAdmin(env: Env, req: Request){
       // HMAC gating to signer
       const { ts, nonce, sig } = await hmac(env, buf, "POST", "/sign");
 
+      const HH = env.WORKER_HMAC_HEADER || "x-worker-hmac";
+      const HT = env.WORKER_HMAC_TS_HEADER || "x-worker-ts";
+      const HN = env.WORKER_HMAC_NONCE_HEADER || "x-worker-nonce";
+
       const res = await fetch(new URL("/sign", env.SIGNER_API_BASE).toString(), {
         method:"POST",
         headers:{
-          "x-worker-hmac": sig,
-          "x-worker-ts": ts,
-          "x-worker-nonce": nonce
+          [HH]: sig,
+          [HT]: ts,
+          [HN]: nonce
         },
         body: (()=>{ const fd = new FormData(); fd.set("file", new Blob([buf], {type:"application/pdf"}), "in.pdf"); return fd; })()
       });
@@ -2498,7 +2549,7 @@ async function handleAdmin(env: Env, req: Request){
 
     }
 
-    if (u.pathname.endsWith("/revoke")){      
+    if (u.pathname === adminPath + "/revoke"){     
       const p = env.DB_PREFIX;
       const sha = String(form.get("sha")||"");
       await env.DB
@@ -2514,7 +2565,7 @@ async function handleAdmin(env: Env, req: Request){
       // JSON for XHR, redirect for classic form posts
       const wantsJson = (req.headers.get("accept")||"").includes("application/json");
       if (wantsJson) return json({ ok:true, sha, revoked_at: now() });
-      return new Response(null, { status:303, headers:{location:"/admin"} });
+      return new Response(null, { status:303, headers:{location: adminPath} });
     }
   }
 
@@ -2591,6 +2642,7 @@ async function handleVerify(env: Env, req: Request){
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    const ap = '/' + (env.ADMIN_PATH || 'admin'); // dynamic admin path
     // --- IDM-friendly GET download endpoint -------------------------------
     // Supports GET and HEAD. One-shot: the first GET consumes the token.
     if (url.pathname.startsWith("/download/") && (req.method === "GET" || req.method === "HEAD")) {
@@ -2612,8 +2664,8 @@ export default {
       return new Response(peek.bytes, { headers });
     }
     if (url.pathname === "/") return renderHome(env.ISSUER);
-    if (url.pathname === "/verify" && req.method === "POST") return handleVerify(env, req);
-    if (url.pathname.startsWith("/admin")) return handleAdmin(env, req);
+    if (url.pathname === "/verify" && req.method === "POST") return handleVerify(env, req);    
+    if (url.pathname === ap || url.pathname.startsWith(ap + "/")) return handleAdmin(env, req, ap);
     if (url.pathname === "/healthz") return new Response("ok");
     return new Response("Not found", {status:404});
   }
@@ -2640,7 +2692,11 @@ sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
     "SIGNER_API_BASE": "https://${SIGNER_DOMAIN}",
     "DB_PREFIX":     "${DB_PREFIX}",
     "PKI_BASE":      "https://${PKI_DOMAIN}",
-    "BUNDLE_TRUST_KIT": "1"            // 1 = return a zip bundle (PDF + Trust Kit)
+    "BUNDLE_TRUST_KIT": "1",            // 1 = return a zip bundle (PDF + Trust Kit)
+    "ADMIN_PATH":    "${ADMIN_PATH}",   // randomized each run
+    "WORKER_HMAC_HEADER": "${WORKER_HMAC_HEADER}",
+    "WORKER_HMAC_TS_HEADER": "${WORKER_HMAC_TS_HEADER}",
+    "WORKER_HMAC_NONCE_HEADER": "${WORKER_HMAC_NONCE_HEADER}"
   }
 }
 JSON
@@ -2733,8 +2789,9 @@ echo "Worker URL (temporary workers.dev): ${WORKER_URL:-see dashboard}"
 echo "Signer URL (nginx): https://${SIGNER_DOMAIN}/healthz"
 echo
 echo "NEXT STEPS:"
-echo "1) Visit ${WORKER_URL:-your workers.dev URL}/admin   — you will see the admin key ONCE."
+echo "1) Visit ${WORKER_URL:-your workers.dev URL}/${ADMIN_PATH}   — you will see the admin key ONCE."
 echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain (e.g. https://document.${DMJ_ROOT_DOMAIN}/*)."
 echo "------------------------------------------------------------------"
 
+say "[i] Admin Access: https://${SIGNER_DOMAIN}/${ADMIN_PATH}"
 say "[✓] Done."
