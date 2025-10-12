@@ -5,6 +5,7 @@
 #        OpenSSL Root/Intermediate/per-document certs, OCSP responder, CRL/AIA,
 #        Admin portal (sign/revoke), Public portal (verify).
 # =============================================================================
+# autoconfig.sh
 
 set -euo pipefail
 
@@ -416,9 +417,8 @@ if [[ ! -d "$ROOT_DIR" ]]; then
   # Intermediate key/cert
   $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$INT_DIR/private/intermediate.key"
   $OPENSSL_BIN req -new -key "$INT_DIR/private/intermediate.key" -out "$INT_DIR/csr/intermediate.csr" -subj "/C=IN/O=dmj.one/CN=dmj.one Intermediate CA"
-  $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -extensions v3_intermediate \
-    -keyfile "$ROOT_DIR/private/root.key" -cert "$ROOT_DIR/certs/root.pem" \
-    -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem"
+  $OPENSSL_BIN ca -batch -config "$OPENSSL_CNF" -name dmj_root -extensions v3_intermediate -keyfile "$ROOT_DIR/private/root.key" -cert "$ROOT_DIR/certs/root.pem" -in "$INT_DIR/csr/intermediate.csr" -out "$INT_DIR/certs/intermediate.pem"
+
 
   # OCSP signer
   $OPENSSL_BIN ecparam -genkey -name prime256v1 -out "$INT_DIR/private/ocsp.key"
@@ -428,7 +428,8 @@ if [[ ! -d "$ROOT_DIR" ]]; then
     -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem"
 
   # CRL init & publish
-  $OPENSSL_BIN ca -config "$OPENSSL_CNF" -gencrl -out "$INT_DIR/crl/dmjone.crl"
+  $OPENSSL_BIN ca -config "$OPENSSL_CNF" -name dmj_intermediate -gencrl -keyfile "$INT_DIR/private/intermediate.key" -cert "$INT_DIR/certs/intermediate.pem" -out "$INT_DIR/crl/dmjone.crl"
+
   install -m 0644 "$INT_DIR/crl/dmjone.crl" "$STATIC_PKI_DIR/dmjone.crl"
   install -m 0644 "$INT_DIR/certs/intermediate.pem" "$STATIC_PKI_DIR/dmjone-int.pem"
   install -m 0644 "$ROOT_DIR/certs/root.pem" "$STATIC_PKI_DIR/dmjone-root.pem"
