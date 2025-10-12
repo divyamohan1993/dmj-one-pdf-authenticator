@@ -644,7 +644,8 @@ sudo touch "${ROOT_DIR}/index.txt" "${ICA_DIR}/index.txt"
 
 # OpenSSL configs (root + issuing)
 sudo tee "${ROOT_DIR}/openssl.cnf" >/dev/null <<EOF
-[ ca ] default_ca = CA_default
+[ ca ]
+default_ca = CA_default
 [ CA_default ]
 dir               = ${ROOT_DIR}
 database          = \$dir/index.txt
@@ -684,7 +685,8 @@ authorityKeyIdentifier = keyid:always
 EOF
 
 sudo tee "${ICA_DIR}/openssl.cnf" >/dev/null <<EOF
-[ ca ] default_ca = CA_default
+[ ca ]
+default_ca = CA_default
 [ CA_default ]
 dir               = ${ICA_DIR}
 database          = \$dir/index.txt
