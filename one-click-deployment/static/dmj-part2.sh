@@ -731,14 +731,15 @@ basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
-
 authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
 basicConstraints = CA:FALSE
-keyUsage = critical, digitalSignature
-extendedKeyUsage = nonRepudiation
-authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
+keyUsage = critical, digitalSignature, contentCommitment
+extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12
+subjectKeyIdentifier  = hash
+authorityKeyIdentifier = keyid:always,issuer
+authorityInfoAccess   = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
 [ ocsp ]
 basicConstraints = CA:FALSE
@@ -784,8 +785,11 @@ if [ ! -f "${OCSP_DIR}/ocsp.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
     -in "${OCSP_DIR}/ocsp.csr" -out "${OCSP_DIR}/ocsp.crt" -days 825 -md sha256 -notext
 fi
 
+
 # Signer (leaf) + PKCS#12 used by the Java service
 if [ ! -f "${SIGNER_DIR}/keystore.p12" ] || [ "$DMJ_REISSUE" = "1" ]; then
+  sudo rm -f "${SIGNER_DIR}/signer.crt" "${SIGNER_DIR}/signer.csr" "${SIGNER_DIR}/keystore.p12" "${SIGNER_DIR}/keystore.pass"
+  # Clean any failed/old leaf artifacts so re-issuing is idempotent
   say "[+] Issuing Document Signer leaf and building PKCS#12 ..."
   openssl genrsa -out "${SIGNER_DIR}/signer.key" 3072
   openssl req -new -sha256 \
@@ -804,6 +808,14 @@ if [ ! -f "${SIGNER_DIR}/keystore.p12" ] || [ "$DMJ_REISSUE" = "1" ]; then
   echo "$PASS" | sudo tee "${SIGNER_DIR}/keystore.pass" >/dev/null
   sudo chmod 600 "${SIGNER_DIR}/keystore.p12" "${SIGNER_DIR}/keystore.pass" "${SIGNER_DIR}/signer.key"
 fi
+
+# 1) Confirm KU/EKU are exactly as intended
+openssl x509 -in "${SIGNER_DIR}/signer.crt" -noout -text | \
+  awk '/X509v3 Key Usage/ {p=1;print;next} /X509v3/ && p {p=0} p; /X509v3 Extended Key Usage/ {p=1;print;next} /X509v3/ && p {p=0} p'
+
+# 2) Verify chain (leaf -> ICA -> Root)
+openssl verify -CAfile <(cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt") "${SIGNER_DIR}/signer.crt"
+
 
 # Publish chain & CRL for AIA/CDP and build a Trust Kit ZIP + README
 say "[+] Publishing chain & CRL at http://${PKI_DOMAIN}/ ..."
