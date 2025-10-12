@@ -624,6 +624,7 @@ from pyhanko.sign import signers
 from pyhanko.sign.validation import async_validate_pdf_signature
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko_certvalidator import ValidationContext
+from pyhanko.keys import load_cert_from_pemder
 
 # Paths for chain
 APP_BASE = os.path.dirname(__file__)
@@ -668,8 +669,11 @@ async def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subj
         except Exception: pass
 
 async def verify_pdf(pdf_bytes: bytes):
-    # Build validation context anchored at our root; allow OCSP/CRL fetching
-    vc = ValidationContext(trust_roots=[ROOT_PEM], allow_fetching=True)
+    # Build validation context anchored at our root; allow OCSP/CRL fetching.
+    # Pass a Certificate object, not a file path.
+    with open(ROOT_PEM, "rb") as rf:
+        root_cert = load_cert_from_pemder(rf.read())
+    vc = ValidationContext(trust_roots=[root_cert], allow_fetching=True)
     bio = io.BytesIO(pdf_bytes)
     # Use async validator to avoid nested event loop issues
     status = await async_validate_pdf_signature(bio, -1, validation_context=vc)
@@ -730,9 +734,13 @@ def require_admin_key(admin_key: str = Form(...)):
     return True
 
 @app.post("/admin/sign", response_class=StreamingResponse)
-def admin_sign(admin_ok: bool = Depends(require_admin_key), file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # in sync endpoints, read from the underlying SpooledTemporaryFile
-    data = file.file.read()
+async def admin_sign(
+    admin_ok: bool = Depends(require_admin_key),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    # async endpoint: read the uploaded file asynchronously
+    data = await file.read()
     if len(data) > UPLOAD_LIMIT_MB * 1024 * 1024:
         raise HTTPException(413, "File too large")
     sha = hashlib.sha256(data).hexdigest()
@@ -755,7 +763,7 @@ def admin_sign(admin_ok: bool = Depends(require_admin_key), file: UploadFile = F
         headers={"Content-Disposition": f'attachment; filename="{os.path.splitext(file.filename)[0]}-signed.pdf"'} )
 
 @app.post("/verify", response_class=JSONResponse)
-async def verify(file: UploadFile = Form(...), db: Session = Depends(get_db)):
+async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
     data = await file.read()
     sha = hashlib.sha256(data).hexdigest()
     hsha = hmac_sha256(sha)
