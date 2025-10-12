@@ -576,7 +576,7 @@ def issue_doc_cert(doc_uid:str):
     subprocess.check_call([OPENSSL, "req", "-new", "-key", key_pem, "-out", csr, "-subj", subj])    
     subprocess.check_call([
         OPENSSL, "ca", "-batch", "-config", str(OPENSSL_CNF),
-        "-name", "dmj_intermediate", "-extensions", "v3_document",
+        "-name", "dmj_intermediate", "-extensions", "v3_document", "-notext",
         "-keyfile", str(INT_DIR / "private" / "intermediate.key.enc"),
         "-passin", _passin(), "-cert", str(INT_DIR / "certs" / "intermediate.pem"),
         "-in", csr, "-out", cert_pem
@@ -626,6 +626,7 @@ from pyhanko.sign.validation import validate_pdf_signature
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko_certvalidator import ValidationContext, CertificateValidator
 from cryptography.hazmat.primitives import serialization
+from asn1crypto import pem as asn1_pem, x509 as asn1_x509
 
 # Paths for chain
 APP_BASE = os.path.dirname(__file__)
@@ -633,18 +634,28 @@ PKI_BASE = os.path.abspath(os.path.join(APP_BASE, "..", "pki"))
 ROOT_PEM = os.path.join(PKI_BASE, "ca", "certs", "root.pem")
 INT_PEM  = os.path.join(PKI_BASE, "intermediate", "certs", "intermediate.pem")
 
+def _asn1_from_pem(data: bytes):
+    """
+    Accept PEM or raw DER bytes and return an asn1crypto.x509.Certificate.
+    """
+    b = bytes(data)
+    if asn1_pem.detect(b):
+        _t, _h, der = asn1_pem.unarmor(b)
+    else:
+        der = b
+    return asn1_x509.Certificate.load(der)
+
+
 def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn: str) -> bytes:
     # Load private key
     priv_key = serialization.load_pem_private_key(key_pem, password=None)
     # Load certs for chain
     with open(INT_PEM, 'rb') as f: int_pem = f.read()
     with open(ROOT_PEM, 'rb') as f: root_pem = f.read()
-    # cert = signers.load_cert_from_pem(cert_pem)
-    # int_cert = signers.load_cert_from_pem(int_pem)
-    # root_cert = signers.load_cert_from_pem(root_pem)
-    cert = load_cert_from_pemder(cert_pem)
-    int_cert = load_cert_from_pemder(int_pem)
-    root_cert = load_cert_from_pemder(root_pem)
+    # Parse in-memory bytes into ASN.1 certificates for pyHanko
+    cert = _asn1_from_pem(cert_pem)
+    int_cert = _asn1_from_pem(int_pem)
+    root_cert = _asn1_from_pem(root_pem)
     # SimpleSigner with chain
     signer = signers.SimpleSigner(
         signing_cert=cert,
@@ -670,8 +681,7 @@ def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn
 def verify_pdf(pdf_bytes: bytes):
     # Build validation context anchored at our root; allow OCSP/CRL fetching
     with open(ROOT_PEM, 'rb') as f:
-        root_pem = f.read()
-    root_cert = load_cert_from_pemder(root_pem)
+        root_cert = _asn1_from_pem(f.read())
     vc = ValidationContext(trust_roots=[root_cert], allow_fetching=True)
     # Validate
     bio = io.BytesIO(pdf_bytes)
