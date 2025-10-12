@@ -2425,6 +2425,7 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
     if (!session) return renderAdminLogin(env.ISSUER, adminPath);
     return renderAdminDashboard(env.ISSUER, adminPath);
   }
+  
 
   if (req.method === "POST"){
     const form = await req.formData();    
