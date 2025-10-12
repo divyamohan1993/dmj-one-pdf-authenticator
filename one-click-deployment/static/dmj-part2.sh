@@ -723,7 +723,7 @@ basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
-# AIA/CRL so viewers know where to fetch chain/OCSP/CRL
+
 authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
