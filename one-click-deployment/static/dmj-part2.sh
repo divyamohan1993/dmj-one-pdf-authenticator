@@ -70,10 +70,16 @@ if [ -z "${CF_D1_DATABASE_ID}" ]; then
   exit 1
 fi
 
+# --- Admin credential rotation flags -----------------------------------------
+# Rotate the admin login key on every deploy (recommended: keep =1)
+DMJ_ROTATE_ADMIN_KEY="${DMJ_ROTATE_ADMIN_KEY:-1}"
+# Also rotate the session HMAC so all existing admin sessions are forced to re-login
+DMJ_FORCE_ADMIN_RELOGIN="${DMJ_FORCE_ADMIN_RELOGIN:-1}"
+
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-0}" # Never enable this
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then    
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
@@ -161,6 +167,24 @@ fi
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
 
+# If we rotate admin creds, also rotate the session cookie HMAC so old sessions die immediately.
+if [ "${DMJ_ROTATE_ADMIN_KEY}" = "1" ] && [ "${DMJ_FORCE_ADMIN_RELOGIN}" = "1" ]; then
+  say "[i] Rotating SESSION_HMAC_KEY to invalidate existing admin sessions..."
+  SESSION_HMAC_KEY="$(openssl rand -base64 32)"
+  # Rewrite the secrets file atomically with the new session key (preserve other keys)
+  sudo tee "${SECRETS_FILE}" >/dev/null <<EOF
+SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
+SESSION_HMAC_KEY=${SESSION_HMAC_KEY}
+TOTP_MASTER_KEY=${TOTP_MASTER_KEY}
+EOF
+  sudo chmod 600 "${SECRETS_FILE}"
+fi
+
+# (Re)load to ensure current shell sees any rotation above
+# shellcheck disable=SC1090
+source "$SECRETS_FILE"
+
+
 # Sanity-check: do not proceed with empty secrets (prevents bad deploys)
 for v in SIGNING_GATEWAY_HMAC_KEY SESSION_HMAC_KEY TOTP_MASTER_KEY; do
   if [ -z "${!v:-}" ]; then
@@ -175,12 +199,16 @@ done
 ADMIN_KEY_FILE="${STATE_DIR}/admin-key.txt"
 
 
-if [ ! -f "$ADMIN_KEY_FILE" ]; then
-  # 28 hex chars, alphanumeric and safe for display/input
-  ADMIN_PORTAL_KEY="$(openssl rand -hex 14)"
+# Always rotate the admin key at each deploy (unless explicitly disabled)
+if [ "${DMJ_ROTATE_ADMIN_KEY}" = "1" ]; then
+  say "[i] Rotating admin portal key for this deploy..."
+  ADMIN_PORTAL_KEY="$(openssl rand -hex 14)"   # 28 hex chars, keyboard‑friendly
   printf '%s\n' "$ADMIN_PORTAL_KEY" | sudo tee "$ADMIN_KEY_FILE" >/dev/null
+  sudo chmod 600 "$ADMIN_KEY_FILE"
 else
-  ADMIN_PORTAL_KEY="$(cat "$ADMIN_KEY_FILE")"
+  # fallback: keep previous key or create one if missing
+  ADMIN_PORTAL_KEY="$(cat "$ADMIN_KEY_FILE" 2>/dev/null || openssl rand -hex 14)"
+  printf '%s\n' "$ADMIN_PORTAL_KEY" | sudo tee "$ADMIN_KEY_FILE" >/dev/null
 fi
 
 # Compute PBKDF2 hash for the admin key (same format Worker will verify):
@@ -1139,6 +1167,16 @@ sudo chown -R dmjsvc:dmjsvc "$WORKER_DIR"
 # Worker TS (admin portal, sign, verify, revoke). Uses Web Crypto + D1.
 sudo tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
 // DMJ Worker — admin portal, sign, verify
+// export interface Env {
+//   DB: D1Database
+//   ISSUER: string
+//   SIGNER_API_BASE: string
+//   DB_PREFIX: string
+//   SIGNING_GATEWAY_HMAC_KEY: string
+//   SESSION_HMAC_KEY: string
+//   TOTP_MASTER_KEY: string
+//   ADMIN_PASS_HASH: string
+// }
 export interface Env {
   DB: D1Database
   ISSUER: string
@@ -1148,9 +1186,28 @@ export interface Env {
   SESSION_HMAC_KEY: string
   TOTP_MASTER_KEY: string
   ADMIN_PASS_HASH: string
+  PKI_BASE?: string
+  BUNDLE_TRUST_KIT?: string
 }
 
-const text = (s: string) => new Response(s, { headers: { "content-type":"text/html; charset=utf-8", "x-frame-options":"DENY", "referrer-policy":"no-referrer", "content-security-policy":"default-src 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'" }});
+// const text = (s: string) => new Response(s, { headers: { "content-type":"text/html; charset=utf-8", "x-frame-options":"DENY", "referrer-policy":"no-referrer", "content-security-policy":"default-src 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'" }});
+const text = (s: string) =>
+  new Response(s, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      // allow CSS/fonts from CDNs + our inline script/fetch to same-origin
+      "content-security-policy":
+        "default-src 'self'; " +
+        "style-src 'self' 'unsafe-inline' https:; " +
+        "font-src 'self' https: data:; " +
+        "img-src 'self' https: data:; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "connect-src 'self' https:; " +
+        "frame-ancestors 'none'"
+    }
+  });
 const json = (o: any, status=200) => new Response(JSON.stringify(o), {status, headers: {"content-type":"application/json"}});
 
 async function hmac(env: Env, input: ArrayBuffer, method: string, path: string){
@@ -1362,20 +1419,280 @@ async function verifySession(env: Env, b64v: string){
   } catch { return null; }
 }
 
-function renderHome(issuer: string){
+// function renderHome(issuer: string){
+//   return text(`<!doctype html>
+// <html><head><meta charset="utf-8"><title>dmj.one verifier</title>
+// <style>body{font-family:ui-sans-serif,system-ui;padding:32px;max-width:860px;margin:auto}header{margin-bottom:24px}</style></head>
+// <body>
+// <header><h1>dmj.one — Document Verifier</h1>
+// <p>Upload a PDF to verify it was issued by <b>${issuer}</b>.</p></header>
+// <form method="post" action="/verify" enctype="multipart/form-data">
+//   <input type="file" name="file" accept="application/pdf" required>
+//   <button type="submit">Verify</button>
+// </form>
+// <p><a href="/admin">Admin</a> • <a href="https://pki.${issuer}/dmj-one-trust-kit.zip">Download dmj.one Trust Kit (ZIP)</a></p>
+// </body></html>`);
+// }
+
+function renderHome(issuerDomain: string) {
+  const pkiZip = `https://pki.${issuerDomain}/dmj-one-trust-kit.zip`;
+
   return text(`<!doctype html>
-<html><head><meta charset="utf-8"><title>dmj.one verifier</title>
-<style>body{font-family:ui-sans-serif,system-ui;padding:32px;max-width:860px;margin:auto}header{margin-bottom:24px}</style></head>
-<body>
-<header><h1>dmj.one — Document Verifier</h1>
-<p>Upload a PDF to verify it was issued by <b>${issuer}</b>.</p></header>
-<form method="post" action="/verify" enctype="multipart/form-data">
-  <input type="file" name="file" accept="application/pdf" required>
-  <button type="submit">Verify</button>
-</form>
-<p><a href="/admin">Admin</a> • <a href="https://pki.${issuer}/dmj-one-trust-kit.zip">Download dmj.one Trust Kit (ZIP)</a></p>
-</body></html>`);
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>dmj.one Trust Services — Document Verification</title>
+
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+<link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
+
+<style>
+  :root { --brand: #0d6efd; }
+  body {
+    background: radial-gradient(1200px 600px at 20% -10%, rgba(13,110,253,.07), transparent 60%),
+                radial-gradient(1200px 600px at 80% -10%, rgba(32,201,151,.06), transparent 60%),
+                #ffffff;
+  }
+  .hero-card {
+    backdrop-filter: saturate(140%) blur(8px);
+    background: rgba(255,255,255,.85);
+    border: 1px solid rgba(0,0,0,.06);
+  }
+  .upload-label { cursor: pointer; }
+  .only-one-btn .btn:not(.upload-btn) { display: none !important; } /* keep the 'single button' rule */
+  .verdict-badge {
+    font-size: clamp(28px, 4.2vw, 48px);
+    line-height: 1.1;
+  }
+  .hash-chip {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: .9rem; background: #f8f9fb; border: 1px solid #edf0f3; padding: .35rem .55rem; border-radius: .5rem;
+  }
+  .stat-dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; margin-right: .4rem; }
+  .stat-yes { background: #17b26a; } .stat-no { background: #ef4343; }
+  .fade-slow { animation-duration: .8s; }
+</style>
+</head>
+
+<body class="only-one-btn">
+  <header class="container py-5">
+    <div class="row g-4 align-items-center">
+      <div class="col-lg-7">
+        <div class="p-4 p-md-5 rounded-4 shadow-sm hero-card animate__animated animate__fadeInDown fade-slow">
+          <div class="d-flex align-items-center mb-3">
+            <i class="bi-shield-check me-2" style="font-size:1.8rem;color:var(--brand)"></i>
+            <h1 class="h3 mb-0">dmj.one Trust Services</h1>
+          </div>
+          <p class="text-secondary mb-4">Official Document Authenticity Verifier. Upload a PDF to check if it is issued by <span class="fw-semibold">${issuerDomain}</span> and unaltered.</p>
+
+          <!-- Single action: Upload File -->
+          <input id="fileInput" class="d-none" type="file" name="file" accept="application/pdf" />
+          <label for="fileInput" class="btn btn-primary btn-lg px-4 upload-btn upload-label">
+            <i class="bi-upload me-2"></i>Upload File
+          </label>
+
+          <!-- live state -->
+          <div id="liveState" class="mt-4" hidden>
+            <div class="d-flex align-items-center gap-3">
+              <div class="spinner-border" role="status" aria-hidden="true"></div>
+              <div>
+                <div class="fw-semibold" id="stateLine">Starting verification…</div>
+                <div class="small text-secondary" id="fileName"></div>
+              </div>
+            </div>
+            <div class="progress mt-3" role="progressbar" aria-label="Verifying">
+              <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+            </div>
+          </div>
+
+          <!-- verdict -->
+          <div id="verdictWrap" class="mt-4" hidden>
+            <div class="p-4 rounded-4 border animate__animated animate__fadeInUp fade-slow" id="verdictCard">
+              <div class="d-flex align-items-center">
+                <i id="verdictIcon" class="bi me-3" style="font-size:2.25rem"></i>
+                <div>
+                  <div id="verdictText" class="verdict-badge fw-bold"></div>
+                  <div class="mt-2">
+                    <span class="hash-chip" id="shaChip" title="SHA‑256"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Advanced report link (not a button) -->
+              <a href="#" id="toggleAdvanced" class="d-inline-flex align-items-center mt-3 text-decoration-none">
+                <i class="bi-caret-right-fill me-1"></i><span>View advanced report</span>
+              </a>
+
+              <!-- Advanced panel -->
+              <div id="advancedPanel" class="mt-3" hidden>
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <div class="p-3 rounded-3 border bg-white h-100">
+                      <div class="mb-2 fw-semibold">Signature & Document</div>
+                      <ul class="list-unstyled mb-0 small">
+                        <li><span class="stat-dot stat-yes" id="sigObjDot"></span>Signature object present</li>
+                        <li><span class="stat-dot stat-yes" id="cryptoDot"></span>Embedded signature is cryptographically valid</li>
+                        <li><span class="stat-dot stat-yes" id="coverDot"></span>Signature covers the whole document</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <div class="p-3 rounded-3 border bg-white h-100">
+                      <div class="mb-2 fw-semibold">Issuer & Registry</div>
+                      <ul class="list-unstyled mb-0 small">
+                        <li><span class="stat-dot stat-yes" id="oursDot"></span>Signed by dmj.one key</li>
+                        <li><span class="stat-dot stat-yes" id="regDot"></span>Registered by dmj.one</li>
+                        <li><span class="stat-dot stat-yes" id="revokedDot"></span>Revocation check</li>
+                        <li class="mt-2 text-break"><span class="text-secondary">Issuer DN:</span> <code id="issuerDn"></code></li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-3 small text-secondary">Tip: Install the Trust Kit below so Acrobat/Reader shows “signature is valid” automatically.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trust Kit side card -->
+      <div class="col-lg-5">
+        <div class="p-4 rounded-4 shadow-sm hero-card animate__animated animate__fadeInRight fade-slow">
+          <div class="d-flex align-items-center mb-2">
+            <i class="bi-box-arrow-down me-2" style="font-size:1.5rem;color:var(--brand)"></i>
+            <h2 class="h5 mb-0">Trust Kit (Root & Issuing CA)</h2>
+          </div>
+          <p class="small text-secondary mb-3">Install once so dmj.one‑signed PDFs show as trusted in Acrobat/Reader and system trust stores.</p>
+          <div class="d-flex align-items-center">
+            <a href="${pkiZip}" class="link-primary d-inline-flex align-items-center" download>
+              <i class="bi-file-zip me-2"></i> Download <span class="ms-1">dmj‑one‑trust‑kit.zip</span>
+            </a>
+          </div>
+          <div class="small text-secondary mt-2">
+            Includes quick guides for Windows, macOS, Linux, and an Acrobat‑only path.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-center mt-4 small text-secondary">
+      <span class="opacity-75">© dmj.one Trust Services</span>
+      <span class="mx-2">•</span>
+      <a class="link-secondary" href="/admin">Admin</a>
+    </div>
+  </header>
+
+<script>
+  (function(){
+    const fileInput = document.getElementById('fileInput');
+    const liveState = document.getElementById('liveState');
+    const stateLine = document.getElementById('stateLine');
+    const fileNameEl = document.getElementById('fileName');
+    const verdictWrap = document.getElementById('verdictWrap');
+    const verdictCard = document.getElementById('verdictCard');
+    const verdictIcon = document.getElementById('verdictIcon');
+    const verdictText = document.getElementById('verdictText');
+    const shaChip = document.getElementById('shaChip');
+
+    const toggleAdvanced = document.getElementById('toggleAdvanced');
+    const advancedPanel = document.getElementById('advancedPanel');
+
+    const dots = {
+      sigObjDot: document.getElementById('sigObjDot'),
+      cryptoDot: document.getElementById('cryptoDot'),
+      coverDot: document.getElementById('coverDot'),
+      oursDot: document.getElementById('oursDot'),
+      regDot: document.getElementById('regDot'),
+      revokedDot: document.getElementById('revokedDot'),
+    };
+    const issuerDn = document.getElementById('issuerDn');
+
+    function setDot(el, ok){
+      el.classList.toggle('stat-yes', !!ok);
+      el.classList.toggle('stat-no', !ok);
+    }
+
+    function show(state){
+      if(state === 'busy'){
+        verdictWrap.hidden = true;
+        liveState.hidden = false;
+      } else if(state === 'done'){
+        liveState.hidden = true;
+        verdictWrap.hidden = false;
+        verdictCard.classList.remove('animate__fadeInUp');
+        void verdictCard.offsetWidth; // reflow
+        verdictCard.classList.add('animate__fadeInUp');
+      }
+    }
+
+    toggleAdvanced.addEventListener('click', function(e){
+      e.preventDefault();
+      const open = advancedPanel.hidden;
+      advancedPanel.hidden = !open;
+      this.querySelector('i').className = open ? 'bi-caret-down-fill me-1' : 'bi-caret-right-fill me-1';
+      this.querySelector('span').textContent = open ? 'Hide advanced report' : 'View advanced report';
+    });
+
+    fileInput.addEventListener('change', async function(){
+      const f = this.files && this.files[0];
+      if(!f) return;
+      stateLine.textContent = 'Uploading & verifying…';
+      fileNameEl.textContent = f.name;
+      show('busy');
+
+      try{
+        const fd = new FormData();
+        fd.set('file', f, f.name);
+
+        const res = await fetch('/verify?json=1', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } });
+        if(!res.ok){
+          throw new Error('Server returned ' + res.status);
+        }
+        const r = await res.json();
+
+        // verdict
+        const isValid = (r && r.verdict === 'valid');
+        verdictIcon.className = isValid ? 'bi-shield-check text-success me-3' : 'bi-shield-x text-danger me-3';
+        verdictText.className = 'verdict-badge fw-bold ' + (isValid ? 'text-success' : 'text-danger');
+        verdictText.textContent = isValid ? 'VALID' : 'TAMPERED';
+        shaChip.textContent = (r.sha256 || '').slice(0, 16) + '…' + (r.sha256 || '').slice(-16);
+
+        // advanced
+        setDot(dots.sigObjDot, !!r.hasSignature);
+        setDot(dots.cryptoDot, !!r.isValid);
+        setDot(dots.coverDot, !!r.coversDocument);
+        setDot(dots.oursDot, !!r.issuedByUs);
+        setDot(dots.regDot, !!r.issued);
+        setDot(dots.revokedDot, !r.revoked); // green when not revoked
+        issuerDn.textContent = r.issuer || '';
+
+        show('done');
+      } catch(err){
+        verdictIcon.className = 'bi-exclamation-triangle text-danger me-3';
+        verdictText.className = 'verdict-badge fw-bold text-danger';
+        verdictText.textContent = 'TAMPERED';
+        shaChip.textContent = 'n/a';
+        setDot(dots.sigObjDot, false);
+        setDot(dots.cryptoDot, false);
+        setDot(dots.coverDot, false);
+        setDot(dots.oursDot, false);
+        setDot(dots.regDot, false);
+        setDot(dots.revokedDot, false);
+        issuerDn.textContent = 'Error: ' + (err && err.message ? err.message : 'Unknown error');
+        show('done');
+      } finally {
+        // reset input so selecting the same file again still triggers 'change'
+        this.value = '';
+      }
+    });
+  })();
+</script>
+</body>
+</html>`);
 }
+
 
 
 function diagnostics(env: Env, haveDB=true){
@@ -1620,51 +1937,114 @@ async function handleAdmin(env: Env, req: Request){
   });
 }
 
+// async function handleVerify(env: Env, req: Request){
+//   await ensureSchema(env);
+//   const form = await req.formData();
+//   const f = form.get("file") as File | null;
+//   if (!f) return json({error:"file missing"}, 400);
+//   const buf = await f.arrayBuffer();
+//   const sha = await sha256(buf);
+// 
+//   const p = env.DB_PREFIX;
+//   const row = await env.DB.prepare(`SELECT signed_at, revoked_at FROM ${p}documents WHERE doc_sha256=?`).bind(sha).first() as any;
+// 
+//   // Also ask signer to validate embedded signature/issuer
+//   const vf = new FormData(); vf.set("file", new Blob([buf],{type:"application/pdf"}), "doc.pdf");
+//   const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
+//   const vinfo = vres.ok ? await vres.json() : {isValid:false, issuer:""};
+//   
+//   const issued = !!row;
+//   const tampered = !(vinfo && vinfo.hasSignature && vinfo.isValid && vinfo.coversDocument && vinfo.issuedByUs);
+//   const revoked = !!row?.revoked_at;
+// 
+//   const statusHtml = revoked || tampered ? '❌ <b>Revoked or altered</b>' : '✅ <b>Active</b>';
+// 
+//   const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
+//   const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
+//   <body style="font-family:ui-sans-serif;padding:32px">
+//   <h1>Verification result</h1>
+//   <p>SHA-256: <code>${sha}</code></p>
+//   
+//   <p>Status: ${statusHtml}</p>
+//   
+//   <ul>
+//     <li>Registered by dmj.one: ${issued ? "✅" : "❌"}</li>
+//     <li>Revoked: ${revoked ? "❌ (revoked)" : "✅ (not revoked)"}</li>
+//     <li>Signature object present: ${vinfo.hasSignature ? "✅" : "❌"}</li>
+//     <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>
+//     <li>Covers whole document (ByteRange): ${vinfo.coversDocument ? "✅" : "❌"}</li>
+//     <li>Signed by our key (dmj.one): ${vinfo.issuedByUs ? "✅" : "❌"}</li>
+//     <li>Issuer (from signature): <code>${vinfo.issuer||""}</code></li>
+//   </ul>
+//   
+//   <h2>${revoked || tampered ? "❌ Not valid / tampered" : "✅ Genuine (dmj.one)"}</h2>
+//   <p><a href="/">Back</a></p></body>`;
+// 
+//   return text(html);
+// }
+
 async function handleVerify(env: Env, req: Request){
   await ensureSchema(env);
+
   const form = await req.formData();
   const f = form.get("file") as File | null;
   if (!f) return json({error:"file missing"}, 400);
+
   const buf = await f.arrayBuffer();
   const sha = await sha256(buf);
 
   const p = env.DB_PREFIX;
   const row = await env.DB.prepare(`SELECT signed_at, revoked_at FROM ${p}documents WHERE doc_sha256=?`).bind(sha).first() as any;
 
-  // Also ask signer to validate embedded signature/issuer
+  // Ask signer to validate embedded signature/issuer
   const vf = new FormData(); vf.set("file", new Blob([buf],{type:"application/pdf"}), "doc.pdf");
   const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
-  const vinfo = vres.ok ? await vres.json() : {isValid:false, issuer:""};
-  
-  const issued = !!row;
-  const tampered = !(vinfo && vinfo.hasSignature && vinfo.isValid && vinfo.coversDocument && vinfo.issuedByUs);
+  const vinfo = vres.ok ? await vres.json() : { hasSignature:false, isValid:false, coversDocument:false, issuedByUs:false, issuer:"" };
+
+  const issued  = !!row;
   const revoked = !!row?.revoked_at;
+  const okSig   = vinfo.hasSignature && vinfo.isValid && vinfo.coversDocument && vinfo.issuedByUs;
+  const verdict = (issued && !revoked && okSig) ? "valid" : "tampered";
 
-  const statusHtml = revoked || tampered ? '❌ <b>Revoked or altered</b>' : '✅ <b>Active</b>';
+  // JSON mode (for inline UX)
+  const u = new URL(req.url);
+  const wantsJson = u.searchParams.get("json") === "1" || (req.headers.get("accept")||"").includes("application/json");
+  if (wantsJson) {
+    return json({
+      sha256: sha,
+      verdict,
+      issued,
+      revoked,
+      hasSignature: !!vinfo.hasSignature,
+      isValid:      !!vinfo.isValid,
+      coversDocument: !!vinfo.coversDocument,
+      issuedByUs:   !!vinfo.issuedByUs,
+      issuer:       String(vinfo.issuer || ""),
+      verifiedAt:   now()
+    });
+  }
 
-  const ok = !!row && !row.revoked_at && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
-  const html = `<!doctype html><meta charset="utf-8"><title>Verify</title>
+  // existing HTML path (unchanged), but you can keep your current markup here
+  const statusHtml = revoked || !okSig ? '❌ <b>Revoked or altered</b>' : '✅ <b>Active</b>';
+  const html = \`<!doctype html><meta charset="utf-8"><title>Verify</title>
   <body style="font-family:ui-sans-serif;padding:32px">
   <h1>Verification result</h1>
-  <p>SHA-256: <code>${sha}</code></p>
-  
-  <p>Status: ${statusHtml}</p>
-  
+  <p>SHA-256: <code>\${sha}</code></p>
+  <p>Status: \${statusHtml}</p>
   <ul>
-    <li>Registered by dmj.one: ${issued ? "✅" : "❌"}</li>
-    <li>Revoked: ${revoked ? "❌ (revoked)" : "✅ (not revoked)"}</li>
-    <li>Signature object present: ${vinfo.hasSignature ? "✅" : "❌"}</li>
-    <li>Embedded signature cryptographically valid: ${vinfo.isValid ? "✅" : "❌"}</li>
-    <li>Covers whole document (ByteRange): ${vinfo.coversDocument ? "✅" : "❌"}</li>
-    <li>Signed by our key (dmj.one): ${vinfo.issuedByUs ? "✅" : "❌"}</li>
-    <li>Issuer (from signature): <code>${vinfo.issuer||""}</code></li>
+    <li>Registered by dmj.one: \${issued ? "✅" : "❌"}</li>
+    <li>Revoked: \${revoked ? "❌ (revoked)" : "✅ (not revoked)"}</li>
+    <li>Signature object present: \${vinfo.hasSignature ? "✅" : "❌"}</li>
+    <li>Embedded signature cryptographically valid: \${vinfo.isValid ? "✅" : "❌"}</li>
+    <li>Covers whole document (ByteRange): \${vinfo.coversDocument ? "✅" : "❌"}</li>
+    <li>Signed by our key (dmj.one): \${vinfo.issuedByUs ? "✅" : "❌"}</li>
+    <li>Issuer (from signature): <code>\${vinfo.issuer||""}</code></li>
   </ul>
-  
-  <h2>${revoked || tampered ? "❌ Not valid / tampered" : "✅ Genuine (dmj.one)"}</h2>
-  <p><a href="/">Back</a></p></body>`;
-
+  <h2>\${(verdict === "valid") ? "✅ Genuine (dmj.one)" : "❌ Not valid / tampered"}</h2>
+  <p><a href="/">Back</a></p></body>\`;
   return text(html);
 }
+
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -1751,6 +2131,13 @@ SQL
 say "[+] Applying schema to remote D1..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
 
+# Optional clean-up: remove any server-side session records (not strictly required,
+# since rotating SESSION_HMAC_KEY already invalidates cookies, but keeps table tidy).
+if [ "${DMJ_FORCE_ADMIN_RELOGIN}" = "1" ]; then
+  say "[i] Purging server-side session rows..."
+  ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "DELETE FROM ${DB_PREFIX}sessions;" ) || true
+fi
+
 # Insert one-time admin key for first GUI fetch
 say "[+] Storing one-time admin portal key for first GUI access..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command \
@@ -1767,6 +2154,7 @@ say "[+] Pushing Worker secrets to Cloudflare..."
   printf '%s' "${SESSION_HMAC_KEY}"        | "$WR" secret put SESSION_HMAC_KEY        --name "${WORKER_NAME}"
   printf '%s' "${TOTP_MASTER_KEY}"         | "$WR" secret put TOTP_MASTER_KEY         --name "${WORKER_NAME}"
   printf '%s' "${ADMIN_HASH}"              | "$WR" secret put ADMIN_PASS_HASH         --name "${WORKER_NAME}"
+  # ^ Each 'secret put' creates a new Worker version with updated secrets.
 
   # restore previous xtrace state
   eval "$_xtrace_state"
