@@ -1459,9 +1459,9 @@ const text = (html: string, nonce: string) =>
         "style-src 'self' 'unsafe-inline' https:; " + // keep styles simple
         "font-src 'self' https: data:; " +
         "img-src 'self' https: data:; " +
-        `script-src 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; ` +
-        `script-src-elem 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; ` +
-        "connect-src 'self' https: https://cloudflareinsights.com; " +
+        `script-src 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com https://dmj.one; ` +
+        `script-src-elem 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com https://dmj.one; ` +
+        "connect-src 'self' https: https://cloudflareinsights.com https://dmj.one; " +
         "frame-ancestors 'none'"
     }
   });
@@ -1732,6 +1732,10 @@ function renderHome(issuerDomain: string, nonce: string) {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="dark light" />
 <title>dmj.one Trust Services — Document Verification</title>
+
+<link rel="shortcut icon" href="//dmj.one/logo.png">
+<link rel="fluid-icon" href="//dmj.one//logo.png">
+<link rel="apple-touch-icon" href="//dmj.one//logo.png">
 
 <!-- Core CSS -->
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -2185,6 +2189,9 @@ function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin · dmj.one</title>
+  <link rel="shortcut icon" href="//dmj.one/logo.png">
+  <link rel="fluid-icon" href="//dmj.one//logo.png">
+  <link rel="apple-touch-icon" href="//dmj.one//logo.png">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
@@ -2233,6 +2240,9 @@ function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin bootstrap · dmj.one</title>
+  <link rel="shortcut icon" href="//dmj.one/logo.png">
+  <link rel="fluid-icon" href="//dmj.one//logo.png">
+  <link rel="apple-touch-icon" href="//dmj.one//logo.png">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
   <style>code.key{font-size:1.15rem;padding:.6rem .8rem;background:#f6f7f9;border:1px solid #e9eef3;border-radius:.5rem;display:block}</style>
@@ -2275,6 +2285,9 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Admin Dashboard · dmj.one</title>
+  <link rel="shortcut icon" href="//dmj.one/logo.png">
+  <link rel="fluid-icon" href="//dmj.one//logo.png">
+  <link rel="apple-touch-icon" href="//dmj.one//logo.png">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
