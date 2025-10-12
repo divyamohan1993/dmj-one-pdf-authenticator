@@ -572,6 +572,8 @@ def issue_doc_cert(doc_uid:str):
     cert_pem = os.path.join(tmp, "doc.crt")
     subj = f"/C=IN/O=dmj.one/CN=dmj.one Document Cert {doc_uid}"
     subprocess.check_call([OPENSSL, "ecparam", "-genkey", "-name", "prime256v1", "-out", key_pem])
+    # convert SEC1 to PKCS#8 (unencrypted)
+    subprocess.check_call([OPENSSL, "pkcs8", "-topk8", "-nocrypt", "-in", key_pem, "-out", key_pem])
     csr = os.path.join(tmp, "doc.csr")
     subprocess.check_call([OPENSSL, "req", "-new", "-key", key_pem, "-out", csr, "-subj", subj])    
     subprocess.check_call([
@@ -617,17 +619,11 @@ PY
 
   # pdf_ops.py (pyHanko sign/verify)
   cat > "$APP_CODE_DIR/pdf_ops.py" <<'PY'
-import os, io, binascii
-from datetime import datetime, timezone
+import os, io, tempfile
 from pyhanko.sign import signers
-from pyhanko.sign.signers import sign_pdf
-from pyhanko.keys import load_cert_from_pemder
-from pyhanko.sign.validation import validate_pdf_signature
+from pyhanko.sign.validation import async_validate_pdf_signature
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
-from pyhanko_certvalidator import ValidationContext, CertificateValidator
-from cryptography.hazmat.primitives import serialization
-from asn1crypto import pem as asn1_pem, x509 as asn1_x509
-from pyhanko_certvalidator.registry import SimpleCertificateStore
+from pyhanko_certvalidator import ValidationContext
 
 # Paths for chain
 APP_BASE = os.path.dirname(__file__)
@@ -635,58 +631,48 @@ PKI_BASE = os.path.abspath(os.path.join(APP_BASE, "..", "pki"))
 ROOT_PEM = os.path.join(PKI_BASE, "ca", "certs", "root.pem")
 INT_PEM  = os.path.join(PKI_BASE, "intermediate", "certs", "intermediate.pem")
 
-def _asn1_from_pem(data: bytes):
+async def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn: str) -> bytes:
     """
-    Accept PEM or raw DER bytes and return an asn1crypto.x509.Certificate.
+    Async PAdES signing that plays nicely with FastAPI's event loop.
+    We let pyHanko load the key/cert from temp files via SimpleSigner.load(),
+    which guarantees the key has the right (asn1crypto) type.
     """
-    b = bytes(data)
-    if asn1_pem.detect(b):
-        _t, _h, der = asn1_pem.unarmor(b)
-    else:
-        der = b
-    return asn1_x509.Certificate.load(der)
+    # write key & leaf cert to secure temp files
+    kf = tempfile.NamedTemporaryFile(prefix="dmj-doc-key-", suffix=".pem", delete=False)
+    cf = tempfile.NamedTemporaryFile(prefix="dmj-doc-crt-", suffix=".pem", delete=False)
+    try:
+        kf.write(key_pem); kf.flush()
+        cf.write(cert_pem); cf.flush()
 
+        cms_signer = signers.SimpleSigner.load(
+            kf.name, cf.name,
+            # usually include only the intermediate in the embedded chain
+            ca_chain_files=(INT_PEM,)
+            # key_passphrase=None  # our per-doc key is unencrypted on disk
+        )
+        pdf_in = io.BytesIO(pdf_bytes)
+        w = IncrementalPdfFileWriter(pdf_in)
+        meta = signers.PdfSignatureMetadata(
+            field_name="dmjone_sig",
+            reason="Document authenticated by dmj.one",
+            location="dmj.one",
+        )
+        out = io.BytesIO()
+        pdf_signer = signers.PdfSigner(meta, signer=cms_signer)
+        await pdf_signer.async_sign_pdf(w, output=out)
+        return out.getvalue()
+    finally:
+        try: kf.close(); os.unlink(kf.name)
+        except Exception: pass
+        try: cf.close(); os.unlink(cf.name)
+        except Exception: pass
 
-def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn: str) -> bytes:
-    # Load private key
-    priv_key = serialization.load_pem_private_key(key_pem, password=None)
-    # Load certs for chain
-    with open(INT_PEM, 'rb') as f: int_pem = f.read()
-    with open(ROOT_PEM, 'rb') as f: root_pem = f.read()
-    # Parse in-memory bytes into ASN.1 certificates for pyHanko
-    cert = _asn1_from_pem(cert_pem)
-    int_cert = _asn1_from_pem(int_pem)
-    root_cert = _asn1_from_pem(root_pem)    
-    cert_registry = SimpleCertificateStore()
-    cert_registry.register_multiple([int_cert, root_cert])
-    # SimpleSigner with chain
-    signer = signers.SimpleSigner(
-        signing_cert=cert,
-        signing_key=priv_key,
-        cert_registry=cert_registry,        
-    )
-    # Prepare PDF writer
-    pdf_in = io.BytesIO(pdf_bytes)
-    w = IncrementalPdfFileWriter(pdf_in)
-    meta = signers.PdfSignatureMetadata(
-        field_name="dmjone_sig",
-        reason="Document authenticated by dmj.one",
-        location="dmj.one",
-        # PAdES baseline B-T: include timestamp if TSA configured; else B-B
-    )
-    out = io.BytesIO()
-    # Sign (pyHanko will embed chain; OCSP/CRL URLs are in cert extensions)    
-    sign_pdf(w, signer=signer, signature_meta=meta, output=out)
-    return out.getvalue()
-
-def verify_pdf(pdf_bytes: bytes):
+async def verify_pdf(pdf_bytes: bytes):
     # Build validation context anchored at our root; allow OCSP/CRL fetching
-    with open(ROOT_PEM, 'rb') as f:
-        root_cert = _asn1_from_pem(f.read())
-    vc = ValidationContext(trust_roots=[root_cert], allow_fetching=True)
-    # Validate
+    vc = ValidationContext(trust_roots=[ROOT_PEM], allow_fetching=True)
     bio = io.BytesIO(pdf_bytes)
-    status = validate_pdf_signature(bio, -1, validation_context=vc)
+    # Use async validator to avoid nested event loop issues
+    status = await async_validate_pdf_signature(bio, -1, validation_context=vc)
     ok = status.summary().valid
     chain = status.bottom_line_summary
     signer_fp = status.signer_cert.sha1.hex().upper() if status.signer_cert else ""
@@ -753,8 +739,8 @@ def admin_sign(admin_ok: bool = Depends(require_admin_key), file: UploadFile = F
     hsha = hmac_sha256(sha)
     doc_uid = str(uuid.uuid4())
     key_pem, cert_pem, serial_hex, subject_cn = issue_doc_cert(doc_uid)
-    signed_pdf = sign_pdf_pades(data, key_pem, cert_pem, subject_cn)
-    ok, details = verify_pdf(signed_pdf)
+    signed_pdf = await sign_pdf_pades(data, key_pem, cert_pem, subject_cn)
+    ok, details = await verify_pdf(signed_pdf)
     if not ok:
         raise HTTPException(500, "Sanity verification failed after signing")
     # Persist registry
@@ -773,7 +759,7 @@ async def verify(file: UploadFile = Form(...), db: Session = Depends(get_db)):
     data = await file.read()
     sha = hashlib.sha256(data).hexdigest()
     hsha = hmac_sha256(sha)
-    ok, details = verify_pdf(data)
+    ok, details = await verify_pdf(data)
     reg = db.query(Doc).filter(Doc.hmac_sha256_hex == hsha).first()
     status = "UNKNOWN"
     issuer = details.get("issuer","dmj.one")
