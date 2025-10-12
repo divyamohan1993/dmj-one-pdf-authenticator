@@ -298,6 +298,8 @@ import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.util.Matrix;
 
+import org.apache.pdfbox.pdmodel.font.PDFont;
+
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
@@ -312,6 +314,7 @@ import java.security.cert.*;
 import java.time.Instant;
 import java.util.*;
 
+import java.awt.geom.Rectangle2D;
 import java.awt.Color;
 
 
