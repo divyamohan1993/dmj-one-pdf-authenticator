@@ -756,6 +756,11 @@ crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 authorityKeyIdentifier = keyid:always
 EOF
 
+
+if [ "$DMJ_REISSUE" = "1" ]; then
+  say "[i] REISSUE is True. All certificates will be reissued..."
+fi
+
 if [ ! -f "${ROOT_DIR}/root.crt" ] || [ "$DMJ_REISSUE" = "1" ]; then
   say "[+] Creating Root CA ..."
   openssl genrsa -out "${ROOT_DIR}/root.key" 4096
