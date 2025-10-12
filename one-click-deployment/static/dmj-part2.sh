@@ -76,10 +76,6 @@ if [ -z "${CF_D1_DATABASE_ID}" ]; then
   exit 1
 fi
 
-# Cron job schedule: Every day at 2:00 AM
-CRON_SCHEDULE="0 2 * * *"
-COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
-
 # --- Admin credential rotation flags -----------------------------------------
 # Rotate the admin login key on every deploy (recommended: keep =1)
 DMJ_ROTATE_ADMIN_KEY="${DMJ_ROTATE_ADMIN_KEY:-1}"
@@ -1266,6 +1262,9 @@ sudo ln -sf /etc/nginx/sites-available/dmj-ocsp /etc/nginx/sites-enabled/dmj-ocs
 sudo nginx -t && sudo systemctl reload nginx
 
 say "Adding Cron Job..."
+# Cron job schedule: Every day at 2:00 AM
+CRON_SCHEDULE="0 2 * * *"
+COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
 # Escape % characters (cron requires them to be escaped)
 CRON_JOB="$CRON_SCHEDULE $COMMAND"
 
