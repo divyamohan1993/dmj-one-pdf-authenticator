@@ -571,9 +571,14 @@ def issue_doc_cert(doc_uid:str):
     key_pem = os.path.join(tmp, "doc.key")
     cert_pem = os.path.join(tmp, "doc.crt")
     subj = f"/C=IN/O=dmj.one/CN=dmj.one Document Cert {doc_uid}"
-    subprocess.check_call([OPENSSL, "ecparam", "-genkey", "-name", "prime256v1", "-out", key_pem])
-    # convert SEC1 to PKCS#8 (unencrypted)
-    subprocess.check_call([OPENSSL, "pkcs8", "-topk8", "-nocrypt", "-in", key_pem, "-out", key_pem])
+    # Generate PKCS#8 (BEGIN PRIVATE KEY) ECDSA key directly (no in-place conversion)
+    subprocess.check_call([
+        OPENSSL, "genpkey",
+        "-algorithm", "EC",
+        "-pkeyopt", "ec_paramgen_curve:P-256",
+        "-pkeyopt", "ec_param_enc:named_curve",
+        "-out", key_pem
+    ])
     csr = os.path.join(tmp, "doc.csr")
     subprocess.check_call([OPENSSL, "req", "-new", "-key", key_pem, "-out", csr, "-subj", subj])    
     subprocess.check_call([
