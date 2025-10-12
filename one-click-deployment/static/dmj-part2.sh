@@ -310,6 +310,9 @@ import java.security.cert.*;
 import java.time.Instant;
 import java.util.*;
 
+import java.awt.Color;
+
+
 public class SignerServer {
 
   static final String WORK_DIR = "/opt/dmj/signer-vm";
@@ -419,9 +422,10 @@ public class SignerServer {
       // Draw simple framed box + text
       try (PDPageContentStream cs = new PDPageContentStream(tpl, aps)) {
         // background (white) and border (black)
-        cs.setNonStrokingColor(255,255,255);
+        cs.setNonStrokingColor(Color.WHITE);
         cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight()); cs.fill();
         cs.setLineWidth(0.8f);
+        cs.setStrokingColor(Color.BLACK);
         cs.moveTo(0,0); cs.lineTo(bbox.getWidth(),0); cs.lineTo(bbox.getWidth(),bbox.getHeight());
         cs.lineTo(0,bbox.getHeight()); cs.closeAndStroke();
 
@@ -429,7 +433,7 @@ public class SignerServer {
         float fs = 9f, leading = fs * 1.35f;
         cs.beginText();
         cs.setFont(new PDType1Font(FontName.HELVETICA_BOLD), fs);
-        cs.setNonStrokingColor(0,0,0);
+        cs.setNonStrokingColor(Color.BLACK);
         cs.newLineAtOffset(6, bbox.getHeight() - leading - 4);
         cs.setLeading(leading);
         String date = signature.getSignDate() != null ? signature.getSignDate().getTime().toString() : "";
