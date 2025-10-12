@@ -64,7 +64,8 @@ if [ -z "${CF_D1_DATABASE_ID}" ]; then
 fi
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
+################## DANGER ########################
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-0}" # Never enable this
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
@@ -72,6 +73,7 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_LEAF=1
     DMJ_REGEN_TRUST_KIT=1
 fi
+################## DANGER ENDS ########################
 
 ### ---------- Logging / Verbosity ----------
 LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
