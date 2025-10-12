@@ -715,6 +715,7 @@ countryName             = optional
 stateOrProvinceName     = optional
 organizationName        = supplied
 commonName              = supplied
+organizationalUnitName  = optional
 [ req ]
 default_bits        = 4096
 string_mask         = utf8only
@@ -735,11 +736,10 @@ authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http:
 crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
 basicConstraints = CA:FALSE
-keyUsage = critical, digitalSignature, contentCommitment
+keyUsage = critical, digitalSignature, nonRepudiation
 extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12
-subjectKeyIdentifier  = hash
-authorityKeyIdentifier = keyid:always,issuer
-authorityInfoAccess   = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
+subjectKeyIdentifier = hash
+authorityInfoAccess = caIssuers;URI:http://${PKI_DOMAIN}/ica.crt, OCSP;URI:http://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:http://${PKI_DOMAIN}/ica.crl
 [ ocsp ]
 basicConstraints = CA:FALSE
