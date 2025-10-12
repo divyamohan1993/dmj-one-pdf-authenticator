@@ -1789,3 +1789,27 @@ echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain
 echo "------------------------------------------------------------------"
 
 say "[✓] Done."
+
+
+
+
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
+echo "Cache busting"
