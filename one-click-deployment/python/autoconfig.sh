@@ -226,9 +226,9 @@ ensure_root
 # --------------------
 log "Updating OS and installing packages..."
 export DEBIAN_FRONTEND=noninteractive
-retry 3 5 apt-get update -y
-retry 3 5 apt-get dist-upgrade -y
-retry 3 5 apt-get install -y --no-install-recommends \
+retry 3 5 apt-get update -y -q
+retry 3 5 apt-get dist-upgrade -y -q
+retry 3 5 apt-get install -y -q --no-install-recommends \
   git curl ca-certificates nginx openssl build-essential \
   "$PYTHON" "$PYTHON"-venv "$PYTHON"-dev pkg-config \
   libffi-dev libssl-dev libxml2-dev libxslt1-dev \
@@ -250,8 +250,8 @@ if [[ ! -d "$VENV_DIR" ]]; then
 fi
 # shellcheck source=/dev/null
 source "$VENV_DIR/bin/activate"
-retry 3 5 pip install --upgrade pip wheel setuptools
-retry 3 5 pip install --upgrade \
+retry 3 5 pip install -q --upgrade pip wheel setuptools
+retry 3 5 pip install -q --upgrade \
   fastapi uvicorn[standard] python-multipart \
   cryptography asn1crypto pyhanko pyhanko-certvalidator \
   pydantic email-validator jinja2 \
