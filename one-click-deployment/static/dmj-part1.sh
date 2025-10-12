@@ -22,15 +22,15 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
 echo "[+] Updating apt and installing base packages..."
 sudo apt-get update -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
   ca-certificates curl git jq openssl unzip gnupg software-properties-common \
-  openjdk-21-jdk maven nginx ufw util-linux moreutils
+  openjdk-21-jdk maven nginx ufw util-linux moreutils zip
 
 # Install/ensure Node.js (only if missing; Wrangler works on Node >=18)
 if ! command -v node >/dev/null 2>&1; then
   echo "[+] Installing Node.js 22.x (NodeSource)..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-  sudo apt-get install -y nodejs
+  sudo apt-get install -y -q nodejs
 fi
 echo "[+] Node: $(node -v); npm: $(npm -v)"
 
