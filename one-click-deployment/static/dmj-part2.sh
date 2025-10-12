@@ -9,6 +9,10 @@ CONF_DIR="/etc/dmj"
 INST_ENV="${CONF_DIR}/installer.env"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
+# Load installation id / DB_PREFIX
+# shellcheck disable=SC1090
+[ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
+
 DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
 SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
 
@@ -68,12 +72,6 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_LEAF=1
     DMJ_REGEN_TRUST_KIT=1
 fi
-
-
-# Load installation id / DB_PREFIX
-# shellcheck disable=SC1090
-[ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
-
 
 ### ---------- Logging / Verbosity ----------
 LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
