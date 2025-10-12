@@ -39,6 +39,12 @@ ICA_DIR="${PKI_DIR}/ica"
 OCSP_DIR="${PKI_DIR}/ocsp"
 PKI_PUB="${PKI_DIR}/pub"
 
+DL_DIR="${PKI_PUB}/dl"
+sudo mkdir -p "${DL_DIR}"
+sudo chmod 755 "${PKI_PUB}" "${DL_DIR}"
+
+find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete
+
 # Branded subject names (official)
 ROOT_CN="${ROOT_CN:-dmj.one Root CA R1}"
 ICA_CN="${ICA_CN:-dmj.one Issuing CA R1}"
@@ -362,6 +368,9 @@ import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.*;
 
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
 public class SignerServer {
 
   static final String WORK_DIR = "/opt/dmj/signer-vm";
@@ -606,6 +615,42 @@ public class SignerServer {
     return out;
   }
 
+  static final Path PKI_PUB = Paths.get(
+    Optional.ofNullable(System.getenv("DMJ_PKI_PUB")).orElse("/opt/dmj/pki/pub")
+  );
+  static final String PKI_BASE = Optional.ofNullable(System.getenv("DMJ_PKI_BASE"))
+                                         .orElse("https://pki.dmj.one");
+  
+  static void addZipFile(ZipOutputStream zos, Path src, String name) throws IOException {
+    if (!Files.exists(src)) return;
+    zos.putNextEntry(new ZipEntry(name));
+    Files.copy(src, zos);
+    zos.closeEntry();
+  }
+  
+  static Path writeBundleZip(byte[] signedPdf, String baseName) throws IOException {
+    Files.createDirectories(PKI_PUB.resolve("dl"));
+    String fname = baseName + ".zip";
+    Path out = PKI_PUB.resolve("dl").resolve(fname);
+  
+    try (ZipOutputStream zos = new ZipOutputStream(
+         Files.newOutputStream(out, java.nio.file.StandardOpenOption.CREATE,
+                                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING))) {
+      // 1) signed PDF
+      zos.putNextEntry(new ZipEntry("signed.pdf"));
+      zos.write(signedPdf);
+      zos.closeEntry();
+      // 2) Trust kit files
+      addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.cer"), "trust-kit/dmj-one-root-ca-r1.cer");
+      addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.crt"), "trust-kit/dmj-one-root-ca-r1.crt");
+      addZipFile(zos, PKI_PUB.resolve("dmj-one-issuing-ca-r1.crt"), "trust-kit/dmj-one-issuing-ca-r1.crt");
+      addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.txt"), "trust-kit/README.txt");
+      addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.html"), "trust-kit/README.html");
+      addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-SHA256SUMS.txt"), "trust-kit/SHA256SUMS.txt");
+    }
+    return out;
+  }
+
   public static void main(String[] args) throws Exception {
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
     String shared = Optional.ofNullable(System.getenv("SIGNING_GATEWAY_HMAC_KEY")).orElse("");
@@ -633,6 +678,31 @@ public class SignerServer {
         ctx.status(200).json(Map.of("hasSignature", false,"isValid", false,"issuedByUs", false,"coversDocument", false,"issuer","", "subFilter","", "error","exception: " + e.getClass().getSimpleName()));
       }
     });
+
+    app.post("/bundle", ctx -> {
+      String hmac = ctx.header(HMAC_HEADER), ts = ctx.header(HMAC_TS), nonce = ctx.header(HMAC_NONCE);
+      if (hmac==null || ts==null || nonce==null) { ctx.status(401).json(Map.of("error","missing auth")); return; }
+      UploadedFile f = ctx.uploadedFile("file");
+      if (f==null){ ctx.status(400).json(Map.of("error","file missing")); return; }
+      byte[] original = IOUtils.toByteArray(f.content());
+
+      // verify HMAC like /sign
+      boolean ok;
+      try { ok = verifyHmac(Optional.ofNullable(System.getenv("SIGNING_GATEWAY_HMAC_KEY")).orElse(""),
+                            "POST", "/bundle", original, ts, nonce, hmac);
+      } catch(Exception e){ ok=false; }
+      if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
+
+      // sign and write bundle
+      byte[] signed = signPdf(original, keys.priv, keys.chain);
+      String base = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
+      Path zipPath = writeBundleZip(signed, base);
+      String rel = "/dl/" + zipPath.getFileName().toString();
+      String url = PKI_BASE + rel;
+
+      ctx.json(Map.of("download", url));
+    });
+
 
     app.post("/sign", ctx -> {
       if (shared.isBlank()) { ctx.status(500).json(Map.of("error","server not configured")); return; }
@@ -1006,6 +1076,8 @@ After=network.target
 User=root
 Environment=SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
 Environment=DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
+Environment=DMJ_PKI_PUB=${PKI_PUB}
+Environment=DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
 ExecStart=/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar
 Restart=on-failure
 WorkingDirectory=${SIGNER_DIR}
@@ -1609,6 +1681,257 @@ function renderHome(issuerDomain: string) {
 }
 
 
+function renderAdminLogin(issuer: string){
+  return text(`<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin · dmj.one</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
+  <style>body{background:#fafbfc} .card{border:1px solid #edf0f3}</style>
+</head>
+<body class="d-flex align-items-center" style="min-height:100vh">
+  <main class="container">
+    <div class="row justify-content-center">
+      <div class="col-md-6 col-lg-5">
+        <div class="card shadow-sm animate__animated animate__fadeInDown">
+          <div class="card-body p-4 p-md-5">
+            <div class="d-flex align-items-center mb-3">
+              <i class="bi-shield-lock me-2" style="font-size:1.5rem;color:#0d6efd"></i>
+              <h1 class="h4 mb-0">dmj.one Admin</h1>
+            </div>
+            <p class="text-secondary">Enter the <b>admin portal key</b> to access the dashboard for <span class="text-nowrap">${issuer}</span>.</p>
+            <form method="post" action="/admin/login" class="mt-3">
+              <div class="mb-3">
+                <label class="form-label">Admin key</label>
+                <div class="input-group">
+                  <input type="password" class="form-control" name="password" required autocomplete="current-password" placeholder="••••••••••••••" />
+                  <button class="btn btn-outline-secondary" type="button" id="togglePw"><i class="bi bi-eye"></i></button>
+                </div>
+              </div>
+              <button class="btn btn-primary w-100">Login</button>
+            </form>
+            <div class="small text-secondary mt-3">Your key is verified server‑side using PBKDF2‑HMAC‑SHA256.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    document.getElementById('togglePw').addEventListener('click', function(){
+      const i = document.querySelector('input[name="password"]'); 
+      i.type = i.type==='password' ? 'text' : 'password';
+      this.firstElementChild.className = i.type==='password' ? 'bi bi-eye' : 'bi bi-eye-slash';
+    });
+  </script>
+</body></html>`);
+}
+
+function renderAdminBootstrapOnce(key: string, issuer: string){
+  return text(`<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin bootstrap · dmj.one</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+  <style>code.key{font-size:1.15rem;padding:.6rem .8rem;background:#f6f7f9;border:1px solid #e9eef3;border-radius:.5rem;display:block}</style>
+</head>
+<body class="bg-light">
+  <main class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-lg-8">
+        <div class="alert alert-primary d-flex align-items-center" role="alert">
+          <i class="bi-info-circle me-2"></i>
+          <div><b>Shown once:</b> Save this admin portal key for <span class="text-nowrap">${issuer}</span>.</div>
+        </div>
+        <div class="card shadow-sm">
+          <div class="card-body p-4">
+            <h1 class="h4 mb-3">Your admin portal key</h1>
+            <code class="key" id="theKey">${key}</code>
+            <button class="btn btn-outline-secondary mt-3" id="copyBtn"><i class="bi-clipboard me-2"></i>Copy</button>
+            <hr class="my-4" />
+            <p class="text-secondary small mb-0">Treat this like a password. Rotation is automatic at each deploy; you’ll see a new key here next time.</p>
+            <a class="btn btn-primary mt-3" href="/admin">Continue to Admin login</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    document.getElementById('copyBtn').addEventListener('click', async ()=>{
+      const t = document.getElementById('theKey').innerText.trim();
+      try{ await navigator.clipboard.writeText(t); 
+        const b = document.getElementById('copyBtn'); b.innerHTML='<i class="bi-check2 me-2"></i>Copied'; setTimeout(()=>b.innerHTML='<i class="bi-clipboard me-2"></i>Copy', 1800);
+      }catch{}
+    });
+  </script>
+</body></html>`);
+}
+
+function renderAdminDashboard(issuer: string){
+  return text(`<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin Dashboard · dmj.one</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
+  <style>
+    body{background:#fbfcfe}
+    .card{border:1px solid #edf0f3}
+    .dropzone{border:1.5px dashed #cfd6df;border-radius:.75rem;padding:1.25rem;background:#fff}
+    .dropzone.drag{background:#f5f9ff;border-color:#91b8ff}
+    .hash{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem;background:#f6f7f9;border:1px solid #edf0f3;border-radius:.4rem;padding:.25rem .4rem}
+    .status-chip{font-size:.85rem}
+    #toast{position:fixed;right:16px;bottom:16px;z-index:9999;min-width:260px;display:none}
+    #toast.show{display:block}
+    #liveRegion{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+  </style>
+</head>
+<body>
+  <div id="liveRegion" aria-live="polite"></div>
+  <nav class="navbar navbar-expand-lg bg-white border-bottom">
+    <div class="container">
+      <a class="navbar-brand d-flex align-items-center" href="#"><i class="bi-shield-check me-2" style="color:#0d6efd"></i>dmj.one Admin</a>
+      <form method="post" action="/admin/logout" class="ms-auto"><button class="btn btn-outline-secondary"><i class="bi-box-arrow-right me-2"></i>Logout</button></form>
+    </div>
+  </nav>
+
+  <main class="container py-4">
+    <div class="row g-4">
+      <div class="col-lg-5">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <h2 class="h5 d-flex align-items-center"><i class="bi-pen me-2 text-primary"></i>Sign a new PDF</h2>
+            <div id="dz" class="dropzone mt-3 text-secondary text-center">
+              <div class="small"><i class="bi-cloud-arrow-up"></i> Drag & drop PDF here or <label class="link-primary" style="cursor:pointer"><input id="filePick" type="file" class="d-none" accept="application/pdf" />browse</label></div>
+            </div>
+            <div class="mt-3">
+              <label class="form-label">Optional metadata (JSON)</label>
+              <input id="meta" class="form-control" placeholder='{"orderId":"123","user":"alice"}'>
+            </div>
+            <div class="d-grid mt-3"><button id="signBtn" class="btn btn-primary" disabled><i class="bi-check2-square me-2"></i>Sign & Download</button></div>
+            <div class="progress mt-3 d-none" id="prog"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:100%"></div></div>
+            <div class="form-text mt-2">Documents are signed by dmj.one and re‑verified before storing. Bundle includes the Trust Kit.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-7">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between">
+              <h2 class="h5 d-flex align-items-center mb-0"><i class="bi-files me-2 text-primary"></i>Issued documents</h2>
+              <input id="q" class="form-control form-control-sm" style="max-width:220px" placeholder="Filter by SHA…">
+            </div>
+            <div class="table-responsive mt-3">
+              <table class="table align-middle table-hover mb-0">
+                <thead><tr><th>SHA‑256</th><th>Signed</th><th>Status</th><th class="text-end">Action</th></tr></thead>
+                <tbody id="tbody">
+                  <tr><td colspan="4" class="text-secondary">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast" class="alert alert-primary shadow-sm" role="status"></div>
+
+  <script>
+    const toast = (msg, kind='primary') => {
+      const t = document.getElementById('toast'); 
+      t.className = 'alert alert-' + kind + ' shadow-sm'; 
+      t.textContent = msg; t.classList.add('show');
+      document.getElementById('liveRegion').textContent = msg; // aria-live
+      setTimeout(()=>t.classList.remove('show'), 2200);
+    };
+
+    // ------- Table (load + filter + revoke)
+    let rows = [];
+    async function loadRows(){
+      const res = await fetch('/admin?json=1', {headers:{'Accept':'application/json'}});
+      if(!res.ok){ toast('Failed to load documents','danger'); return; }
+      const data = await res.json();
+      rows = (data.documents||[]);
+      renderRows();
+    }
+    function renderRows(){
+      const q = (document.getElementById('q').value || '').toLowerCase().trim();
+      const tb = document.getElementById('tbody');
+      const fmt = ts => ts ? new Date(ts*1000).toISOString().replace('T',' ').replace(/\..+/, '') : '';
+      const view = rows.filter(r => !q || r.sha.includes(q));
+      tb.innerHTML = view.map(r=>{
+        const active = !r.revoked_at;
+        const chip = active ? '<span class="badge text-bg-success status-chip">Active</span>'
+                            : '<span class="badge text-bg-danger status-chip">Revoked</span>';
+        const btn = active ? '<button class="btn btn-sm btn-outline-danger revoke" data-sha="'+r.sha+'"><i class="bi-x-circle me-1"></i>Revoke</button>'
+                           : '<button class="btn btn-sm btn-outline-secondary" disabled>Revoked</button>';
+        return '<tr>' +
+          '<td><span class="hash" title="'+r.sha+'">'+r.sha.slice(0,12)+'…'+r.sha.slice(-12)+'</span></td>' +
+          '<td>'+fmt(r.signed_at)+'</td>' +
+          '<td>'+chip+'</td>' +
+          '<td class="text-end">'+btn+'</td>' +
+        '</tr>';
+      }).join('') || '<tr><td colspan="4" class="text-secondary">No documents</td></tr>';
+    }
+    document.getElementById('q').addEventListener('input', renderRows);
+    document.getElementById('tbody').addEventListener('click', async (e)=>{
+      const b = e.target.closest('button.revoke'); if(!b) return;
+      const sha = b.getAttribute('data-sha');
+      const fd = new FormData(); fd.set('sha', sha);
+      const res = await fetch('/admin/revoke', {method:'POST', body:fd, headers:{'Accept':'application/json'}});
+      if(!res.ok){ toast('Revoke failed','danger'); return; }
+      const r = await res.json();
+      toast('Revoked '+sha.slice(0,8)+'…','warning');
+      // reflect locally
+      const row = rows.find(x=>x.sha===sha); if(row){ row.revoked_at = r.revoked_at || Math.floor(Date.now()/1000); }
+      renderRows();
+    });
+
+    // ------- Signer (dropzone + browse + download)
+    const dz = document.getElementById('dz');
+    const fp = document.getElementById('filePick');
+    const meta = document.getElementById('meta');
+    const btn = document.getElementById('signBtn');
+    const prog = document.getElementById('prog');
+    let file = null;
+    const setFile = f => { file = f; btn.disabled = !file; toast('Ready to sign: '+(f?.name||'')); };
+    ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault(); dz.classList.add('drag');}));
+    ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev, e=>{e.preventDefault(); dz.classList.remove('drag');}));
+    dz.addEventListener('drop', e=>{ const f = e.dataTransfer.files?.[0]; if(f && f.type==='application/pdf') setFile(f); });
+    fp.addEventListener('change', e=>{ const f = fp.files?.[0]; if(f && f.type==='application/pdf') setFile(f); fp.value=''; });
+    dz.querySelector('label').addEventListener('click', ()=>fp.click());
+    btn.addEventListener('click', async ()=>{
+      if(!file) return;
+      prog.classList.remove('d-none'); btn.disabled=true;
+      try{
+        const fd = new FormData(); fd.set('file', file, file.name);
+        const m = (meta.value||'').trim(); if(m) fd.set('meta', m);
+        const res = await fetch('/admin/sign', { method:'POST', body:fd });
+        if(!res.ok){ const t = await res.text(); throw new Error(t||'sign error'); }
+        const disp = res.headers.get('content-disposition') || '';
+        const match = /filename="?([^"]+)"?/i.exec(disp); const name = match ? match[1] : ('signed-'+(file.name||'document')+(res.headers.get('content-type')?.includes('zip')?'.zip':'')); 
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = Object.assign(document.createElement('a'), { href:url, download:name });
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url); // avoid leaks
+        toast('Signed & downloaded','success');
+        loadRows(); // refresh list
+      }catch(e){ toast('Signing failed','danger'); }
+      finally{ prog.classList.add('d-none'); btn.disabled=false; file=null; }
+    });
+    // init
+    loadRows();
+  </script>
+</body></html>`);
+}
+
+
 
 function diagnostics(env: Env, haveDB=true){
   const reqd = [
@@ -1636,62 +1959,26 @@ async function handleAdmin(env: Env, req: Request){
     // one-time admin portal key display (first visit)
     const show = await consumeOneTimeAdminKey(env);
     if (show){
-      return text(`<!doctype html><meta charset="utf-8"><title>Admin bootstrap</title>
-      <body style="font-family:ui-sans-serif;max-width:900px;margin:40px auto">
-      <h1>dmj.one — Admin bootstrap</h1>
-      <h2>Your admin portal login key (shown only once):</h2>
-      <pre style="font-size:20px;background:#f6f6f6;padding:12px;border-radius:6px">${show}</pre>
-      <p>Store this key securely. If it is lost, reinstall from scratch. Existing signed PDFs remain valid.</p>
-      <h3>Environment diagnostics</h3>
-      ${diagnostics(env, true)}
-      <p><a href="/admin">Continue to Admin login</a></p>
-      </body>`);
+      return renderAdminBootstrapOnce(show, env.ISSUER);
     }
-    if (!session){
-      // login form
-      return text(`<!doctype html><meta charset="utf-8"><title>Admin login</title>
-      <body style="font-family:ui-sans-serif;max-width:900px;margin:40px auto">
-      <h1>Admin login</h1>
-      <form method="post" action="/admin/login">
-        <input type="password" name="password" placeholder="Admin key" required>
-        <button type="submit">Login</button>
-      </form>
-      <h3>Diagnostics</h3>${diagnostics(env,true)}
-      <p><a href="/">Back</a></p>
-      </body>`);
+    // JSON feed for dashboard data
+    if (u.searchParams.get("json") === "1") {
+      if (!session) return json({error:"unauthorized"}, 401);
+      const p = env.DB_PREFIX;
+      const res = await env.DB.prepare(`SELECT doc_sha256, signed_at, revoked_at, meta_json FROM ${p}documents ORDER BY signed_at DESC`).all() as any;
+      const docs = (res.results||[]).map((r:any)=>({ sha: r.doc_sha256, signed_at: r.signed_at, revoked_at: r.revoked_at || null, meta: r.meta_json||"{}" }));
+      const active = docs.filter((d:any)=>!d.revoked_at).length;
+      return json({ documents: docs, counts: { total: docs.length, active, revoked: docs.length-active } });
     }
-    // list documents
-    const p = env.DB_PREFIX;
-    const rows = await env.DB.prepare(`SELECT doc_sha256, signed_at, revoked_at, meta_json FROM ${p}documents ORDER BY signed_at DESC`).all() as any;
-    const htmlRows = rows.results.map((r:any)=>`
-      <tr>
-        <td><code>${r.doc_sha256}</code></td>
-        <td>${new Date((r.signed_at||0)*1000).toISOString()}</td>
-        <td>${r.revoked_at ? ("❌ "+new Date(r.revoked_at*1000).toISOString()) : "✅ Active"}</td>
-        <td><form method="post" action="/admin/revoke"><input type="hidden" name="sha" value="${r.doc_sha256}"><button ${r.revoked_at?"disabled":""}>Revoke</button></form></td>
-      </tr>`).join("");
-    return text(`<!doctype html><meta charset="utf-8"><title>Admin</title>
-    <body style="font-family:ui-sans-serif;max-width:1100px;margin:40px auto">
-      <h1>Admin — dmj.one</h1>
-      <form method="post" action="/admin/logout" style="float:right"><button>Logout</button></form>
-      <h2>Sign a new PDF</h2>
-      <form method="post" action="/admin/sign" enctype="multipart/form-data">
-        <input type="file" name="file" accept="application/pdf" required>
-        <input type="text" name="meta" placeholder='optional metadata JSON'>
-        <button>Sign</button>
-      </form>
-      <h2>Issued documents</h2>
-      <table border="1" cellpadding="6" cellspacing="0"><tr><th>SHA-256</th><th>Signed</th><th>Status</th><th>Action</th></tr>${htmlRows}</table>
-      <p><a href="/">Back</a></p>
-    </body>`);
+    if (!session) return renderAdminLogin(env.ISSUER);
+    return renderAdminDashboard(env.ISSUER);
   }
 
   if (req.method === "POST"){
     const form = await req.formData();
     if (u.pathname.endsWith("/login")){
       const pass = String(form.get("password")||"");
-      const ok = await verifyPBKDF2(env, pass);
-      // if(!ok) return text("<h1>Unauthorized</h1>"), {status:401} as any;
+      const ok = await verifyPBKDF2(env, pass);      
       if(!ok) {
         return new Response("<h1>Unauthorized</h1>", {
           status: 401,
@@ -1817,8 +2104,7 @@ async function handleAdmin(env: Env, req: Request){
 
     }
 
-    if (u.pathname.endsWith("/revoke")){
-      // if (!sameOrigin(req)) return json({error:"bad origin"}, 400);
+    if (u.pathname.endsWith("/revoke")){      
       const p = env.DB_PREFIX;
       const sha = String(form.get("sha")||"");
       await env.DB
@@ -1831,6 +2117,9 @@ async function handleAdmin(env: Env, req: Request){
                   VALUES(?,?,?,?,?,?,?)`)
         .bind(crypto.randomUUID(), now(), "revoke", sha, "", "", "")
         .run();
+      // JSON for XHR, redirect for classic form posts
+      const wantsJson = (req.headers.get("accept")||"").includes("application/json");
+      if (wantsJson) return json({ ok:true, sha, revoked_at: now() });
       return new Response(null, { status:303, headers:{location:"/admin"} });
     }
   }
