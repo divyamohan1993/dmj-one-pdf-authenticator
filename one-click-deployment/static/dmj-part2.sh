@@ -330,6 +330,7 @@ public class SignerServer {
     final X509Certificate cert;
     Keys(PrivateKey p, X509Certificate c){ this.priv=p; this.cert=c; }
   }
+  
 
   static Keys loadKeys() throws Exception {
     char[] pass = Files.readString(P12_PASS).trim().toCharArray();
