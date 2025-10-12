@@ -306,8 +306,11 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.security.*;
-import java.security.cert.*;
+import java.security.KeyStore;
+import java.security.MessageDigest;
+import java.security.PrivateKey;
+import java.security.Security;
+import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.*;
 
@@ -323,7 +326,7 @@ public class SignerServer {
 
   static final Set<String> RECENT_NONCES = Collections.synchronizedSet(new LinkedHashSet<>());
 
-  static { java.security.Security.addProvider(new BouncyCastleProvider()); }
+  static { Security.addProvider(new BouncyCastleProvider()); }
 
   static class Keys {
     final PrivateKey priv;
@@ -338,9 +341,18 @@ public class SignerServer {
     try (InputStream in = Files.newInputStream(P12_PATH)) { ks.load(in, pass); }
     PrivateKey pk = (PrivateKey) ks.getKey(P12_ALIAS, pass);
     X509Certificate leaf = (X509Certificate) ks.getCertificate(P12_ALIAS);
-    Certificate[] chainArr = ks.getCertificateChain(P12_ALIAS);
+
+    // IMPORTANT: use fully-qualified type to avoid ambiguity
+    java.security.cert.Certificate[] chainArr = ks.getCertificateChain(P12_ALIAS);
     List<X509Certificate> chain = new ArrayList<>();
-    if (chainArr != null) for (Certificate c : chainArr) chain.add((X509Certificate)c);
+    if (chainArr != null) {
+      for (java.security.cert.Certificate c : chainArr) {
+        chain.add((X509Certificate) c);
+      }
+    } else {
+      // Fall back to just the leaf if the P12 didn’t contain the chain
+      chain.add(leaf);
+    }
     return new Keys(pk, leaf, chain);
   }
 
@@ -375,17 +387,20 @@ public class SignerServer {
     return MessageDigest.isEqual(expected, provided);
   }
 
-  // Detached CMS over the exact ByteRange bytes (external signing)
+  // Build a detached CMS over the exact ByteRange bytes and embed the chain
   static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, List<X509Certificate> chain) throws Exception {
     byte[] toSign = IOUtils.toByteArray(content);
     ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(pk);
+
     CMSSignedDataGenerator gen = new CMSSignedDataGenerator();
     gen.addSignerInfoGenerator(
       new JcaSignerInfoGeneratorBuilder(new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
-        .build(signer, chain.get(0))
+        .build(signer, chain.get(0)) // leaf
     );
-    gen.addCertificates(new JcaCertStore(chain));       // <-- include ICA here
-    CMSSignedData cms = gen.generate(new CMSProcessableByteArray(toSign), false);
+    gen.addCertificates(new JcaCertStore(chain)); // include ICA so validators can build the path
+
+    CMSTypedData msg = new CMSProcessableByteArray(toSign);
+    CMSSignedData cms = gen.generate(msg, false); // detached
     return cms.getEncoded();
   }
 
@@ -424,14 +439,14 @@ public class SignerServer {
     };
   }
 
-  // --- Invisible signature (approval by default) using external signing ---
-  static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
+  // Invisible approval/certification signature using external signing
+  static byte[] signPdf(byte[] original, PrivateKey pk, List<X509Certificate> chain) throws Exception {
     try (PDDocument doc = Loader.loadPDF(original);
          ByteArrayOutputStream baos = new ByteArrayOutputStream(original.length + 65536)) {
 
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
-      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // classic Adobe-compatible
+      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // Adobe-compatible detached CMS
       sig.setName("dmj.one");
       sig.setLocation("IN");
       sig.setReason("Contents securely verified by dmj.one against any tampering.");
@@ -439,16 +454,15 @@ public class SignerServer {
       sig.setSignDate(Calendar.getInstance());
 
       int mdp = resolveDocMDP();
-      if (mdp != 0) setMDPPermission(doc, sig, mdp);  // optional certification
+      if (mdp != 0) setMDPPermission(doc, sig, mdp);
 
       SignatureOptions opts = new SignatureOptions();
       opts.setPreferredSignatureSize(65536);
 
-      // IMPORTANT: register signature first, then prepare & sign (no edits between these calls)
-      doc.addSignature(sig, opts); // invisible signature (no visual template)
-      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos); // prepares ByteRange, etc. (official flow)
-      // byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
-      byte[] cms = buildDetachedCMS(ext.getContent(), keys.priv, keys.chain);
+      // Official external signing flow: addSignature → saveIncrementalForExternalSigning → getContent/setSignature
+      doc.addSignature(sig, opts); // invisible (no visual template)
+      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
+      byte[] cms = buildDetachedCMS(ext.getContent(), pk, chain);
       ext.setSignature(cms);
 
       return baos.toByteArray();
@@ -584,7 +598,7 @@ public class SignerServer {
       if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
 
       try {
-        byte[] signed = signPdf(data, keys.priv, keys.cert);
+        byte[] signed = signPdf(data, keys.priv, keys.chain); // ← pass chain here
         ctx.contentType("application/pdf");
         ctx.header("X-Signed-By", issuer);
         ctx.result(new ByteArrayInputStream(signed));
