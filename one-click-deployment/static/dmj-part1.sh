@@ -84,7 +84,8 @@ if [ ! -f "$INST_ENV" ]; then
   INSTALLATION_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   {
     echo "INSTALLATION_ID=${INSTALLATION_ID}"
-    echo "DB_PREFIX=dmj_${INSTALLATION_ID}_"
+    # echo "DB_PREFIX=dmj_${INSTALLATION_ID}_"
+    echo "DB_PREFIX=documents_"
   } | sudo tee "$INST_ENV" >/dev/null
 else
   # shellcheck disable=SC1090

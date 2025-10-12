@@ -75,12 +75,9 @@ export CF_D1_DATABASE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # optional: customize domains
 export DMJ_ROOT_DOMAIN="dmj.one"
-export SIGNER_DOMAIN="signer.dmj.one"   # must point to this VM via Cloudflare DNS (proxied)
+export SIGNER_DOMAIN="subdomain.dmj.one"   # must point to this VM via Cloudflare DNS (proxied)
 
-# logging: 1 = verbose to console + log; 0 = minimal console, full log only
-export DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
-
-sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN,DMJ_VERBOSE \
+sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN \
   bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
 ```
 
@@ -90,7 +87,7 @@ After Part 2 finishes you’ll see:
 * `http://signer.dmj.one/` alive (nginx → Java service);
 * a note to visit **`/admin`** on the Worker URL to see the one‑time **admin portal key** + env checks.
 
-> You will add the Worker **route** for your preferred subdomain (e.g., `sign.dmj.one/*`) in the Cloudflare dashboard or via `wrangler` later. The scripts intentionally do **not** manage routes since you asked to create routes manually.
+> You will add the Worker **route** for your preferred subdomain (e.g., `documents.dmj.one/*`) in the Cloudflare dashboard or via `wrangler` later. The scripts intentionally do **not** manage routes since you asked to create routes manually.
 
 ---
 
