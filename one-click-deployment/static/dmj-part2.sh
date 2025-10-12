@@ -1210,3 +1210,4 @@ echo "NEXT STEPS:"
 echo "1) Visit ${WORKER_URL:-your workers.dev URL}/admin   — you will see the admin key ONCE."
 echo "2) In Cloudflare Dashboard, add a Route to bind this Worker to your domain (e.g. https://sign.${DMJ_ROOT_DOMAIN}/*)."
 echo "------------------------------------------------------------------"
+
