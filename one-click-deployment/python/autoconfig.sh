@@ -8,6 +8,7 @@
 # autoconfig.sh
 
 set -euo pipefail
+umask 027
 
 # --------------------
 # Verbose tracing
@@ -65,6 +66,19 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "[$(date -Is)] $*"; }
 randhex() { $OPENSSL_BIN rand -hex "${1:-32}"; }
 randb64() { $OPENSSL_BIN rand -base64 "${1:-32}"; }
+
+# Ensure CA files are readable by the runtime user (docsigner) and writable where needed
+fix_pki_perms() {
+  # Ownership
+  chown -R "$APP_USER":"$APP_USER" "$PKI_DIR"
+  # Directories need rwx for owner (openssl ca writes newcerts/, index.txt, serial, etc.)
+  find "$PKI_DIR" -type d -exec chmod 750 {} \;
+  # Files default to owner rw, group r
+  find "$PKI_DIR" -type f -exec chmod 640 {} \;
+  # Private keys: owner‑only
+  chmod 600 "$ROOT_DIR"/private/*.enc "$INT_DIR"/private/*.enc 2>/dev/null || true
+}
+
 
 retry() {
   # retry <times> <sleep_secs> <cmd...>
@@ -443,6 +457,9 @@ if [[ ! -d "$ROOT_DIR" ]]; then
   encrypt_key_if_plain "$ROOT_DIR/private/root.key"
   encrypt_key_if_plain "$INT_DIR/private/intermediate.key"
   encrypt_key_if_plain "$INT_DIR/private/ocsp.key"
+
+  # Ensure correct ownership/permissions now that .enc files exist
+  fix_pki_perms
 fi
 
 # Always re-publish CRL in case it was updated
@@ -652,7 +669,9 @@ def sign_pdf_pades(pdf_bytes: bytes, key_pem: bytes, cert_pem: bytes, subject_cn
 
 def verify_pdf(pdf_bytes: bytes):
     # Build validation context anchored at our root; allow OCSP/CRL fetching
-    root_cert = load_cert_from_pemder(ROOT_PEM)
+    with open(ROOT_PEM, 'rb') as f:
+        root_pem = f.read()
+    root_cert = load_cert_from_pemder(root_pem)
     vc = ValidationContext(trust_roots=[root_cert], allow_fetching=True)
     # Validate
     bio = io.BytesIO(pdf_bytes)
@@ -1086,7 +1105,7 @@ ensure_pki   # <-- call the function from section B (place it above)
 # Start app and OCSP now (ok to fail gracefully if not ready)
 systemctl enable "$SERVICE_NAME" || true
 systemctl enable "$OCSP_SERVICE_NAME" || true
-systemctl restart "$SERVICE_NAME" || true
+systemctl restart "$SERVICE_NAME" "$OCSP_SERVICE_NAME" nginx || true
 
 # Autoconfig should only run on next boot; enable but DO NOT start now
 # (Starting it now would re-run this very script and cause nested execution.)
