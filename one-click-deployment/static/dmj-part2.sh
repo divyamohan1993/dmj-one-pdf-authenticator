@@ -1265,11 +1265,19 @@ say "Adding Cron Job..."
 # Cron job schedule: Every day at 2:00 AM
 CRON_SCHEDULE="0 2 * * *"
 COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
-# Escape % characters (cron requires them to be escaped)
 CRON_JOB="$CRON_SCHEDULE $COMMAND"
 
-# Add the cron job if it's not already there
-( crontab -l 2>/dev/null | grep -Fv "$COMMAND" ; echo "$CRON_JOB" ) | crontab -
+# Safely get existing crontab or empty if none exists
+existing_cron=$(crontab -l 2>/dev/null || true)
+
+# Filter out any existing lines matching COMMAND
+filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" || true)
+
+# Add new cron job line
+new_cron=$(printf "%s\n%s\n" "$filtered_cron" "$CRON_JOB")
+
+# Install new crontab
+printf "%s\n" "$new_cron" | crontab -
 
 echo "Cron job added:"
 echo "$CRON_JOB"
