@@ -603,7 +603,7 @@ PY
 import os, io, binascii
 from datetime import datetime, timezone
 from pyhanko.sign import signers
-from pyhanko.sign.general import sign_pdf
+from pyhanko.sign.signers import sign_pdf, PdfSignatureMetadat
 from pyhanko.sign.validation import validate_pdf_signature
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko_certvalidator import ValidationContext, CertificateValidator
@@ -846,6 +846,7 @@ retry 3 5 curl -fsSL https://www.cloudflare.com/ips-v6 -o /tmp/cf6 || curl -fsSL
 ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/dmj-docsigner
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl enable --now nginx
+nginx -t && systemctl reload nginx
 
 # --------------------
 # systemd services: app, ocsp, autoconfig
