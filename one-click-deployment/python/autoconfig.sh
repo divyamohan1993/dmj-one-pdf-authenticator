@@ -48,6 +48,8 @@ ARGON2_PARALLEL="${ARGON2_PARALLEL:-2}"
 KEY_ROTATION_DAYS="${KEY_ROTATION_DAYS:-180}"
 HMAC_KEY_BYTES="${HMAC_KEY_BYTES:-32}"
 KEY_ENC_ALGO="${KEY_ENC_ALGO:-aes-256-cbc}"
+CRL_DAYS="${CRL_DAYS:-7}"   # CRL nextUpdate = now + 7 days
+
 
 # PKI dirs
 PKI_DIR="${PKI_DIR:-$APP_DIR/pki}"
@@ -206,6 +208,7 @@ ensure_pki() {
   # --- CRL & publish (AIA/CDP) ---
   if [[ ! -f "$INT_DIR/crl/dmjone.crl" ]]; then
     $OPENSSL_BIN ca -config "$OPENSSL_CNF" -name dmj_intermediate -gencrl \
+      -crldays "$CRL_DAYS" \
       -keyfile "$INT_DIR/private/intermediate.key.enc" -passin "pass:$(derive_kek)" \
       -cert "$INT_DIR/certs/intermediate.pem" -out "$INT_DIR/crl/dmjone.crl"
   fi
@@ -334,6 +337,7 @@ default_md        = sha256
 policy            = policy_loose
 copy_extensions   = copy
 default_days      = 3650
+default_crl_days  = $CRL_DAYS
 
 [ dmj_intermediate ]
 dir               = $PKI_DIR/intermediate
@@ -347,6 +351,7 @@ default_md        = sha256
 policy            = policy_loose
 copy_extensions   = copy
 default_days      = 825
+default_crl_days  = $CRL_DAYS
 
 [ policy_loose ]
 countryName             = optional
@@ -428,7 +433,7 @@ if [[ ! -d "$ROOT_DIR" ]]; then
     -in "$INT_DIR/csr/ocsp.csr" -out "$INT_DIR/certs/ocsp.pem"
 
   # CRL init & publish
-  $OPENSSL_BIN ca -config "$OPENSSL_CNF" -name dmj_intermediate -gencrl -keyfile "$INT_DIR/private/intermediate.key" -cert "$INT_DIR/certs/intermediate.pem" -out "$INT_DIR/crl/dmjone.crl"
+  $OPENSSL_BIN ca -config "$OPENSSL_CNF" -name dmj_intermediate -gencrl -crldays "$CRL_DAYS" -keyfile "$INT_DIR/private/intermediate.key" -cert "$INT_DIR/certs/intermediate.pem" -out "$INT_DIR/crl/dmjone.crl"
 
   install -m 0644 "$INT_DIR/crl/dmjone.crl" "$STATIC_PKI_DIR/dmjone.crl"
   install -m 0644 "$INT_DIR/certs/intermediate.pem" "$STATIC_PKI_DIR/dmjone-int.pem"
