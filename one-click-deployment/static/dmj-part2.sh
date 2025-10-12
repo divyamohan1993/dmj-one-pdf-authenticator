@@ -66,7 +66,7 @@ DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by defaul
 DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
 DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
 DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-1}"       # 1 = rotate signer freely
-DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-0}" # 0 = never overwrite user Trust Kit ZIP
+DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
 
 # Require D1 id (single shared DB)
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
@@ -957,16 +957,24 @@ What this is
 • dmj.one Root CA (R1): install this once to trust dmj.one‑signed PDFs.
 • dmj.one Issuing CA (R1): optional helper for some apps. Do NOT add to “Trusted Root”.
 
-Windows — easiest (system-wide)
--------------------------------
-1) Double‑click  dmj-one-root-ca-r1.cer
-2) Click “Install Certificate…”.
-3) Choose “Local Machine” (or “Current User” if you don’t have admin rights) → Next.
-4) Choose “Place all certificates in the following store” → Browse →
-   select “Trusted Root Certification Authorities” → OK → Next → Finish.
-5) Approve the security warning (Yes). Done.
+ Windows — ONE-CLICK (recommended)
+----------------------------------
+1) Right-click **install-dmj-certificates.bat** → **Run as administrator**.
+2) The installer will:
+   • import **dmj-one-root-ca-r1.(cer/crt)** into **Trusted Root Certification Authorities**
+   • import **dmj-one-issuing-ca-r1.(cer/crt)** into **Intermediate Certification Authorities**
+3) It prints success/failure for each step. Verify with **certmgr.msc** if desired.
 
-(Advanced) Issuing CA: import dmj-one-issuing-ca-r1.cer into “Intermediate Certification Authorities”.
+ Windows — manual (alternative)
+-------------------------------
+Root CA (system-wide):
+1) Double-click **dmj-one-root-ca-r1.cer** → **Install Certificate…**
+2) Choose **Local Machine** (or **Current User**) → **Next**
+3) **Place all certificates in the following store** → **Browse** → **Trusted Root Certification Authorities**
+4) **OK** → **Next** → **Finish** → approve the warning (**Yes**)
+
+Issuing CA (optional helper):
+• Import **dmj-one-issuing-ca-r1.cer** into **Intermediate Certification Authorities**
 
 macOS — system trust
 --------------------
@@ -1004,6 +1012,79 @@ Files in this folder
 
 Security tip: Only install CAs you trust. This kit is published at pki.dmj.one.
 TXT
+  sudo tee "${PKI_PUB}/install-dmj-certificates.bat" >/dev/null <<'BAT'
+@echo off
+setlocal enabledelayedexpansion
+
+REM -------------------------------------------------
+REM  DMJ Root + Intermediate Certificate Importer
+REM  Works even when elevated (uses %~dp0 for paths)
+REM -------------------------------------------------
+
+:: Re-run as admin if not already
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+  echo [!] Elevating... please accept the UAC prompt.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+
+:: Folder where this script lives (always ends with backslash)
+set "BASEDIR=%~dp0"
+
+:: Candidate filenames (support .cer/.crt)
+set "ROOT_CANDIDATES=dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt"
+set "ICA_CANDIDATES=dmj-one-issuing-ca-r1.crt dmj-one-issuing-ca-r1.cer"
+
+:: Resolve actual files
+set "ROOT_CERT="
+for %%F in (%ROOT_CANDIDATES%) do (
+  if exist "%BASEDIR%%%F" (
+    set "ROOT_CERT=%BASEDIR%%%F"
+    goto :gotRoot
+  )
+)
+:gotRoot
+
+set "ICA_CERT="
+for %%F in (%ICA_CANDIDATES%) do (
+  if exist "%BASEDIR%%%F" (
+    set "ICA_CERT=%BASEDIR%%%F"
+    goto :gotICA
+  )
+)
+:gotICA
+
+echo --------------------------------------------
+echo Installing DMJ Certificates from:
+echo   %BASEDIR%
+echo --------------------------------------------
+
+if defined ROOT_CERT (
+  echo [+] Installing Root CA: "%ROOT_CERT%"
+  certutil -addstore -f "Root" "%ROOT_CERT%"
+) else (
+  echo [x] Root certificate not found in folder. Looked for:
+  echo     %ROOT_CANDIDATES%
+)
+
+if defined ICA_CERT (
+  echo [+] Installing Intermediate CA: "%ICA_CERT%"
+  certutil -addstore -f "CA" "%ICA_CERT%"
+) else (
+  echo [x] Intermediate certificate not found in folder. Looked for:
+  echo     %ICA_CANDIDATES%
+)
+
+echo --------------------------------------------
+echo [✓] Done. Verify with: certmgr.msc
+echo   - Trusted Root Certification Authorities
+echo   - Intermediate Certification Authorities
+echo --------------------------------------------
+pause
+endlocal
+BAT
   sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.html" >/dev/null <<'HTML'
 <!doctype html><meta charset="utf-8">
 <title>dmj.one Trust Kit — Quick Guide</title>
@@ -1011,14 +1092,22 @@ TXT
 <h1>dmj.one Trust Kit — Quick Guide</h1>
 <p><b>Install the dmj.one Root CA</b> once. Then dmj.one‑signed PDFs show as trusted.</p>
 
-<h2>Windows</h2>
+<h2>Windows — One-click (recommended)</h2>
 <ol>
-  <li>Double‑click <code>dmj-one-root-ca-r1.cer</code> → <b>Install Certificate…</b></li>
-  <li><b>Local Machine</b> (or <b>Current User</b>) → <b>Next</b></li>
-  <li><b>Place all certificates in the following store</b> → <b>Browse</b> → pick <b>Trusted Root Certification Authorities</b> → <b>OK</b> → <b>Next</b> → <b>Finish</b></li>
-  <li>Approve the warning (<b>Yes</b>)</li>
+  <li>Right-click <code>install-dmj-certificates.bat</code> → <b>Run as administrator</b></li>
+  <li>The installer adds:
+    <ul>
+      <li><b>dmj-one-root-ca-r1.(cer/crt)</b> → <b>Trusted Root Certification Authorities</b></li>
+      <li><b>dmj-one-issuing-ca-r1.(cer/crt)</b> → <b>Intermediate Certification Authorities</b></li>
+    </ul>
+  </li>
+  <li>Verify (optional) with <code>certmgr.msc</code></li>
 </ol>
-<p><i>Optional:</i> import <code>dmj-one-issuing-ca-r1.cer</code> into <b>Intermediate Certification Authorities</b>.</p>
+
+<h3>Manual alternative</h3>
+<p><b>Root CA:</b> Double-click <code>dmj-one-root-ca-r1.cer</code> → <b>Install Certificate…</b> → <b>Local Machine</b> (or <b>Current User</b>) → 
+<b>Place all certificates in the following store</b> → <b>Trusted Root Certification Authorities</b> → finish and approve.</p>
+<p><b>Issuing CA (optional):</b> import <code>dmj-one-issuing-ca-r1.cer</code> into <b>Intermediate Certification Authorities</b>.</p>
 
 <h2>macOS</h2>
 <ol>
@@ -1047,13 +1136,14 @@ HTML
   ( cd "${PKI_PUB}" && sha256sum \
       dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
       dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
+      install-dmj-certificates.bat \
       > dmj-one-trust-kit-SHA256SUMS.txt )
 
   ( cd "${PKI_PUB}" && zip -q -r "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" \
       dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
       dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
       dmj-one-trust-kit-README.txt dmj-one-trust-kit-README.html \
-      dmj-one-trust-kit-SHA256SUMS.txt )
+      dmj-one-trust-kit-SHA256SUMS.txt install-dmj-certificates.bat )
 fi
 
 # Always point this public name at the pinned series
