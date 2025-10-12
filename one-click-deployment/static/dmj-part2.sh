@@ -1538,15 +1538,15 @@ async function handleAdmin(env: Env, req: Request){
         .bind(crypto.randomUUID(), now(), "sign", sha, "", "", "")
         .run();
 
-      # return new Response(signed, {
-      #   headers:{
-      #     "content-type":"application/pdf",
-      #     "content-disposition":`attachment; filename="signed.pdf"`,
-      #     "x-doc-sha256": sha,
-      #     "x-issuer": env.ISSUER,
-      #     "x-doc-verified": "true"
-      #   }
-      # });
+      // return new Response(signed, {
+      //   headers:{
+      //     "content-type":"application/pdf",
+      //     "content-disposition":`attachment; filename="signed.pdf"`,
+      //     "x-doc-sha256": sha,
+      //     "x-issuer": env.ISSUER,
+      //     "x-doc-verified": "true"
+      //   }
+      // });
       const wantZip = (env.BUNDLE_TRUST_KIT || "0") === "1";
       if (!wantZip) {
         // Old behavior: return the signed PDF directly
@@ -1554,7 +1554,9 @@ async function handleAdmin(env: Env, req: Request){
           headers: {
             "content-type":"application/pdf",
             "content-disposition":`attachment; filename="signed.pdf"`,
-            "x-doc-sha256": sha, "x-issuer": env.ISSUER, "x-doc-verified":"true"
+            "x-doc-sha256": sha,
+            "x-issuer": env.ISSUER,
+            "x-doc-verified":"true"
           }
         });
       }
