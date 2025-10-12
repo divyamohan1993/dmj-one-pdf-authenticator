@@ -1106,5 +1106,3 @@ Visit: https://$DOMAIN  (behind Cloudflare Flexible SSL)
 Service Name: $SERVICE_NAME
 Live Logs: sudo journalctl -u $SERVICE_NAME -f
 EOF
-
-sudo journalctl -u $SERVICE_NAME -f
