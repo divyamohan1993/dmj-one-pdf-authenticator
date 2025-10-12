@@ -298,6 +298,8 @@ import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.util.Matrix;
 
+import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -461,49 +463,170 @@ public class SignerServer {
 
     synchronized (RECENT_NONCES) {
       if (RECENT_NONCES.contains(nonceB64)) return false;
-      RECENT_NONCES.add(nonceB64);
-      if (RECENT_NONCES.size() > 1000) RECENT_NONCES.iterator().remove();
+        RECENT_NONCES.add(nonceB64);
+        if (RECENT_NONCES.size() > 1000) RECENT_NONCES.iterator().remove();
+      }
+
+      byte[] secret = Base64.decode(sharedBase64);
+      Mac mac = Mac.getInstance("HmacSHA256");
+      mac.init(new SecretKeySpec(secret, "HmacSHA256"));
+
+      mac.update(method.getBytes(StandardCharsets.UTF_8));
+      mac.update((byte) 0);
+      mac.update(path.getBytes(StandardCharsets.UTF_8));
+      mac.update((byte) 0);
+      mac.update(ts.getBytes(StandardCharsets.UTF_8));
+      mac.update((byte) 0);
+
+      // nonce is sent base64 by the Worker -> verify over the decoded bytes
+      byte[] nonce = Base64.decode(nonceB64);
+      mac.update(nonce);
+      mac.update((byte) 0);
+
+      mac.update(body);
+
+      byte[] expected = mac.doFinal();
+      byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
+      return MessageDigest.isEqual(expected, provided);
     }
 
-    byte[] secret = Base64.decode(sharedBase64);
-    Mac mac = Mac.getInstance("HmacSHA256");
-    mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-
-    mac.update(method.getBytes(StandardCharsets.UTF_8));
-    mac.update((byte) 0);
-    mac.update(path.getBytes(StandardCharsets.UTF_8));
-    mac.update((byte) 0);
-    mac.update(ts.getBytes(StandardCharsets.UTF_8));
-    mac.update((byte) 0);
-
-    // nonce is sent base64 by the Worker -> verify over the decoded bytes
-    byte[] nonce = Base64.decode(nonceB64);
-    mac.update(nonce);
-    mac.update((byte) 0);
-
-    mac.update(body);
-
-    byte[] expected = mac.doFinal();
-    byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
-    return MessageDigest.isEqual(expected, provided);
+    static String toHex(byte[] b){
+    StringBuilder sb = new StringBuilder(b.length * 2);
+    for (byte x : b) sb.append(String.format("%02x", x));
+    return sb.toString();
+  }
+  static String jcaDigestNameFromOid(String oid){
+    return switch (oid) {
+      case "1.3.14.3.2.26" -> "SHA-1";
+      case "2.16.840.1.101.3.4.2.1" -> "SHA-256";
+      case "2.16.840.1.101.3.4.2.2" -> "SHA-384";
+      case "2.16.840.1.101.3.4.2.3" -> "SHA-512";
+      case "2.16.840.1.101.3.4.2.4" -> "SHA-224";
+      default -> "SHA-256"; // safe default
+    };
   }
 
-  static String toHex(byte[] b){
-  StringBuilder sb = new StringBuilder(b.length * 2);
-  for (byte x : b) sb.append(String.format("%02x", x));
-  return sb.toString();
-}
-static String jcaDigestNameFromOid(String oid){
-  return switch (oid) {
-    case "1.3.14.3.2.26" -> "SHA-1";
-    case "2.16.840.1.101.3.4.2.1" -> "SHA-256";
-    case "2.16.840.1.101.3.4.2.2" -> "SHA-384";
-    case "2.16.840.1.101.3.4.2.3" -> "SHA-512";
-    case "2.16.840.1.101.3.4.2.4" -> "SHA-224";
-    default -> "SHA-256"; // safe default
-  };
+// Build a PDFBox "visual signature template" as recommended by CreateVisibleSignature2.
+// All drawing happens here (before addSignature), so ByteRange stays intact.
+private static InputStream buildBadgeTemplate(PDDocument srcDoc, int pageNum,
+                                              Rectangle2D.Float humanRect,
+                                              PDSignature signature, String lineText) throws IOException {
+  try (PDDocument t = new PDDocument()) {
+    // Page size identical to target page (PDFBox copies only needed parts)
+    PDPage srcPage = srcDoc.getPage(pageNum);
+    t.addPage(new PDPage(srcPage.getMediaBox()));
+
+    PDAcroForm form = new PDAcroForm(t);
+    t.getDocumentCatalog().setAcroForm(form);
+    PDSignatureField sigField = new PDSignatureField(form);
+    PDAnnotationWidget widget = sigField.getWidgets().get(0);
+
+    // Required bookkeeping flags
+    form.setSignaturesExist(true);
+    form.setAppendOnly(true);
+    form.getCOSObject().setDirect(true);
+    form.getFields().add(sigField);
+
+    // Convert "humanRect" (top-left origin) to proper /Rect for current page rotation
+    PDRectangle rect = createSignatureRectangleForPage(srcDoc, pageNum, humanRect);
+    widget.setRectangle(rect);
+
+    // Appearance stream (badge drawing)
+    PDStream stream = new PDStream(t);
+    PDFormXObject formX = new PDFormXObject(stream);
+    PDResources res = new PDResources();
+    formX.setResources(res);
+    formX.setFormType(1);
+
+    PDRectangle bbox = new PDRectangle(rect.getWidth(), rect.getHeight());
+    formX.setBBox(bbox);
+
+    PDAppearanceDictionary ap = new PDAppearanceDictionary();
+    ap.getCOSObject().setDirect(true);
+    PDAppearanceStream apStream = new PDAppearanceStream(formX.getCOSObject());
+    ap.setNormalAppearance(apStream);
+    widget.setAppearance(ap);
+
+    // We need a resources object on the appearance stream to set alpha state
+    if (apStream.getResources() == null) apStream.setResources(new PDResources());
+
+    try (PDPageContentStream cs = new PDPageContentStream(t, apStream)) {
+      // Translucent background (white @ 60% alpha) — values must be in 0..1
+      PDExtendedGraphicsState gs = new PDExtendedGraphicsState();
+      gs.setNonStrokingAlphaConstant(0.60f);
+      COSName gsName = apStream.getResources().add(gs);
+      cs.setGraphicsStateParameters(gs);
+
+      cs.setNonStrokingColor(1f, 1f, 1f);
+      cs.addRect(0, 0, bbox.getWidth(), bbox.getHeight());
+      cs.fill();
+
+      // Green check icon
+      cs.setStrokingColor(0.18f, 0.70f, 0.22f);
+      cs.setLineWidth(2.0f);
+      float cy = bbox.getHeight() / 2f;
+      cs.moveTo(6f, cy - 2f);
+      cs.lineTo(12f, cy - 8f);
+      cs.lineTo(22f, cy + 4f);
+      cs.stroke();
+
+      // Text
+      PDFont font = new PDType1Font(FontName.HELVETICA_BOLD);
+      cs.beginText();
+      cs.setNonStrokingColor(0f, 0f, 0f);
+      cs.setFont(font, 9.5f);
+      cs.newLineAtOffset(28f, cy - 3.5f);
+      cs.showText(lineText);
+      cs.endText();
+    }
+
+    // Return as stream for SignatureOptions.setVisualSignature(...)
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    t.save(baos);
+    return new ByteArrayInputStream(baos.toByteArray());
+  }
 }
 
+// Helper lifted from the PDFBox example to transform a "humanRect" (top-left origin)
+// to a proper PDRectangle that respects the page rotation. (matches CreateVisibleSignature2)
+private static PDRectangle createSignatureRectangleForPage(PDDocument doc, int pageNum, Rectangle2D humanRect) {
+  float x = (float) humanRect.getX();
+  float y = (float) humanRect.getY();
+  float width = (float) humanRect.getWidth();
+  float height = (float) humanRect.getHeight();
+
+  PDPage page = doc.getPage(pageNum);
+  PDRectangle pageRect = page.getCropBox();
+  PDRectangle rect = new PDRectangle();
+  switch (page.getRotation()) {
+    case 90:
+      rect.setLowerLeftY(x);
+      rect.setUpperRightY(x + width);
+      rect.setLowerLeftX(y);
+      rect.setUpperRightX(y + height);
+      break;
+    case 180:
+      rect.setUpperRightX(pageRect.getWidth() - x);
+      rect.setLowerLeftX(pageRect.getWidth() - x - width);
+      rect.setLowerLeftY(y);
+      rect.setUpperRightY(y + height);
+      break;
+    case 270:
+      rect.setLowerLeftY(pageRect.getHeight() - x - width);
+      rect.setUpperRightY(pageRect.getHeight() - x);
+      rect.setLowerLeftX(pageRect.getWidth() - y - height);
+      rect.setUpperRightX(pageRect.getWidth() - y);
+      break;
+    case 0:
+    default:
+      rect.setLowerLeftX(x);
+      rect.setUpperRightX(x + width);
+      rect.setLowerLeftY(pageRect.getHeight() - y - height);
+      rect.setUpperRightY(pageRect.getHeight() - y);
+      break;
+  }
+  return rect;
+}
 
   // helper exactly like PDFBox example
   static class CMSProcessableInputStream implements CMSTypedData {
@@ -574,9 +697,11 @@ static String jcaDigestNameFromOid(String oid){
   }
   
   // --- Sign the original PDF (external signing, detached PKCS#7) ---
-  static byte[] signPdf(byte[] originalPdf, PrivateKey pk, X509Certificate cert) throws Exception {
-    ByteArrayOutputStream baos = new ByteArrayOutputStream(originalPdf.length + 65536);
-    try (PDDocument doc = Loader.loadPDF(originalPdf)) {
+  static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
+    try (PDDocument doc = Loader.loadPDF(original);
+         ByteArrayOutputStream baos = new ByteArrayOutputStream(original.length + 65536)) {
+
+      // 1) Create signature dictionary (detached CMS)
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
@@ -586,54 +711,40 @@ static String jcaDigestNameFromOid(String oid){
       sig.setContactInfo("contact@dmj.one");
       sig.setSignDate(Calendar.getInstance());
 
-      // Certification: no changes allowed after signing
-      setMDPPermission(doc, sig, 1); // DocMDP P=1 — any change invalidates. :contentReference[oaicite:2]{index=2}
+      // 2) Certification (DocMDP) -> no changes allowed after signing (P=1)
+      setMDPPermission(doc, sig, 1);
 
-      // ----- Create a visible signature field (no custom appearance) -----
-      int pageIndex = 0;
-      PDPage page = doc.getPage(pageIndex);
+      // 3) Decide placement: small badge in top-right margin of page 0
+      final int pageIndex = 0;
+      PDPage first = doc.getPage(pageIndex);
+      PDRectangle crop = first.getCropBox();
+      float margin = 12f;
+      float badgeW = 180f, badgeH = 22f;
 
-      // Ensure there is an AcroForm
-      PDAcroForm acro = doc.getDocumentCatalog().getAcroForm();
-      if (acro == null) {
-        acro = new PDAcroForm(doc);
-        doc.getDocumentCatalog().setAcroForm(acro);
-        // Recommended for appearance generation
-        acro.setSignaturesExist(true);
-        acro.setAppendOnly(true);
-      }
+      // Template rectangle from a human viewpoint (top-left origin), as in CreateVisibleSignature2
+      // We'll ask the example helper to convert properly for rotation, etc.
+      Rectangle2D.Float humanRect = new Rectangle2D.Float(
+              Math.max(0, crop.getWidth() - badgeW - margin), // x from top-left
+              margin,                                        // y from top edge
+              badgeW, badgeH);
 
-      PDSignatureField field = new PDSignatureField(acro);
-      field.setPartialName("dmj_sig_1");
-      PDAnnotationWidget widget = field.getWidgets().get(0);
-      widget.setPage(page);
+      // 4) Build visual template (appearance + field) in a tiny separate doc
+      SignatureOptions opts = new SignatureOptions();
+      opts.setVisualSignature(buildBadgeTemplate(doc, pageIndex, humanRect, sig,
+          "Verified by dmj.one"));                                  // <= badge text
+      opts.setPage(pageIndex);
+      opts.setPreferredSignatureSize(65536);
 
-      // Small rectangle in the top-right margin, away from content
-      PDRectangle crop = page.getCropBox();
-      float rectW = 160f, rectH = 22f, margin = 12f;
-      PDRectangle rect = signatureRectForPage(doc, pageIndex,
-              crop.getWidth() - rectW - margin,  // x from top-left
-              margin,                             // y from top-left
-              rectW, rectH);
-      widget.setRectangle(rect);
+      // 5) Register signature (this sets the reserved ByteRange placeholder)
+      doc.addSignature(sig, /*SignatureInterface*/ (SignatureInterface) null, opts);
 
-      // Add the widget to the page annotations and field to the form
-      page.getAnnotations().add(widget);
-      acro.getFields().add(field);
-
-      // Bind our signature dictionary to this field
-      field.setValue(sig); // attaches /V to the field. :contentReference[oaicite:3]{index=3}
-
-      // Prepare external signing (no visual appearance is set -> viewer draws default)
-      SignatureOptions options = new SignatureOptions();
-      options.setPreferredSignatureSize(65536);
-      options.setPage(pageIndex);
-
+      // 6) External signing (NO document modifications after addSignature!)
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
       byte[] cms = buildDetachedCMS(ext.getContent(), pk, cert);
       ext.setSignature(cms);
+
+      return baos.toByteArray();
     }
-    return baos.toByteArray();
   }
 
 
