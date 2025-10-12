@@ -418,39 +418,38 @@ public class SignerServer {
   }
 
   // --- Sign the original PDF ---
-  static byte[] signPdf(byte[] original, PrivateKey pk, X509Certificate cert) throws Exception {
-    ByteArrayOutputStream out = new ByteArrayOutputStream(original.length + 40000);
-    try (PDDocument doc = Loader.loadPDF(original)) {
-      PDSignature sig = new PDSignature();
-      sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
-      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // detached CMS, as viewers expect
-      sig.setName("dmj.one");
-      sig.setLocation("IN");
-      sig.setReason("Contents securely verified by dmj.one against any tampering.");
-      sig.setContactInfo("contact@dmj.one");
-      sig.setSignDate(Calendar.getInstance());
+  static byte[] signPdf(byte[] originalPdf, PrivateKey pk, X509Certificate cert) throws Exception {
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    try (PDDocument doc = Loader.loadPDF(originalPdf)) {
+        PDSignature sig = new PDSignature();
+        sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+        sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED);
+        sig.setName("dmj.one");
+        sig.setLocation("IN");
+        sig.setReason("Contents securely verified by dmj.one against any tampering.");
+        sig.setContactInfo("contact@dmj.one");
+        sig.setSignDate(Calendar.getInstance());
 
-      // Reserve generous space for the CMS container
-      SignatureOptions opts = new SignatureOptions();
-      opts.setPreferredSignatureSize(65536);
+        // Mark this as a certification signature (no further changes allowed)
+        setMDPPermission(doc, sig, 1);  // P=1 => no changes allowed:contentReference[oaicite:2]{index=2}:contentReference[oaicite:3]{index=3}
 
-      // Register signature for signing (using SignatureInterface)
-      doc.addSignature(sig, new SignatureInterface() {
-        @Override
-        public byte[] sign(InputStream content) throws IOException {
-          try {
-            return buildDetachedCMS(content, pk, cert);
-          } catch (Exception e) {
-            e.printStackTrace();
-            throw new IOException("Signing failed: " + e.getMessage(), e);
-          }
+        // Prepare to sign using external signing mode
+        SignatureOptions options = new SignatureOptions();
+        options.setPreferredSignatureSize(65536);  // reserve ample space for signature bytes
+        doc.addSignature(sig, options);  // add signature to document (no SignatureInterface callback)
+
+        // Perform the incremental save and obtain content to be signed
+        try (ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos)) {
+            InputStream contentStream = ext.getContent();
+            // Build the detached PKCS#7 signature for the PDF content (excluding the placeholder)
+            byte[] signatureCMS = buildDetachedCMS(contentStream, pk, cert);
+            // Set the generated signature bytes into the PDF
+            ext.setSignature(signatureCMS);
         }
-      }, opts);
-      // Write the incremental update (includes the signature)
-      doc.saveIncremental(out);
-    }
-    return out.toByteArray();
+      }
+    return baos.toByteArray();
   }
+
 
   static Map<String,Object> verifyPdf(byte[] input, X509Certificate ourCert) throws Exception {
     Map<String,Object> out = new LinkedHashMap<>();
