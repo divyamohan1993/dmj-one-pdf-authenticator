@@ -1094,7 +1094,10 @@ systemctl disable "$AUTOCONFIG_SERVICE_NAME" >/dev/null 2>&1 || true
 systemctl enable "$AUTOCONFIG_SERVICE_NAME"
 
 # Final message (don’t block)
-echo "[OK] Deployment/update complete. Visit: https://$DOMAIN"
+echo "OK — deployment complete."
+echo "Visit: https://$DOMAIN  (behind Cloudflare Flexible SSL)"
+echo "Service Name: $SERVICE_NAME"
+echo "Live Logs: sudo journalctl -u $SERVICE_NAME -f"
 
 
 # Finalize
