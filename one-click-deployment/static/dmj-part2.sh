@@ -110,7 +110,6 @@ say(){ printf "%s\n" "$*" >&3; }
 # Error trap prints a friendly pointer to the log
 trap 'rc=$?; say ""; say "[!] Failed at line $LINENO: $BASH_COMMAND (exit $rc)"; say "[i] See full log: $LOG_FILE"; exit $rc' ERR
 
-
 # --- Use the Part 1 service-user Wrangler wrapper ----------------------------
 WR="/usr/local/bin/dmj-wrangler"
 if [ ! -x "$WR" ]; then
@@ -121,7 +120,6 @@ if [ -z "$WR" ]; then
   echo "[x] Wrangler CLI not found. Run Part 1 first."
   exit 1
 fi
-
 
 echo "[+] Verifying Wrangler auth..."
 if ! "$WR" whoami >/dev/null 2>&1; then
