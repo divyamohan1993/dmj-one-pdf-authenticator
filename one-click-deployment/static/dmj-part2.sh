@@ -1731,52 +1731,87 @@ function renderHome(issuerDomain: string, nonce: string) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="light" />
-<title>dmj.one · Trust Verification</title>
+<title>dmj.one · Official Trust Verification</title>
 
 <link rel="icon" href="https://dmj.one/logo.png">
 <link rel="apple-touch-icon" href="https://dmj.one/logo.png">
 
-<!-- CSS only -->
+<!-- Core CSS -->
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+<!-- Font Awesome (CSS only; CSP allows https fonts/styles) -->
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" rel="stylesheet" />
 
 <style>
   :root{
-    --bg:#f7fafc; --surface:#fff; --ink:#0f172a; --muted:#64748b; --brand:#2563eb;
-    --ok:#16a34a; --bad:#dc2626; --ring-track:#e5e7eb; --ring-glow:0 10px 40px rgba(37,99,235,.12);
+    /* Trust palette */
+    --bg: #f7fafc;
+    --surface:#ffffff;
+    --ink:#0f172a;
+    --muted:#64748b;
+    --brand:#2563eb; /* Azure */
+    --ok:#16a34a;    /* Emerald */
+    --bad:#dc2626;   /* Trust red for alerts */
+
+    --ring-track:#e5e7eb;
+    --ring-glow:0 10px 40px rgba(37,99,235,.12);
   }
-  html,body{height:100%}
+
+  html, body { height: 100%; }
   body{
-    margin:0;
-    background:
-      radial-gradient(1200px 600px at 20% -10%, rgba(37,99,235,.06), transparent 60%),
-      radial-gradient(1000px 500px at 120% 10%, rgba(34,197,94,.05), transparent 60%),
-      var(--bg);
-    color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow-x:hidden;
+    margin:0; color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow-x:hidden;
+    background: var(--bg);
   }
-  .stage{min-height:100dvh; display:grid; place-items:center; padding:clamp(16px,3vw,32px)}
+
+  /* Continuous, trusting background (pure CSS) */
+  .bg-anim{
+    position:fixed; inset:-20vmax; z-index:0; pointer-events:none; filter: blur(40px);
+  }
+  .bg-anim::before,
+  .bg-anim::after{
+    content:""; position:absolute; width:140vmax; height:140vmax; border-radius:50%;
+    opacity:.25;
+  }
+  .bg-anim::before{
+    background: radial-gradient(55% 55% at 50% 50%, rgba(37,99,235,.45) 0%, rgba(37,99,235,0) 65%);
+    animation: driftA 28s linear infinite;
+  }
+  .bg-anim::after{
+    background: radial-gradient(55% 55% at 50% 50%, rgba(22,163,74,.35) 0%, rgba(22,163,74,0) 65%);
+    animation: driftB 36s linear infinite reverse;
+  }
+  @keyframes driftA{ 0%{ transform:translate(-18%, -12%) rotate(0)} 100%{ transform:translate(18%, 12%) rotate(360deg)} }
+  @keyframes driftB{ 0%{ transform:translate(12%, -16%) rotate(0)} 100%{ transform:translate(-12%, 16%) rotate(-360deg)} }
+
+  /* Stage */
+  .stage{ position:relative; z-index:1; min-height:100dvh; display:grid; place-items:center; padding:clamp(16px,3vw,32px) }
   .frame{
-    width:min(880px,100%); background:var(--surface); border-radius:18px; border:1px solid rgba(2,6,23,.06);
-    box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 30px rgba(0,0,0,.06); padding:clamp(16px,4vw,32px)
+    width:min(880px,100%); background:var(--surface); border:1px solid rgba(2,6,23,.06);
+    border-radius:18px; box-shadow:0 1px 2px rgba(0,0,0,.04), 0 10px 30px rgba(0,0,0,.06);
+    padding:clamp(16px,4vw,32px)
   }
-  .brand{display:grid; justify-items:center; text-align:center; gap:.5rem}
-  .brand img{height:clamp(44px,8vw,64px); width:auto}
-  .brand h1{font-size:clamp(1.25rem,3.2vw,1.75rem); margin:0}
-  .brand p{color:var(--muted); margin:0}
 
-  .cta-wrap{display:grid; place-items:center; margin-top:clamp(16px,3vw,28px)}
+  /* Brand header */
+  .brand{ display:grid; justify-items:center; text-align:center; gap:.35rem }
+  .brand img{ height:clamp(44px,8vw,64px); width:auto }
+  .brand h1{ font-size:clamp(1.25rem,3.2vw,1.75rem); margin:0; font-weight:800; letter-spacing:.2px }
+  .brand p{ color:var(--muted); margin:0 }
+
+  /* Single CTA */
+  .cta-wrap{ display:grid; place-items:center; margin-top:clamp(16px,3vw,28px) }
   .cta{
-    display:inline-flex; align-items:center; gap:.6rem; padding:16px 22px; border-radius:999px;
-    background:var(--ink); color:#fff; font-weight:600; border:1px solid rgba(2,6,23,.1);
-    box-shadow:0 6px 24px rgba(15,23,42,.18); cursor:pointer; user-select:none;
-    transition:transform .06s ease, box-shadow .2s ease, opacity .2s ease;
+    display:inline-flex; align-items:center; gap:.6rem;
+    padding:16px 22px; border-radius:999px; background:var(--ink); color:#fff; font-weight:700;
+    border:1px solid rgba(2,6,23,.1); box-shadow:0 6px 24px rgba(15,23,42,.18);
+    cursor:pointer; user-select:none; transition:transform .06s ease, box-shadow .2s ease, opacity .2s ease;
   }
-  .cta:hover{transform:translateY(-1px); box-shadow:0 10px 28px rgba(15,23,42,.22)}
-  .cta:active{transform:translateY(0)}
-  .cta[aria-disabled="true"]{opacity:.6; pointer-events:none}
-  .cta .kbd{font:500 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#cbd5e1; border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px}
+  .cta:hover{ transform:translateY(-1px); box-shadow:0 10px 28px rgba(15,23,42,.22) }
+  .cta:active{ transform:translateY(0) }
+  .cta[aria-disabled="true"]{ opacity:.6; pointer-events:none }
+  .cta .kbd{ font:500 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#cbd5e1;
+    border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px }
 
-  .moment{margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center}
+  /* Verifying moment */
+  .moment{ margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center }
   .ring{
     width:112px; height:112px; border-radius:50%;
     background:conic-gradient(var(--brand) 0 25%, var(--ring-track) 25% 100%);
@@ -1784,52 +1819,67 @@ function renderHome(issuerDomain: string, nonce: string) {
             mask:radial-gradient(farthest-side, transparent 64%, #000 65%);
     animation:spin 1.05s linear infinite; box-shadow:var(--ring-glow)
   }
-  @keyframes spin{to{transform:rotate(1turn)}}
-  .moment h2{font-size:clamp(1.1rem,3vw,1.4rem); margin:.9rem 0 0}
-  .moment p{color:var(--muted); margin:.35rem 0 0}
+  @keyframes spin{ to{ transform:rotate(1turn) } }
+  .moment h2{ font-size:clamp(1.1rem,3vw,1.4rem); margin:.9rem 0 0 }
+  .moment p{ color:var(--muted); margin:.35rem 0 0 }
 
-  .verdict{margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center}
-  .icon-box{position:relative; width:120px; height:120px}
-  .ripple{position:absolute; inset:-8px; border-radius:50%; border:2px solid rgba(22,163,74,.35); opacity:0; transform:scale(.7)}
-  .ripple.play{animation:ripple 900ms ease-out 1}
-  @keyframes ripple{0%{opacity:0; transform:scale(.7)} 35%{opacity:.55} 100%{opacity:0; transform:scale(1.2)}}
-  svg.icon{width:120px; height:120px}
-  .stroke{fill:none; stroke-linecap:round; stroke-width:10}
-  .draw{stroke-dasharray:100; stroke-dashoffset:100; animation:dash .6s ease-out forwards}
-  @keyframes dash{to{stroke-dashoffset:0}}
-  .title{font-size:clamp(36px,6vw,64px); font-weight:800; letter-spacing:.4px}
-  .caption{color:var(--muted); margin-top:6px}
-  .hash{margin-top:10px; font:500 13px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px}
+  /* Verdict */
+  .verdict{ margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center }
+  .icon-box{ position:relative; width:128px; height:128px }
+  /* Success ripple */
+  .ripple{ position:absolute; inset:-10px; border-radius:50%; border:2px solid rgba(22,163,74,.35); opacity:0; transform:scale(.7) }
+  .ripple.play{ animation:ripple 900ms ease-out 1 }
+  @keyframes ripple{ 0%{opacity:0; transform:scale(.7)} 35%{opacity:.55} 100%{opacity:0; transform:scale(1.22)} }
 
-  .forensics{margin-top:18px; width:100%; max-width:840px}
-  .forensics .card{background:#fff; border:1px solid #e5e7eb; border-radius:14px}
-  .forensics .card h3{font-size:1rem; margin:0 0 .5rem}
-  .stat-dot{width:.65rem; height:.65rem; border-radius:50%; display:inline-block; margin-right:.45rem}
-  .yes{background:var(--ok)} .no{background:var(--bad)}
-  .label{color:var(--muted)}
+  /* CSS-animated icons (stroke draw) */
+  svg.icon{ width:128px; height:128px }
+  .stroke{ fill:none; stroke-linecap:round; stroke-width:10; stroke-dasharray:180; stroke-dashoffset:180 }
+  svg.icon.play .stroke{ animation: draw .6s ease-out forwards }
+  @keyframes draw{ to{ stroke-dashoffset:0 } }
 
-  .trust-nudge{margin-top:18px; font-size:.95rem; color:var(--muted)}
-  .trust-nudge a{text-decoration:none}
-  footer{margin-top:22px; text-align:center; color:var(--muted); font-size:.95rem}
+  .title{ font-size:clamp(36px,6vw,64px); font-weight:900; letter-spacing:.4px }
+  .caption{ color:var(--muted); margin-top:6px }
+  .hash{ margin-top:10px; font:500 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px }
 
-  @media (prefers-reduced-motion: reduce){ .ring, .draw, .ripple.play{animation:none !important} }
-  @media (max-width:420px){ .hash{word-break:break-all} }
+  /* Forensics (press F) — official, succinct, no JSON */
+  .forensics{ margin-top:18px; width:100%; max-width:840px }
+  .forensics .card{ background:#fff; border:1px solid #e5e7eb; border-radius:14px }
+  .forensics .card h3{ font-size:1rem; margin:0 0 .5rem; font-weight:700 }
+  .stat-dot{ width:.65rem; height:.65rem; border-radius:50%; display:inline-block; margin-right:.45rem }
+  .yes{ background:var(--ok) } .no{ background:var(--bad) }
+  .label{ color:var(--muted) }
+
+  /* Trust Kit nudge */
+  .trust-nudge{ margin-top:18px; font-size:.95rem; color:var(--muted); text-align:center }
+  .trust-nudge a{ text-decoration:none }
+
+  footer{ margin-top:22px; text-align:center; color:var(--muted); font-size:.95rem }
+
+  /* Accessibility: tone down animation for motion-sensitive users */
+  @media (prefers-reduced-motion: reduce){
+    .bg-anim{ display:none !important }
+    .ring, .ripple.play, svg.icon.play .stroke{ animation: none !important }
+  }
+  @media (max-width:420px){ .hash{ word-break: break-all } }
 </style>
 </head>
 <body>
+  <div class="bg-anim" aria-hidden="true"></div>
+
   <main class="stage">
-    <section class="frame" id="app">
+    <section class="frame">
       <div class="brand">
-        <img src="https://dmj.one/logo.png" alt="dmj.one logo">
-        <h1>Document Trust Verification</h1>
-        <p>Official document authenticity check for documents issued by <span class="fw-semibold">${issuerDomain}</span>.</p>
+        <img src="https://dmj.one/logo.png" alt="dmj.one logo" width="128" height="128">
+        <h1>Official Verification</h1>
+        <p>Authenticate documents issued by <span class="fw-semibold">${issuerDomain}</span>.</p>
       </div>
 
       <!-- SINGLE ACTION -->
       <div class="cta-wrap">
         <input id="fileInput" class="d-none" type="file" accept="application/pdf" />
         <label id="cta" class="cta" for="fileInput" role="button" aria-disabled="false">
-          <i class="bi-upload"></i>
+          <i class="fa-solid fa-upload"></i>
           <span id="ctaText">Upload Document</span>
           <span class="kbd d-none d-sm-inline">PDF</span>
         </label>
@@ -1838,7 +1888,7 @@ function renderHome(issuerDomain: string, nonce: string) {
       <!-- PROGRESS -->
       <div id="moment" class="moment" hidden>
         <div class="ring" aria-hidden="true"></div>
-        <h2 id="busyTitle">Verifying…</h2>
+        <h2>Verifying…</h2>
         <p id="busySub" class="text-secondary"></p>
       </div>
 
@@ -1846,14 +1896,19 @@ function renderHome(issuerDomain: string, nonce: string) {
       <div id="verdict" class="verdict" hidden aria-live="polite" role="status">
         <div class="icon-box">
           <span id="ripple" class="ripple" aria-hidden="true"></span>
+
+          <!-- SUCCESS (CSS animated) -->
           <svg id="iconSuccess" class="icon" viewBox="0 0 120 120" hidden>
-            <path class="stroke" stroke="var(--ok)" pathLength="100" d="M30 62 L52 84 L92 36"></path>
+            <path class="stroke" stroke="var(--ok)" d="M30 62 L52 84 L92 36"></path>
           </svg>
+
+          <!-- FAILURE (CSS animated) -->
           <svg id="iconFail" class="icon" viewBox="0 0 120 120" hidden>
-            <path class="stroke" stroke="var(--bad)" pathLength="100" d="M36 36 L84 84"></path>
-            <path class="stroke" stroke="var(--bad)" pathLength="100" d="M84 36 L36 84"></path>
+            <path class="stroke" stroke="var(--bad)" d="M36 36 L84 84"></path>
+            <path class="stroke" stroke="var(--bad)" d="M84 36 L36 84"></path>
           </svg>
         </div>
+
         <div id="verdictTitle" class="title mt-2"></div>
         <div id="verdictCaption" class="caption"></div>
         <div class="hash" id="sha">SHA‑256: —</div>
@@ -1862,13 +1917,13 @@ function renderHome(issuerDomain: string, nonce: string) {
       <!-- FORENSICS (press F) -->
       <div id="fx" class="forensics" hidden>
         <div class="card p-3">
-          <h3 class="mb-2">Forensic Report</h3>
+          <h3 class="mb-2"><i class="fa-solid fa-shield me-1"></i>Forensic Report</h3>
           <div class="row g-3">
             <div class="col-md-6">
               <ul class="list-unstyled mb-0 small">
                 <li><span id="d_sig" class="stat-dot"></span>Signature object present</li>
                 <li><span id="d_crypto" class="stat-dot"></span>Cryptographic validity</li>
-                <li><span id="d_cover" class="stat-dot"></span>Signature covers entire document</li>
+                <li><span id="d_cover" class="stat-dot"></span>Covers entire document</li>
               </ul>
             </div>
             <div class="col-md-6">
@@ -1880,14 +1935,14 @@ function renderHome(issuerDomain: string, nonce: string) {
               </ul>
             </div>
           </div>
-          <pre id="raw" class="mt-3 small text-secondary" style="white-space:pre-wrap;word-break:break-word;"></pre>
+          <!-- Intentionally no JSON -->
         </div>
       </div>
 
-      <div class="trust-nudge text-center">
-        <i class="bi-shield-check me-1"></i>
-        <a href="${pkiZip}" download>Install the dmj.one Trust Kit</a>
-        <span class="ms-1">for instant green checks in Acrobat/Reader.</span>
+      <div class="trust-nudge">
+        <i class="fa-solid fa-shield me-1"></i>
+        <a href="${pkiZip}" download>Install dmj.one Trust Kit</a>
+        <span class="ms-1">for automatic green checks in Acrobat/Reader.</span>
       </div>
 
       <footer class="pt-2">
@@ -1898,7 +1953,7 @@ function renderHome(issuerDomain: string, nonce: string) {
 
 <script nonce="__CSP_NONCE__">
 (function(){
-  // -------- Elements (plain JS: no TS 'as' assertions) --------
+  // Elements
   var input   = document.getElementById('fileInput');
   var cta     = document.getElementById('cta');
   var ctaText = document.getElementById('ctaText');
@@ -1915,7 +1970,6 @@ function renderHome(issuerDomain: string, nonce: string) {
   var shaChip        = document.getElementById('sha');
 
   var fxWrap  = document.getElementById('fx');
-  var raw     = document.getElementById('raw');
 
   var dots = {
     d_sig:   document.getElementById('d_sig'),
@@ -1927,36 +1981,33 @@ function renderHome(issuerDomain: string, nonce: string) {
   };
   var issuerEl = document.getElementById('issuer');
 
-  // -------- State & guards --------
+  // State + guards
   var inFlight = false;
   var controller = null;
 
   function resetUI(){
     if (input) input.value = '';
+    if (controller && controller.abort) controller.abort(); controller = null;
     inFlight = false;
-    if (controller && controller.abort) controller.abort();
-    controller = null;
 
     if (cta) { cta.setAttribute('aria-disabled','false'); cta.classList.remove('disabled'); }
     if (ctaText) ctaText.textContent = 'Upload Document';
 
     if (moment) moment.hidden = true;
     if (verdict) verdict.hidden = true;
-    if (iconSuccess) iconSuccess.hidden = true;
-    if (iconFail) iconFail.hidden = true;
+    if (iconSuccess) { iconSuccess.hidden = true; iconSuccess.classList.remove('play'); }
+    if (iconFail)    { iconFail.hidden    = true; iconFail.classList.remove('play'); }
     if (ripple) ripple.classList.remove('play');
 
     if (fxWrap) fxWrap.hidden = true;
-    if (raw) raw.textContent = '';
     for (var k in dots){ if (dots[k]) dots[k].className = 'stat-dot'; }
     if (issuerEl) issuerEl.textContent = '';
     if (shaChip) shaChip.textContent = 'SHA‑256: —';
-    if (verdictTitle) verdictTitle.textContent = '';
+    if (verdictTitle) { verdictTitle.textContent = ''; verdictTitle.style.color = ''; }
     if (verdictCaption) verdictCaption.textContent = '';
   }
-
-  resetUI(); // on first load
-  window.addEventListener('pageshow', resetUI); // refresh/back → fresh CTA (supported across major browsers). 
+  resetUI();
+  window.addEventListener('pageshow', resetUI); // ensures F5/back always restores CTA
 
   function lock(locked){
     if (!cta) return;
@@ -1977,15 +2028,11 @@ function renderHome(issuerDomain: string, nonce: string) {
     if (busySub) busySub.textContent = filename || '';
   }
 
-  function animatePaths(svg){
+  function playDraw(svg){
     if (!svg) return;
-    var ps = svg.querySelectorAll('path');
-    for (var i=0;i<ps.length;i++){
-      ps[i].classList.remove('draw');
-      // reflow to retrigger animation
-      void ps[i].getBoundingClientRect();
-      ps[i].classList.add('draw');
-    }
+    svg.classList.remove('play');
+    void svg.getBoundingClientRect(); // reflow to retrigger
+    svg.classList.add('play');
   }
 
   function showVerdict(data){
@@ -1998,14 +2045,14 @@ function renderHome(issuerDomain: string, nonce: string) {
     if (shaChip) shaChip.textContent = 'SHA‑256: ' + shortHash((data && (data.sha256 || data.hash)) || '');
 
     if (iconSuccess) iconSuccess.hidden = !valid;
-    if (iconFail) iconFail.hidden = valid;
-    if (ripple) { ripple.classList.remove('play'); if (valid) ripple.classList.add('play'); }
-
-    animatePaths(valid ? iconSuccess : iconFail);
+    if (iconFail)    iconFail.hidden    = valid;
+    if (valid) { playDraw(iconSuccess); if (ripple) { ripple.classList.remove('play'); ripple.classList.add('play'); } }
+    else       { playDraw(iconFail); if (ripple) ripple.classList.remove('play'); }
 
     if (verdictTitle){ verdictTitle.textContent = valid ? 'VALID' : 'TAMPERED'; verdictTitle.style.color = valid ? 'var(--ok)' : 'var(--bad)'; }
-    if (verdictCaption) verdictCaption.textContent = valid ? 'Trust established' : (reasons[0] || 'Signature or digest mismatch');
+    if (verdictCaption) verdictCaption.textContent = valid ? 'Trust established' : (reasons[0] || 'Signature mismatch');
 
+    // Forensics (no JSON)
     setDot(dots.d_sig,    !!(data && data.hasSignature));
     setDot(dots.d_crypto, !!(data && data.isValid));
     setDot(dots.d_cover,  !!(data && data.coversDocument));
@@ -2013,14 +2060,13 @@ function renderHome(issuerDomain: string, nonce: string) {
     setDot(dots.d_reg,    !!(data && data.issued));
     setDot(dots.d_rev,     data ? data.revoked === false : false);
     if (issuerEl) issuerEl.textContent = (data && data.issuer) || '';
-    if (raw) raw.textContent = JSON.stringify(data || {}, null, 2);
 
     if (ctaText) ctaText.textContent = 'Upload Another Document';
     lock(false);
 
-    // brief, non-intrusive hint
+    // Discreet hint (power users)
     var hint = document.createElement('div');
-    hint.textContent = 'Press F to view the forensic report';
+    hint.innerHTML = '<i class="fa-solid fa-circle-info me-1"></i>Press <strong>F</strong> for Forensics';
     hint.style.cssText = 'margin-top:8px;color:#64748b;font-size:13px';
     if (verdict) verdict.appendChild(hint);
     setTimeout(function(){ if(hint && hint.parentNode) hint.parentNode.removeChild(hint); }, 3000);
@@ -2028,16 +2074,12 @@ function renderHome(issuerDomain: string, nonce: string) {
 
   async function verify(file){
     if (inFlight) return;
-    inFlight = true; lock(true);
-    showBusy(file && file.name);
+    inFlight = true; lock(true); showBusy(file && file.name);
 
     try{
-      var fd = new FormData();
-      fd.set('file', file, file.name);
-
+      var fd = new FormData(); fd.set('file', file, file.name);
       controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-      var to = null;
-      if (controller) { to = setTimeout(function(){ try{ controller.abort(); }catch(e){} }, 20000); }
+      var to = controller ? setTimeout(function(){ try{ controller.abort(); }catch(e){} }, 20000) : null;
 
       var res = await fetch('/verify?json=1', {
         method:'POST',
@@ -2045,7 +2087,6 @@ function renderHome(issuerDomain: string, nonce: string) {
         body: fd,
         signal: controller ? controller.signal : undefined
       });
-
       if (to) clearTimeout(to);
       if (!res.ok) throw new Error('Server returned ' + res.status);
 
@@ -2055,10 +2096,11 @@ function renderHome(issuerDomain: string, nonce: string) {
       showVerdict({ verdict:'tampered', reasons:[ (err && err.message) ? err.message : 'Verification failed' ] });
     } finally{
       inFlight = false; controller = null;
-      if (input) input.value = ''; // allow same file again
+      if (input) input.value = ''; // allow same file again without manual clear
     }
   }
 
+  // Events
   if (input){
     input.addEventListener('click', function(){ input.value = ''; });
     input.addEventListener('change', function(){
@@ -2068,14 +2110,12 @@ function renderHome(issuerDomain: string, nonce: string) {
       verify(f);
     });
   }
-
   if (cta){
     cta.addEventListener('keydown', function(e){
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!inFlight && input) input.click(); }
     });
   }
-
-  // Press F = toggle forensics
+  // Special key: Forensics
   document.addEventListener('keydown', function(e){
     if ((e.key || '').toLowerCase() === 'f' && fxWrap){ fxWrap.hidden = !fxWrap.hidden; }
   });
