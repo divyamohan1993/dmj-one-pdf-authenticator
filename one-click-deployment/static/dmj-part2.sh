@@ -1741,14 +1741,14 @@ function renderHome(issuerDomain: string, nonce: string) {
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
 
-<!-- Animations (cdnjs as requested) -->
+<!-- Animations + bg (cdnjs per CSP) -->
 <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
 <script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js" crossorigin="anonymous"></script>
 
 <style>
   :root{
-    --brand: #60a5fa; /* soft azure accent on dark */
-    --bg: #0b0f14;    /* rich black-blue */
+    --brand: #60a5fa; /* azure accent */
+    --bg: #0b0f14;    /* deep blue-black */
     --panel: rgba(255,255,255,.05);
     --panel-border: rgba(255,255,255,.08);
     --muted: #a1aab7;
@@ -1756,7 +1756,6 @@ function renderHome(issuerDomain: string, nonce: string) {
     --bad: #ef4343;
   }
 
-  /* Page baseline */
   html, body { height: 100%; }
   body {
     margin: 0;
@@ -1765,17 +1764,16 @@ function renderHome(issuerDomain: string, nonce: string) {
     overflow-x: hidden;
   }
 
-  /* Subtle techy animated background (particles.js canvas sits behind content) */
+  /* cinematic, subtle bg */
   #particles-js { position: fixed; inset: 0; z-index: 0; }
   .bg-gradient-overlay {
-    position: fixed; inset: 0; z-index: 0;
-    pointer-events: none;
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background:
       radial-gradient(800px 400px at 20% -10%, rgba(96,165,250,.08), transparent 60%),
       radial-gradient(900px 500px at 80% -10%, rgba(34,197,94,.06), transparent 60%);
   }
 
-  /* Centered stage */
+  /* stage */
   .stage {
     position: relative; z-index: 1;
     min-height: 100dvh;
@@ -1784,7 +1782,7 @@ function renderHome(issuerDomain: string, nonce: string) {
     padding: 2rem 1rem;
   }
   .hero {
-    width: min(920px, 100%);
+    width: min(960px, 100%);
     backdrop-filter: saturate(140%) blur(10px);
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -1793,134 +1791,98 @@ function renderHome(issuerDomain: string, nonce: string) {
     padding: clamp(1.25rem, 3vw, 2rem);
   }
 
-  .brand-head {
-    display: grid;
-    justify-items: center;
-    gap: .75rem;
-    text-align: center;
-  }
-  .brand-head img {
-    height: clamp(44px, 8vw, 64px);
-    width: auto;
-    filter: drop-shadow(0 6px 18px rgba(0,0,0,.45));
-  }
-  .brand-head h1 {
-    font-size: clamp(1.25rem, 3.2vw, 1.75rem);
-    margin: 0;
-    letter-spacing: .2px;
-  }
-  .brand-sub {
-    color: var(--muted);
-    font-size: clamp(.95rem, 2.2vw, 1rem);
-  }
+  .brand-head { display: grid; justify-items: center; gap: .75rem; text-align: center; }
+  .brand-head img { height: clamp(44px, 8vw, 64px); width: auto; filter: drop-shadow(0 6px 18px rgba(0,0,0,.45)); }
+  .brand-head h1 { font-size: clamp(1.25rem, 3.2vw, 1.75rem); margin: 0; letter-spacing: .2px; }
+  .brand-sub { color: var(--muted); font-size: clamp(.95rem, 2.2vw, 1rem); }
 
-  /* Upload box */
-  .upload-wrap {
-    display: grid;
-    gap: 1rem;
-    margin-top: 1.25rem;
-  }
+  /* single action */
+  .upload-wrap { display: grid; gap: 1rem; margin-top: 1.25rem; }
   .dropzone {
     border: 1px dashed rgba(255,255,255,.18);
     background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
     border-radius: .9rem;
-    padding: clamp(1rem, 5vw, 2rem);
+    padding: clamp(1.25rem, 5vw, 2.25rem);
     text-align: center;
-    transition: border-color .2s ease, background-color .2s ease, transform .08s ease;
-    cursor: pointer;
-    outline: none;
-    user-select: none;
+    transition: border-color .2s ease, background-color .2s ease, transform .08s ease, opacity .2s ease;
+    cursor: pointer; outline: none; user-select: none;
   }
   .dropzone:hover, .dropzone.dragover {
     border-color: rgba(96,165,250,.6);
     background: linear-gradient(180deg, rgba(96,165,250,.08), rgba(255,255,255,.03));
   }
   .dropzone:active { transform: scale(.998); }
-  .dropzone .icon {
-    font-size: clamp(1.75rem, 5.4vw, 2.25rem);
-    color: var(--brand);
-  }
-  .dropzone .title {
-    margin-top: .5rem; font-weight: 600;
-    font-size: clamp(1rem, 2.6vw, 1.15rem);
-  }
-  .dropzone .hint {
-    color: var(--muted);
-    font-size: .95rem;
-  }
+  .dropzone[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+  .dropzone .icon { font-size: clamp(1.8rem, 5.4vw, 2.25rem); color: var(--brand); }
+  .dropzone .title { margin-top: .5rem; font-weight: 600; font-size: clamp(1.05rem, 2.6vw, 1.2rem); }
+  .dropzone .hint { color: var(--muted); font-size: .95rem; }
 
-  /* Subtle Trust Kit line */
-  .trust-kit {
-    text-align: center;
-    color: var(--muted);
-    font-size: .95rem;
-  }
+  /* trust kit nudge */
+  .trust-kit { text-align: center; color: var(--muted); font-size: .95rem; }
   .trust-kit a { text-decoration: none; }
   .trust-kit a .bi { vertical-align: -2px; }
 
-  /* Live state & verdict panels */
-  .live, .verdict {
-    margin-top: 1rem;
-    border: 1px solid var(--panel-border);
-    background: rgba(255,255,255,.03);
-    border-radius: .8rem;
-    padding: 1rem;
-  }
-  .progress { background-color: rgba(255,255,255,.08); }
-  .progress-bar { background-image: linear-gradient(90deg, var(--brand), #34d399); }
+  /* live state (progress sweep) */
+  .live { margin-top: 1rem; border: 1px solid var(--panel-border); background: rgba(255,255,255,.03); border-radius: .8rem; padding: 1rem; }
+  .progress-rail { position: relative; height: 4px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+  .progress-sweep { position:absolute; inset:0; transform: translateX(-100%); animation: sweep 1.2s cubic-bezier(.4,0,.2,1) infinite; background: linear-gradient(90deg, transparent, rgba(96,165,250,.85), rgba(52,211,153,.85), transparent); }
+  @keyframes sweep { 0% { transform: translateX(-100%);} 100% { transform: translateX(100%);} }
 
-  .verdict-badge {
-    font-size: clamp(28px, 4.2vw, 48px);
-    line-height: 1.1;
-  }
+  /* verdict */
+  .verdict { margin-top: 1rem; border: 1px solid var(--panel-border); background: rgba(255,255,255,.03); border-radius: .8rem; padding: clamp(1.25rem, 4vw, 2rem); }
+  .verdict-stage { text-align: center; }
+  .icon-wrap { position: relative; width: 84px; height: 84px; margin: 0 auto; }
+  .icon-wrap i { font-size: 84px; line-height: 84px; }
+  /* ripple for 'trust established' */
+  .pulse-ring { position:absolute; inset: -10px; border-radius: 999px; border: 2px solid rgba(23,178,106,.35); opacity: 0; }
+  .pulse-ring.play { animation: pulse 1.2s ease-out 1; }
+  @keyframes pulse { 0%{ transform: scale(.7); opacity:.0;} 35%{ opacity:.5;} 100%{ transform: scale(1.25); opacity:0;} }
+
+  /* brand loop (line-drawn circle, only on success) */
+  .brand-loop { margin: .5rem auto 0; width: 96px; height: 96px; }
+  .brand-loop circle { fill: none; stroke: rgba(96,165,250,.85); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 301; stroke-dashoffset: 301; }
+  .brand-loop.play circle { animation: draw 700ms ease-out forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  .verdict-badge { font-size: clamp(34px, 5.4vw, 64px); line-height: 1.1; letter-spacing: .5px; }
+  .verdict-caption { color: var(--muted); font-size: 1rem; }
   .hash-chip {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: .9rem;
-    background: rgba(255,255,255,.06);
-    border: 1px solid rgba(255,255,255,.12);
-    padding: .35rem .55rem;
-    border-radius: .5rem;
+    font-size: .9rem; background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.12); padding: .35rem .55rem; border-radius: .5rem;
   }
+
+  /* Advanced */
+  .adv-link { display:inline-flex; gap:.35rem; align-items:center; margin-top: .75rem; text-decoration: none; }
+  .adv-card { padding: 1rem; border-radius: .8rem; border: 1px solid var(--panel-border); background: rgba(255,255,255,.02); }
+
   .stat-dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; margin-right: .4rem; }
   .stat-yes { background: var(--ok); } .stat-no { background: var(--bad); }
-  .fade-slow { animation-duration: .8s; }
 
   /* Footer */
-  footer.site-footer {
-    position: relative; z-index: 1;
-    border-top: 1px solid var(--panel-border);
-    background: rgba(255,255,255,.02);
-  }
-  footer .inner {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 1rem 1rem;
-    display: flex; flex-wrap: wrap; gap: .75rem;
-    align-items: center; justify-content: center;
-    color: var(--muted);
-    font-size: .95rem;
-  }
-  footer a { color: #c8d1df; text-decoration: none; }
-  footer a:hover { color: #ffffff; text-decoration: underline; }
+  footer.site-footer { position: relative; z-index: 1; border-top: 1px solid var(--panel-border); background: rgba(255,255,255,.02); }
+  footer .inner { max-width: 1100px; margin: 0 auto; padding: 1rem 1rem; display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: center; color: var(--muted); font-size: .95rem; }
+  footer a { color: #c8d1df; text-decoration: none; } footer a:hover { color: #ffffff; text-decoration: underline; }
 
-  /* Keep the 'single button' rule from your original */
-  .only-one-btn .btn:not(.upload-btn) { display: none !important; }
-
-  /* Small screens polish */
-  @media (max-width: 420px) {
-    .hash-chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  /* reduce motion: keep it classy & comfortable */
+  @media (prefers-reduced-motion: reduce) {
+    .animate__animated, .pulse-ring.play, .brand-loop.play circle, .progress-sweep { animation: none !important; }
+    #particles-js { display:none !important; }
   }
+
+  /* Small screens */
+  @media (max-width: 420px) { .hash-chip { display:inline-block; max-width:100%; overflow:hidden; text-overflow: ellipsis; } }
 </style>
 </head>
 
-<body class="only-one-btn">
+<body>
   <!-- animated tech background -->
   <div id="particles-js" aria-hidden="true"></div>
   <div class="bg-gradient-overlay" aria-hidden="true"></div>
 
   <!-- Centered content -->
   <main class="stage">
-    <section class="hero animate__animated animate__fadeInDown fade-slow">
+    <section class="hero animate__animated animate__fadeInDown">
       <div class="brand-head">
         <img src="https://dmj.one/logo.png" alt="dmj.one logo" width="128" height="128" />
         <h1 class="mb-1">dmj.one Trust Services</h1>
@@ -1929,76 +1891,78 @@ function renderHome(issuerDomain: string, nonce: string) {
         </div>
       </div>
 
-      <!-- Upload -->
+      <!-- Single action -->
       <div class="upload-wrap">
         <input id="fileInput" class="d-none" type="file" name="file" accept="application/pdf" />
-        <label for="fileInput" class="dropzone" id="dropzone" role="button" tabindex="0" aria-controls="fileInput">
+        <label for="fileInput" class="dropzone" id="dropzone" role="button" tabindex="0" aria-controls="fileInput" aria-disabled="false">
           <div class="icon"><i class="bi-upload"></i></div>
-          <div class="title">Drop your PDF here or click to upload</div>
-          <div class="hint">We’ll verify the embedded signature and registry entries.</div>
+          <div class="title">Upload Document</div>
+          <div class="hint">Single step. We verify signature & registry automatically.</div>
         </label>
 
         <!-- subtle trust kit -->
         <div class="trust-kit">
           <i class="bi-shield-check me-1"></i>
-          <a href="${pkiZip}" download class="link-light">
-            Install the Trust&nbsp;Kit (Root &amp; Issuing CA)
-          </a>
-          <span class="ms-1">to see “valid signature” in Acrobat/Reader automatically.</span>
+          <a href="${pkiZip}" download class="link-light">Install the Trust&nbsp;Kit</a>
+          <span class="ms-1">to see green checks inside Acrobat/Reader automatically.</span>
         </div>
 
         <!-- live state -->
         <div id="liveState" class="live animate__animated animate__fadeIn" hidden>
           <div class="d-flex align-items-center gap-3">
-            <div class="spinner-border" role="status" aria-hidden="true"></div>
             <div>
               <div class="fw-semibold" id="stateLine">Starting verification…</div>
               <div class="small text-secondary" id="fileName"></div>
             </div>
           </div>
-          <div class="progress mt-3" role="progressbar" aria-label="Verifying">
-            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+          <div class="progress-rail mt-3" aria-label="Verifying">
+            <div class="progress-sweep"></div>
           </div>
         </div>
 
         <!-- verdict -->
-        <div id="verdictWrap" class="verdict animate__animated animate__fadeInUp fade-slow" hidden>
-          <div id="verdictCard">
-            <div class="d-flex align-items-center">
-              <i id="verdictIcon" class="bi me-3" style="font-size:2.25rem"></i>
-              <div>
-                <div id="verdictText" class="verdict-badge fw-bold"></div>
-                <div class="mt-2">
-                  <span class="hash-chip" id="shaChip" title="SHA‑256"></span>
-                </div>
-              </div>
+        <div id="verdictWrap" class="verdict animate__animated animate__fadeInUp" hidden>
+          <div id="verdictCard" class="verdict-stage" role="status" aria-live="polite">
+            <div class="icon-wrap">
+              <span id="pulseRing" class="pulse-ring" aria-hidden="true"></span>
+              <i id="verdictIcon" class="bi"></i>
+            </div>
+            <svg id="brandLoop" class="brand-loop" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="48"></circle>
+            </svg>
+
+            <div id="verdictText" class="verdict-badge fw-bold"></div>
+            <div id="verdictCaption" class="verdict-caption mt-1"></div>
+
+            <div class="mt-3">
+              <span class="hash-chip" id="shaChip" title="SHA‑256"></span>
             </div>
 
-            <!-- Advanced report link (not a button) -->
-            <a href="#" id="toggleAdvanced" class="d-inline-flex align-items-center mt-3 text-decoration-none">
-              <i class="bi-caret-right-fill me-1"></i><span>View advanced report</span>
+            <!-- Advanced report link (kept as link, not a button) -->
+            <a href="#" id="toggleAdvanced" class="adv-link">
+              <i class="bi-caret-right-fill"></i><span>View advanced report</span>
             </a>
 
             <!-- Advanced panel -->
             <div id="advancedPanel" class="mt-3" hidden>
               <div class="row g-3">
                 <div class="col-md-6">
-                  <div class="p-3 rounded-3 border" style="border-color: var(--panel-border); background: rgba(255,255,255,.02);">
+                  <div class="adv-card">
                     <div class="mb-2 fw-semibold">Signature &amp; Document</div>
                     <ul class="list-unstyled mb-0 small">
-                      <li><span class="stat-dot stat-yes" id="sigObjDot"></span>Signature object present</li>
-                      <li><span class="stat-dot stat-yes" id="cryptoDot"></span>Embedded signature is cryptographically valid</li>
-                      <li><span class="stat-dot stat-yes" id="coverDot"></span>Signature covers the whole document</li>
+                      <li><span class="stat-dot" id="sigObjDot"></span>Signature object present</li>
+                      <li><span class="stat-dot" id="cryptoDot"></span>Embedded signature is cryptographically valid</li>
+                      <li><span class="stat-dot" id="coverDot"></span>Signature covers the whole document</li>
                     </ul>
                   </div>
                 </div>
                 <div class="col-md-6">
-                  <div class="p-3 rounded-3 border" style="border-color: var(--panel-border); background: rgba(255,255,255,.02);">
+                  <div class="adv-card">
                     <div class="mb-2 fw-semibold">Issuer &amp; Registry</div>
                     <ul class="list-unstyled mb-0 small">
-                      <li><span class="stat-dot stat-yes" id="oursDot"></span>Signed by dmj.one key</li>
-                      <li><span class="stat-dot stat-yes" id="regDot"></span>Registered by dmj.one</li>
-                      <li><span class="stat-dot stat-yes" id="revokedDot"></span>Revocation check</li>
+                      <li><span class="stat-dot" id="oursDot"></span>Signed by dmj.one key</li>
+                      <li><span class="stat-dot" id="regDot"></span>Registered by dmj.one</li>
+                      <li><span class="stat-dot" id="revokedDot"></span>Revocation check</li>
                       <li class="mt-2 text-break"><span class="text-secondary">Issuer DN:</span> <code id="issuerDn"></code></li>
                     </ul>
                   </div>
@@ -2012,13 +1976,13 @@ function renderHome(issuerDomain: string, nonce: string) {
     </section>
   </main>
 
-  <!-- Distinct footer -->
+  <!-- Footer -->
   <footer class="site-footer">
     <div class="inner">
       <span class="opacity-75">© dmj.one Trust Services</span>
-      <span class="mx-2">•</span>
+      <span class="mx-1">•</span>
       <a href="//dmj.one/privacy">Privacy</a>
-      <span class="mx-2">•</span>
+      <span class="mx-1">•</span>
       <a href="//dmj.one/tos">Terms &amp; Conditions</a>
     </div>
   </footer>
@@ -2027,27 +1991,19 @@ function renderHome(issuerDomain: string, nonce: string) {
   // particles.js init (disabled if user prefers reduced motion)
   (function(){
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if(reduce) { document.getElementById('particles-js').style.display = 'none'; return; }
+    if(reduce) { var el = document.getElementById('particles-js'); if(el) el.style.display = 'none'; return; }
     if(window.particlesJS){
       particlesJS('particles-js', {
         "particles": {
-          "number": { "value": 70, "density": { "enable": true, "value_area": 1000 } },
+          "number": { "value": 60, "density": { "enable": true, "value_area": 1000 } },
           "color": { "value": ["#60a5fa","#34d399","#93c5fd"] },
           "shape": { "type": "circle" },
-          "opacity": { "value": 0.35, "random": false },
-          "size": { "value": 2.5, "random": true },
+          "opacity": { "value": 0.35 },
+          "size": { "value": 2.3, "random": true },
           "line_linked": { "enable": true, "distance": 130, "color": "#60a5fa", "opacity": 0.25, "width": 1 },
-          "move": { "enable": true, "speed": 1.2, "direction": "none", "out_mode": "out" }
+          "move": { "enable": true, "speed": 1.1, "direction": "none", "out_mode": "out" }
         },
-        "interactivity": {
-          "detect_on": "canvas",
-          "events": {
-            "onhover": { "enable": true, "mode": "grab" },
-            "onclick": { "enable": false },
-            "resize": true
-          },
-          "modes": { "grab": { "distance": 140, "line_linked": { "opacity": 0.35 } } }
-        },
+        "interactivity": { "detect_on": "canvas", "events": { "onhover": { "enable": true, "mode": "grab" }, "resize": true }, "modes": { "grab": { "distance": 140, "line_linked": { "opacity": 0.35 } } } },
         "retina_detect": true
       });
     }
@@ -2065,7 +2021,10 @@ function renderHome(issuerDomain: string, nonce: string) {
     const verdictCard  = document.getElementById('verdictCard');
     const verdictIcon  = document.getElementById('verdictIcon');
     const verdictText  = document.getElementById('verdictText');
+    const verdictCaption = document.getElementById('verdictCaption');
     const shaChip      = document.getElementById('shaChip');
+    const pulseRing    = document.getElementById('pulseRing');
+    const brandLoop    = document.getElementById('brandLoop');
 
     const toggleAdvanced = document.getElementById('toggleAdvanced');
     const advancedPanel  = document.getElementById('advancedPanel');
@@ -2092,9 +2051,10 @@ function renderHome(issuerDomain: string, nonce: string) {
       } else if(state === 'done'){
         liveState.hidden = true;
         verdictWrap.hidden = false;
-        verdictCard.classList.remove('animate__fadeInUp');
-        void verdictCard.offsetWidth; // reflow
-        verdictCard.classList.add('animate__fadeInUp');
+        // retrigger entrance
+        verdictWrap.classList.remove('animate__fadeInUp');
+        void verdictWrap.offsetWidth;
+        verdictWrap.classList.add('animate__fadeInUp');
       }
     }
 
@@ -2102,87 +2062,132 @@ function renderHome(issuerDomain: string, nonce: string) {
       e.preventDefault();
       const open = advancedPanel.hidden;
       advancedPanel.hidden = !open;
-      this.querySelector('i').className = open ? 'bi-caret-down-fill me-1' : 'bi-caret-right-fill me-1';
-      this.querySelector('span').textContent = open ? 'Hide advanced report' : 'View advanced report';
+      this.querySelector('i').className = open ? 'bi-caret-down-fill' : 'bi-caret-right-fill';
+      this.querySelector('span').textContent = open ? 'Hide advanced report' : (verdictText.textContent === 'TAMPERED' ? 'See reasons' : 'View advanced report');
     });
 
-    async function startVerification(f){
-      if(!f) return;
-      stateLine.textContent = 'Uploading & verifying…';
-      dropzone.classList.add('d-none');
-      fileNameEl.textContent = f.name;
-      show('busy');
-      try{
-        const fd = new FormData();
-        fd.set('file', f, f.name);
+    // Prevent double uploads / race conditions
+    let inFlight = false;
+    let controller = null;
+    function lockUI(locked){
+      dropzone.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      if(locked){ dropzone.classList.add('disabled'); } else { dropzone.classList.remove('disabled'); }
+    }
 
-        const res = await fetch('/verify?json=1', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } });
-        if(!res.ok){ throw new Error('Server returned ' + res.status); }
-        const r = await res.json();
+    function shortHash(hex){
+      if(!hex || hex.length < 16) return 'n/a';
+      return hex.slice(0, 16) + '…' + hex.slice(-16);
+    }
 
-        const isValid = (r && r.verdict === 'valid');
-        verdictIcon.className = isValid ? 'bi-shield-check text-success me-3' : 'bi-shield-x text-danger me-3';
-        verdictText.className  = 'verdict-badge fw-bold ' + (isValid ? 'text-success' : 'text-danger');
-        verdictText.textContent = isValid ? 'VALID' : 'TAMPERED';
-        shaChip.textContent = (r.sha256 || '').slice(0, 16) + '…' + (r.sha256 || '').slice(-16);
+    function renderVerdict(r){
+      const isValid = (r && (r.verdict === 'valid' || r.valid === true));
+      verdictIcon.className = isValid ? 'bi-shield-check text-success' : 'bi-shield-x text-danger';
+      verdictText.className  = 'verdict-badge fw-bold ' + (isValid ? 'text-success' : 'text-danger');
+      verdictText.textContent = isValid ? 'VALID' : 'TAMPERED';
+      verdictCaption.textContent = isValid ? 'Trust established' : (Array.isArray(r?.reasons) && r.reasons.length ? r.reasons[0] : 'Signature or digest mismatch');
 
-        setDot(dots.sigObjDot, !!r.hasSignature);
-        setDot(dots.cryptoDot, !!r.isValid);
-        setDot(dots.coverDot, !!r.coversDocument);
-        setDot(dots.oursDot, !!r.issuedByUs);
-        setDot(dots.regDot, !!r.issued);
-        setDot(dots.revokedDot, !r.revoked);
-        issuerDn.textContent = r.issuer || '';
+      shaChip.textContent = shortHash(r?.sha256 || r?.hash);
 
-        show('done');
-      } catch(err){
-        verdictIcon.className = 'bi-exclamation-triangle text-danger me-3';
-        verdictText.className = 'verdict-badge fw-bold text-danger';
-        verdictText.textContent = 'TAMPERED';
-        shaChip.textContent = 'n/a';
-        setDot(dots.sigObjDot, false);
-        setDot(dots.cryptoDot, false);
-        setDot(dots.coverDot, false);
-        setDot(dots.oursDot, false);
-        setDot(dots.regDot, false);
-        setDot(dots.revokedDot, false);
-        issuerDn.textContent = 'Error: ' + (err && err.message ? err.message : 'Unknown error');
-        show('done');
-      } finally {
-        fileInput.value = ''; // reset input so same file again triggers 'change'
+      setDot(dots.sigObjDot, !!r?.hasSignature);
+      setDot(dots.cryptoDot, !!r?.isValid);
+      setDot(dots.coverDot, !!r?.coversDocument);
+      setDot(dots.oursDot, !!r?.issuedByUs || !!r?.issued);
+      setDot(dots.regDot, !!r?.issued);
+      setDot(dots.revokedDot, r?.revoked === false);
+
+      issuerDn.textContent = r?.issuer || '';
+
+      // Cinematic micro‑interactions, success only
+      pulseRing.classList.remove('play');
+      brandLoop.classList.remove('play');
+      if(isValid){
+        void pulseRing.offsetWidth; pulseRing.classList.add('play');
+        void brandLoop.offsetWidth; brandLoop.classList.add('play');
       }
     }
 
-    // Keyboard activation only (let the <label for=...> handle pointer clicks)
+    async function startVerification(f){
+      if(!f || inFlight) return;
+      inFlight = true; lockUI(true);
+      try{
+        stateLine.textContent = 'Uploading & verifying…';
+        dropzone.classList.add('d-none');
+        fileNameEl.textContent = f.name;
+        show('busy');
+
+        const fd = new FormData(); fd.set('file', f, f.name);
+        controller = new AbortController();
+        const to = setTimeout(()=> controller.abort('timeout'), 20000);
+
+        const res = await fetch('/verify?json=1', {
+          method: 'POST',
+          body: fd,
+          headers: { 'Accept': 'application/json' },
+          signal: controller.signal
+        });
+        clearTimeout(to);
+
+        if(!res.ok) throw new Error('Server returned ' + res.status);
+        const r = await res.json();
+
+        renderVerdict(r);
+        show('done');
+
+        // Persist last result (optional feel‑good)
+        try { sessionStorage.setItem('dmj:last', JSON.stringify({ t: Date.now(), r })); } catch(e){}
+      } catch(err){
+        renderVerdict({ verdict: 'tampered', reasons: [ (err && err.message) ? err.message : 'Verification failed' ] });
+        show('done');
+      } finally {
+        // allow selecting same file again
+        fileInput.value = '';
+        inFlight = false; lockUI(false);
+        controller = null;
+      }
+    }
+
+    // restore last verdict (if any)
+    try {
+      const last = sessionStorage.getItem('dmj:last');
+      if(last){
+        const r = JSON.parse(last).r;
+        renderVerdict(r);
+        show('done');
+        dropzone.classList.add('d-none');
+      }
+    } catch(e){}
+
+    // Keyboard activation
     dropzone.addEventListener('keydown', (e) => {
-      if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+      if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if(!inFlight) fileInput.click(); }
     });
-  
+
     // Ensure selecting the *same* file fires 'change' next time
     fileInput.addEventListener('click', () => { fileInput.value = ''; });
 
-    // Drag & drop support
-    ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.add('dragover'); }));
+    // Drag & drop
+    ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); if(!inFlight) dropzone.classList.add('dragover'); }));
     ['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('dragover'); }));
     dropzone.addEventListener('drop', (e)=>{
+      if(inFlight) return;
       const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
       if(f && f.type === 'application/pdf') { startVerification(f); }
       else if(f) { alert('Please drop a PDF file.'); }
     });
 
-    // Traditional file picker
+    // File picker
     fileInput.addEventListener('change', function(){
       const f = this.files && this.files[0];
-      if(!f) return;
-      startVerification(f);
+      if(!f) return; startVerification(f);
     });
   })();
 </script>
 </body>
 </html>`;
 
-return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
+  return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
+
 
 function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
   const html = `<!doctype html>
