@@ -1731,148 +1731,119 @@ function renderHome(issuerDomain: string, nonce: string) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="color-scheme" content="light" />
-<title>dmj.one · Official Trust Verification</title>
+<title>dmj.one Trust Services — Official Verification</title>
 
 <link rel="icon" href="https://dmj.one/logo.png">
 <link rel="apple-touch-icon" href="https://dmj.one/logo.png">
 
-<!-- Core CSS -->
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-<!-- Font Awesome (CSS only; CSP allows https fonts/styles) -->
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" rel="stylesheet" />
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet" />
 
 <style>
   :root{
-    /* Trust palette */
-    --bg: #f7fafc;
-    --surface:#ffffff;
-    --ink:#0f172a;
-    --muted:#64748b;
-    --brand:#2563eb; /* Azure */
-    --ok:#16a34a;    /* Emerald */
-    --bad:#dc2626;   /* Trust red for alerts */
+    /* trust-focused palette */
+    --bg:#f7fafc; --surface:#ffffff; --ink:#0f172a; --muted:#64748b;
+    --brand:#2563eb; --ok:#16a34a; --bad:#dc2626;
+    --ring-track:#e5e7eb; --ring-glow:0 10px 40px rgba(37,99,235,.12);
+  }
+  html,body{height:100%}
+  body{margin:0; color:var(--ink); background:var(--bg); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow-x:hidden}
 
-    --ring-track:#e5e7eb;
-    --ring-glow:0 10px 40px rgba(37,99,235,.12);
-  }
-
-  html, body { height: 100%; }
-  body{
-    margin:0; color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow-x:hidden;
-    background: var(--bg);
-  }
-
-  /* Continuous, trusting background (pure CSS) */
-  .bg-anim{
-    position:fixed; inset:-20vmax; z-index:0; pointer-events:none; filter: blur(40px);
-  }
-  .bg-anim::before,
-  .bg-anim::after{
-    content:""; position:absolute; width:140vmax; height:140vmax; border-radius:50%;
-    opacity:.25;
-  }
-  .bg-anim::before{
-    background: radial-gradient(55% 55% at 50% 50%, rgba(37,99,235,.45) 0%, rgba(37,99,235,0) 65%);
-    animation: driftA 28s linear infinite;
-  }
-  .bg-anim::after{
-    background: radial-gradient(55% 55% at 50% 50%, rgba(22,163,74,.35) 0%, rgba(22,163,74,0) 65%);
-    animation: driftB 36s linear infinite reverse;
-  }
-  @keyframes driftA{ 0%{ transform:translate(-18%, -12%) rotate(0)} 100%{ transform:translate(18%, 12%) rotate(360deg)} }
-  @keyframes driftB{ 0%{ transform:translate(12%, -16%) rotate(0)} 100%{ transform:translate(-12%, 16%) rotate(-360deg)} }
+  /* === Cinematic background (aurora + beam) === */
+  .bg-cinema{position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden}
+  .aurora{position:absolute; width:90vmax; height:90vmax; border-radius:50%; filter:blur(48px); opacity:.28; mix-blend-mode:multiply}
+  .a1{top:-25vmax; left:-15vmax; background:radial-gradient(45% 55% at 50% 50%, rgba(37,99,235,.38), rgba(37,99,235,0) 60%); animation:driftA 36s linear infinite}
+  .a2{bottom:-30vmax; right:-5vmax; background:radial-gradient(45% 55% at 50% 50%, rgba(16,185,129,.32), rgba(16,185,129,0) 60%); animation:driftB 48s linear infinite reverse}
+  .a3{top:10vmax; right:-30vmax; background:radial-gradient(45% 55% at 50% 50%, rgba(99,102,241,.28), rgba(99,102,241,0) 60%); animation:driftC 52s linear infinite}
+  .beam{position:absolute; left:-60vmax; top:12%; width:220vmax; height:30vmax; transform:rotate(7deg);
+        background:radial-gradient(closest-side, rgba(37,99,235,.09), transparent 65%);
+        animation:beamSweep 14s ease-in-out infinite}
+  @keyframes driftA{0%{transform:translate(-12%, -8%) rotate(0)}100%{transform:translate(12%, 8%) rotate(360deg)}}
+  @keyframes driftB{0%{transform:translate(10%, -10%) rotate(0)}100%{transform:translate(-10%, 10%) rotate(-360deg)}}
+  @keyframes driftC{0%{transform:translate(6%, 0) rotate(0)}100%{transform:translate(-6%, 0) rotate(360deg)}}
+  @keyframes beamSweep{0%,100%{transform:translateX(0) rotate(7deg)}50%{transform:translateX(14vmax) rotate(7deg)}}
 
   /* Stage */
-  .stage{ position:relative; z-index:1; min-height:100dvh; display:grid; place-items:center; padding:clamp(16px,3vw,32px) }
-  .frame{
-    width:min(880px,100%); background:var(--surface); border:1px solid rgba(2,6,23,.06);
-    border-radius:18px; box-shadow:0 1px 2px rgba(0,0,0,.04), 0 10px 30px rgba(0,0,0,.06);
-    padding:clamp(16px,4vw,32px)
-  }
+  .stage{position:relative; z-index:1; min-height:100dvh; display:grid; place-items:center; padding:clamp(16px,3vw,32px)}
+  .frame{width:min(880px,100%); background:var(--surface); border:1px solid rgba(2,6,23,.06);
+         border-radius:18px; box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 30px rgba(0,0,0,.06);
+         padding:clamp(16px,4vw,32px)}
 
-  /* Brand header */
-  .brand{ display:grid; justify-items:center; text-align:center; gap:.35rem }
-  .brand img{ height:clamp(44px,8vw,64px); width:auto }
-  .brand h1{ font-size:clamp(1.25rem,3.2vw,1.75rem); margin:0; font-weight:800; letter-spacing:.2px }
-  .brand p{ color:var(--muted); margin:0 }
+  /* Header */
+  .brand{display:grid; justify-items:center; text-align:center; gap:.35rem}
+  .brand img{height:clamp(44px,8vw,64px); width:auto}
+  .brand h1{font-size:clamp(1.25rem,3.2vw,1.75rem); margin:0; font-weight:800; letter-spacing:.2px}
+  .brand p{color:var(--muted); margin:0}
 
-  /* Single CTA */
-  .cta-wrap{ display:grid; place-items:center; margin-top:clamp(16px,3vw,28px) }
-  .cta{
-    display:inline-flex; align-items:center; gap:.6rem;
-    padding:16px 22px; border-radius:999px; background:var(--ink); color:#fff; font-weight:700;
-    border:1px solid rgba(2,6,23,.1); box-shadow:0 6px 24px rgba(15,23,42,.18);
-    cursor:pointer; user-select:none; transition:transform .06s ease, box-shadow .2s ease, opacity .2s ease;
-  }
-  .cta:hover{ transform:translateY(-1px); box-shadow:0 10px 28px rgba(15,23,42,.22) }
-  .cta:active{ transform:translateY(0) }
-  .cta[aria-disabled="true"]{ opacity:.6; pointer-events:none }
-  .cta .kbd{ font:500 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#cbd5e1;
-    border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px }
+  /* CTA (single action) */
+  .cta-wrap{display:grid; place-items:center; margin-top:clamp(16px,3vw,28px)}
+  .cta{display:inline-flex; align-items:center; gap:.6rem; padding:16px 22px; border-radius:999px; background:var(--ink); color:#fff; font-weight:700;
+       border:1px solid rgba(2,6,23,.1); box-shadow:0 6px 24px rgba(15,23,42,.18); cursor:pointer; user-select:none;
+       transition:transform .06s ease, box-shadow .2s ease, opacity .2s ease}
+  .cta:hover{transform:translateY(-1px); box-shadow:0 10px 28px rgba(15,23,42,.22)}
+  .cta:active{transform:translateY(0)}
+  .cta[aria-disabled="true"]{opacity:.6; pointer-events:none}
+  .cta .kbd{font:500 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#cbd5e1; border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px}
 
   /* Verifying moment */
-  .moment{ margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center }
-  .ring{
-    width:112px; height:112px; border-radius:50%;
-    background:conic-gradient(var(--brand) 0 25%, var(--ring-track) 25% 100%);
-    -webkit-mask:radial-gradient(farthest-side, transparent 64%, #000 65%);
-            mask:radial-gradient(farthest-side, transparent 64%, #000 65%);
-    animation:spin 1.05s linear infinite; box-shadow:var(--ring-glow)
-  }
-  @keyframes spin{ to{ transform:rotate(1turn) } }
-  .moment h2{ font-size:clamp(1.1rem,3vw,1.4rem); margin:.9rem 0 0 }
-  .moment p{ color:var(--muted); margin:.35rem 0 0 }
+  .moment{margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center}
+  .ring{width:112px; height:112px; border-radius:50%; background:conic-gradient(var(--brand) 0 25%, var(--ring-track) 25% 100%);
+        -webkit-mask:radial-gradient(farthest-side, transparent 64%, #000 65%); mask:radial-gradient(farthest-side, transparent 64%, #000 65%);
+        animation:spin 1.05s linear infinite; box-shadow:var(--ring-glow)}
+  @keyframes spin{to{transform:rotate(1turn)}}
+  .moment h2{font-size:clamp(1.1rem,3vw,1.4rem); margin:.9rem 0 0}
+  .moment p{color:var(--muted); margin:.35rem 0 0}
 
   /* Verdict */
-  .verdict{ margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center }
-  .icon-box{ position:relative; width:128px; height:128px }
-  /* Success ripple */
-  .ripple{ position:absolute; inset:-10px; border-radius:50%; border:2px solid rgba(22,163,74,.35); opacity:0; transform:scale(.7) }
-  .ripple.play{ animation:ripple 900ms ease-out 1 }
-  @keyframes ripple{ 0%{opacity:0; transform:scale(.7)} 35%{opacity:.55} 100%{opacity:0; transform:scale(1.22)} }
+  .verdict{margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center}
+  .icon-box{position:relative; width:128px; height:128px}
+  .ripple{position:absolute; inset:-10px; border-radius:50%; border:2px solid rgba(22,163,74,.35); opacity:0; transform:scale(.7)}
+  .ripple.play{animation:ripple 900ms ease-out 1}
+  @keyframes ripple{0%{opacity:0; transform:scale(.7)}35%{opacity:.55}100%{opacity:0; transform:scale(1.22)}}
 
-  /* CSS-animated icons (stroke draw) */
-  svg.icon{ width:128px; height:128px }
-  .stroke{ fill:none; stroke-linecap:round; stroke-width:10; stroke-dasharray:180; stroke-dashoffset:180 }
-  svg.icon.play .stroke{ animation: draw .6s ease-out forwards }
-  @keyframes draw{ to{ stroke-dashoffset:0 } }
+  /* CSS stroke-draw animation */
+  svg.icon{width:128px; height:128px}
+  .stroke{fill:none; stroke-linecap:round; stroke-width:10; /* dash values set via JS per path length */}
+  svg.icon.play .stroke{animation:draw .6s ease-out forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
 
-  .title{ font-size:clamp(36px,6vw,64px); font-weight:900; letter-spacing:.4px }
-  .caption{ color:var(--muted); margin-top:6px }
-  .hash{ margin-top:10px; font:500 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px }
+  .title{font-size:clamp(36px,6vw,64px); font-weight:900; letter-spacing:.4px}
+  .caption{color:var(--muted); margin-top:6px}
+  .hash{margin-top:10px; font:500 13px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px}
 
-  /* Forensics (press F) — official, succinct, no JSON */
-  .forensics{ margin-top:18px; width:100%; max-width:840px }
-  .forensics .card{ background:#fff; border:1px solid #e5e7eb; border-radius:14px }
-  .forensics .card h3{ font-size:1rem; margin:0 0 .5rem; font-weight:700 }
-  .stat-dot{ width:.65rem; height:.65rem; border-radius:50%; display:inline-block; margin-right:.45rem }
-  .yes{ background:var(--ok) } .no{ background:var(--bad) }
-  .label{ color:var(--muted) }
+  /* Forensics (press F) — no JSON */
+  .forensics{margin-top:18px; width:100%; max-width:840px}
+  .forensics .card{background:#fff; border:1px solid #e5e7eb; border-radius:14px}
+  .forensics .card h3{font-size:1rem; margin:0 0 .5rem; font-weight:700}
+  .stat-dot{width:.65rem; height:.65rem; border-radius:50%; display:inline-block; margin-right:.45rem}
+  .yes{background:var(--ok)} .no{background:var(--bad)}
+  .label{color:var(--muted)}
 
-  /* Trust Kit nudge */
-  .trust-nudge{ margin-top:18px; font-size:.95rem; color:var(--muted); text-align:center }
-  .trust-nudge a{ text-decoration:none }
+  .trust-nudge{margin-top:18px; font-size:.95rem; color:var(--muted); text-align:center}
+  .trust-nudge a{text-decoration:none}
+  footer{margin-top:22px; text-align:center; color:var(--muted); font-size:.95rem}
 
-  footer{ margin-top:22px; text-align:center; color:var(--muted); font-size:.95rem }
-
-  /* Accessibility: tone down animation for motion-sensitive users */
   @media (prefers-reduced-motion: reduce){
-    .bg-anim{ display:none !important }
-    .ring, .ripple.play, svg.icon.play .stroke{ animation: none !important }
+    .bg-cinema{display:none !important}
+    .ring, .ripple.play, svg.icon.play .stroke{animation:none !important}
   }
-  @media (max-width:420px){ .hash{ word-break: break-all } }
+  @media (max-width:420px){ .hash{word-break:break-all} }
 </style>
 </head>
 <body>
-  <div class="bg-anim" aria-hidden="true"></div>
+  <div class="bg-cinema" aria-hidden="true">
+    <span class="aurora a1"></span>
+    <span class="aurora a2"></span>
+    <span class="aurora a3"></span>
+    <span class="beam"></span>
+  </div>
 
   <main class="stage">
     <section class="frame">
       <div class="brand">
         <img src="https://dmj.one/logo.png" alt="dmj.one logo" width="128" height="128">
-        <h1>Official Verification</h1>
-        <p>Authenticate documents issued by <span class="fw-semibold">${issuerDomain}</span>.</p>
+        <h1>dmj.one Trust Services</h1>
+        <p>Official Document Authentication — Issuer: <span class="fw-semibold">${issuerDomain}</span></p>
       </div>
 
       <!-- SINGLE ACTION -->
@@ -1897,12 +1868,12 @@ function renderHome(issuerDomain: string, nonce: string) {
         <div class="icon-box">
           <span id="ripple" class="ripple" aria-hidden="true"></span>
 
-          <!-- SUCCESS (CSS animated) -->
+          <!-- SUCCESS -->
           <svg id="iconSuccess" class="icon" viewBox="0 0 120 120" hidden>
             <path class="stroke" stroke="var(--ok)" d="M30 62 L52 84 L92 36"></path>
           </svg>
 
-          <!-- FAILURE (CSS animated) -->
+          <!-- FAILURE -->
           <svg id="iconFail" class="icon" viewBox="0 0 120 120" hidden>
             <path class="stroke" stroke="var(--bad)" d="M36 36 L84 84"></path>
             <path class="stroke" stroke="var(--bad)" d="M84 36 L36 84"></path>
@@ -1935,12 +1906,12 @@ function renderHome(issuerDomain: string, nonce: string) {
               </ul>
             </div>
           </div>
-          <!-- Intentionally no JSON -->
+          <!-- no JSON shown by design -->
         </div>
       </div>
 
       <div class="trust-nudge">
-        <i class="fa-solid fa-shield me-1"></i>
+        <i class="fa-solid fa-shield-check me-1"></i>
         <a href="${pkiZip}" download>Install dmj.one Trust Kit</a>
         <span class="ms-1">for automatic green checks in Acrobat/Reader.</span>
       </div>
@@ -1954,34 +1925,30 @@ function renderHome(issuerDomain: string, nonce: string) {
 <script nonce="__CSP_NONCE__">
 (function(){
   // Elements
-  var input   = document.getElementById('fileInput');
-  var cta     = document.getElementById('cta');
+  var input = document.getElementById('fileInput');
+  var cta = document.getElementById('cta');
   var ctaText = document.getElementById('ctaText');
-
-  var moment  = document.getElementById('moment');
+  var moment = document.getElementById('moment');
   var busySub = document.getElementById('busySub');
-
-  var verdict        = document.getElementById('verdict');
-  var iconSuccess    = document.getElementById('iconSuccess');
-  var iconFail       = document.getElementById('iconFail');
-  var ripple         = document.getElementById('ripple');
-  var verdictTitle   = document.getElementById('verdictTitle');
+  var verdict = document.getElementById('verdict');
+  var iconSuccess = document.getElementById('iconSuccess');
+  var iconFail = document.getElementById('iconFail');
+  var ripple = document.getElementById('ripple');
+  var verdictTitle = document.getElementById('verdictTitle');
   var verdictCaption = document.getElementById('verdictCaption');
-  var shaChip        = document.getElementById('sha');
-
-  var fxWrap  = document.getElementById('fx');
-
+  var shaChip = document.getElementById('sha');
+  var fxWrap = document.getElementById('fx');
   var dots = {
-    d_sig:   document.getElementById('d_sig'),
-    d_crypto:document.getElementById('d_crypto'),
+    d_sig: document.getElementById('d_sig'),
+    d_crypto: document.getElementById('d_crypto'),
     d_cover: document.getElementById('d_cover'),
-    d_ours:  document.getElementById('d_ours'),
-    d_reg:   document.getElementById('d_reg'),
-    d_rev:   document.getElementById('d_rev')
+    d_ours: document.getElementById('d_ours'),
+    d_reg: document.getElementById('d_reg'),
+    d_rev: document.getElementById('d_rev')
   };
   var issuerEl = document.getElementById('issuer');
 
-  // State + guards
+  // State / guards
   var inFlight = false;
   var controller = null;
 
@@ -1995,8 +1962,9 @@ function renderHome(issuerDomain: string, nonce: string) {
 
     if (moment) moment.hidden = true;
     if (verdict) verdict.hidden = true;
+
     if (iconSuccess) { iconSuccess.hidden = true; iconSuccess.classList.remove('play'); }
-    if (iconFail)    { iconFail.hidden    = true; iconFail.classList.remove('play'); }
+    if (iconFail)    { iconFail.hidden = true;    iconFail.classList.remove('play'); }
     if (ripple) ripple.classList.remove('play');
 
     if (fxWrap) fxWrap.hidden = true;
@@ -2007,7 +1975,7 @@ function renderHome(issuerDomain: string, nonce: string) {
     if (verdictCaption) verdictCaption.textContent = '';
   }
   resetUI();
-  window.addEventListener('pageshow', resetUI); // ensures F5/back always restores CTA
+  window.addEventListener('pageshow', resetUI); // ensure CTA always returns (incl. bfcache restores)
 
   function lock(locked){
     if (!cta) return;
@@ -2015,23 +1983,28 @@ function renderHome(issuerDomain: string, nonce: string) {
     if (locked) cta.classList.add('disabled'); else cta.classList.remove('disabled');
   }
 
-  function shortHash(hex){
-    if (!hex || hex.length < 16) return '—';
-    return hex.slice(0,16) + '…' + hex.slice(-16);
-  }
+  function shortHash(hex){ if (!hex || hex.length < 16) return '—'; return hex.slice(0,16)+'…'+hex.slice(-16); }
+  function setDot(el, ok){ if (el) el.className = 'stat-dot ' + (ok ? 'yes' : 'no'); }
 
-  function setDot(el, ok){ if(el) el.className = 'stat-dot ' + (ok ? 'yes' : 'no'); }
-
-  function showBusy(filename){
+  function showBusy(name){
     if (moment) moment.hidden = false;
     if (verdict) verdict.hidden = true;
-    if (busySub) busySub.textContent = filename || '';
+    if (busySub) busySub.textContent = name || '';
   }
 
-  function playDraw(svg){
+  // Prepare & play SVG stroke-draw animation reliably
+  function prepAndPlay(svg){
     if (!svg) return;
+    var paths = svg.querySelectorAll('path');
+    for (var i=0;i<paths.length;i++){
+      var p = paths[i];
+      // compute exact path length for precise dash animation
+      var len = (typeof p.getTotalLength === 'function') ? p.getTotalLength() : 180;
+      p.style.strokeDasharray = String(len);
+      p.style.strokeDashoffset = String(len);
+    }
     svg.classList.remove('play');
-    void svg.getBoundingClientRect(); // reflow to retrigger
+    void svg.getBoundingClientRect(); // reflow to restart CSS animation
     svg.classList.add('play');
   }
 
@@ -2045,14 +2018,20 @@ function renderHome(issuerDomain: string, nonce: string) {
     if (shaChip) shaChip.textContent = 'SHA‑256: ' + shortHash((data && (data.sha256 || data.hash)) || '');
 
     if (iconSuccess) iconSuccess.hidden = !valid;
-    if (iconFail)    iconFail.hidden    = valid;
-    if (valid) { playDraw(iconSuccess); if (ripple) { ripple.classList.remove('play'); ripple.classList.add('play'); } }
-    else       { playDraw(iconFail); if (ripple) ripple.classList.remove('play'); }
+    if (iconFail)    iconFail.hidden = valid;
+
+    if (valid){
+      prepAndPlay(iconSuccess);
+      if (ripple) { ripple.classList.remove('play'); ripple.classList.add('play'); }
+    } else {
+      prepAndPlay(iconFail);
+      if (ripple) ripple.classList.remove('play');
+    }
 
     if (verdictTitle){ verdictTitle.textContent = valid ? 'VALID' : 'TAMPERED'; verdictTitle.style.color = valid ? 'var(--ok)' : 'var(--bad)'; }
     if (verdictCaption) verdictCaption.textContent = valid ? 'Trust established' : (reasons[0] || 'Signature mismatch');
 
-    // Forensics (no JSON)
+    // Forensics (official, succinct)
     setDot(dots.d_sig,    !!(data && data.hasSignature));
     setDot(dots.d_crypto, !!(data && data.isValid));
     setDot(dots.d_cover,  !!(data && data.coversDocument));
@@ -2064,7 +2043,7 @@ function renderHome(issuerDomain: string, nonce: string) {
     if (ctaText) ctaText.textContent = 'Upload Another Document';
     lock(false);
 
-    // Discreet hint (power users)
+    // Soft hint: press F for Forensics
     var hint = document.createElement('div');
     hint.innerHTML = '<i class="fa-solid fa-circle-info me-1"></i>Press <strong>F</strong> for Forensics';
     hint.style.cssText = 'margin-top:8px;color:#64748b;font-size:13px';
@@ -2081,12 +2060,7 @@ function renderHome(issuerDomain: string, nonce: string) {
       controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       var to = controller ? setTimeout(function(){ try{ controller.abort(); }catch(e){} }, 20000) : null;
 
-      var res = await fetch('/verify?json=1', {
-        method:'POST',
-        headers:{ 'Accept':'application/json' },
-        body: fd,
-        signal: controller ? controller.signal : undefined
-      });
+      var res = await fetch('/verify?json=1', { method:'POST', headers:{'Accept':'application/json'}, body:fd, signal: controller ? controller.signal : undefined });
       if (to) clearTimeout(to);
       if (!res.ok) throw new Error('Server returned ' + res.status);
 
@@ -2096,7 +2070,7 @@ function renderHome(issuerDomain: string, nonce: string) {
       showVerdict({ verdict:'tampered', reasons:[ (err && err.message) ? err.message : 'Verification failed' ] });
     } finally{
       inFlight = false; controller = null;
-      if (input) input.value = ''; // allow same file again without manual clear
+      if (input) input.value = ''; // allow same file again immediately
     }
   }
 
@@ -2115,7 +2089,6 @@ function renderHome(issuerDomain: string, nonce: string) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!inFlight && input) input.click(); }
     });
   }
-  // Special key: Forensics
   document.addEventListener('keydown', function(e){
     if ((e.key || '').toLowerCase() === 'f' && fxWrap){ fxWrap.hidden = !fxWrap.hidden; }
   });
