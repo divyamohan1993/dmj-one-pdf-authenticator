@@ -1736,145 +1736,84 @@ function renderHome(issuerDomain: string, nonce: string) {
 <link rel="icon" href="https://dmj.one/logo.png">
 <link rel="apple-touch-icon" href="https://dmj.one/logo.png">
 
-<!-- Core CSS only (no JS needed) -->
+<!-- CSS only -->
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
 
 <style>
   :root{
-    /* Light, calm, premium */
-    --bg: #f7fafc;
-    --surface: #ffffff;
-    --ink: #0f172a;
-    --muted:#64748b;
-    --brand:#2563eb;
-    --ok:#16a34a;
-    --bad:#dc2626;
-    --ring-track:#e5e7eb;
-    --ring-glow: 0 10px 40px rgba(37, 99, 235, .12);
+    --bg:#f7fafc; --surface:#fff; --ink:#0f172a; --muted:#64748b; --brand:#2563eb;
+    --ok:#16a34a; --bad:#dc2626; --ring-track:#e5e7eb; --ring-glow:0 10px 40px rgba(37,99,235,.12);
   }
-
-  html, body { height: 100%; }
-  body {
-    margin: 0;
+  html,body{height:100%}
+  body{
+    margin:0;
     background:
       radial-gradient(1200px 600px at 20% -10%, rgba(37,99,235,.06), transparent 60%),
       radial-gradient(1000px 500px at 120% 10%, rgba(34,197,94,.05), transparent 60%),
       var(--bg);
-    color: var(--ink);
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-    overflow-x: hidden;
+    color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow-x:hidden;
   }
-
-  /* Stage */
-  .stage {
-    min-height: 100dvh;
-    display: grid;
-    place-items: center;
-    padding: clamp(16px, 3vw, 32px);
+  .stage{min-height:100dvh; display:grid; place-items:center; padding:clamp(16px,3vw,32px)}
+  .frame{
+    width:min(880px,100%); background:var(--surface); border-radius:18px; border:1px solid rgba(2,6,23,.06);
+    box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 30px rgba(0,0,0,.06); padding:clamp(16px,4vw,32px)
   }
-  .frame {
-    width: min(880px, 100%);
-    background: var(--surface);
-    border-radius: 18px;
-    border: 1px solid rgba(2,6,23,.06);
-    box-shadow:
-      0 1px 2px rgba(0,0,0,.04),
-      0 10px 30px rgba(0,0,0,.06);
-    padding: clamp(16px, 4vw, 32px);
+  .brand{display:grid; justify-items:center; text-align:center; gap:.5rem}
+  .brand img{height:clamp(44px,8vw,64px); width:auto}
+  .brand h1{font-size:clamp(1.25rem,3.2vw,1.75rem); margin:0}
+  .brand p{color:var(--muted); margin:0}
+
+  .cta-wrap{display:grid; place-items:center; margin-top:clamp(16px,3vw,28px)}
+  .cta{
+    display:inline-flex; align-items:center; gap:.6rem; padding:16px 22px; border-radius:999px;
+    background:var(--ink); color:#fff; font-weight:600; border:1px solid rgba(2,6,23,.1);
+    box-shadow:0 6px 24px rgba(15,23,42,.18); cursor:pointer; user-select:none;
+    transition:transform .06s ease, box-shadow .2s ease, opacity .2s ease;
   }
+  .cta:hover{transform:translateY(-1px); box-shadow:0 10px 28px rgba(15,23,42,.22)}
+  .cta:active{transform:translateY(0)}
+  .cta[aria-disabled="true"]{opacity:.6; pointer-events:none}
+  .cta .kbd{font:500 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#cbd5e1; border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px}
 
-  .brand {
-    display: grid; justify-items: center; text-align:center; gap:.5rem;
+  .moment{margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center}
+  .ring{
+    width:112px; height:112px; border-radius:50%;
+    background:conic-gradient(var(--brand) 0 25%, var(--ring-track) 25% 100%);
+    -webkit-mask:radial-gradient(farthest-side, transparent 64%, #000 65%);
+            mask:radial-gradient(farthest-side, transparent 64%, #000 65%);
+    animation:spin 1.05s linear infinite; box-shadow:var(--ring-glow)
   }
-  .brand img { height: clamp(44px, 8vw, 64px); width: auto; }
-  .brand h1 { font-size: clamp(1.25rem, 3.2vw, 1.75rem); margin:0; }
-  .brand p { color: var(--muted); margin:0; }
+  @keyframes spin{to{transform:rotate(1turn)}}
+  .moment h2{font-size:clamp(1.1rem,3vw,1.4rem); margin:.9rem 0 0}
+  .moment p{color:var(--muted); margin:.35rem 0 0}
 
-  /* Single button CTA (label for file input) */
-  .cta-wrap { display:grid; place-items:center; margin-top: clamp(16px, 3vw, 28px); }
-  .cta {
-    display:inline-flex; align-items:center; gap:.6rem;
-    padding: 16px 22px;
-    border-radius: 999px;
-    background: var(--ink);
-    color: #fff;
-    font-weight: 600;
-    border: 1px solid rgba(2,6,23,.1);
-    box-shadow: 0 6px 24px rgba(15,23,42,.18);
-    cursor: pointer;
-    user-select: none;
-    transition: transform .06s ease, box-shadow .2s ease, opacity .2s ease;
-  }
-  .cta:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(15,23,42,.22); }
-  .cta:active { transform: translateY(0); }
-  .cta[aria-disabled="true"] { opacity:.6; pointer-events:none; }
-  .cta .kbd { font: 500 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#cbd5e1; border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px; }
+  .verdict{margin-top:clamp(18px,4vw,32px); display:grid; place-items:center; text-align:center}
+  .icon-box{position:relative; width:120px; height:120px}
+  .ripple{position:absolute; inset:-8px; border-radius:50%; border:2px solid rgba(22,163,74,.35); opacity:0; transform:scale(.7)}
+  .ripple.play{animation:ripple 900ms ease-out 1}
+  @keyframes ripple{0%{opacity:0; transform:scale(.7)} 35%{opacity:.55} 100%{opacity:0; transform:scale(1.2)}}
+  svg.icon{width:120px; height:120px}
+  .stroke{fill:none; stroke-linecap:round; stroke-width:10}
+  .draw{stroke-dasharray:100; stroke-dashoffset:100; animation:dash .6s ease-out forwards}
+  @keyframes dash{to{stroke-dashoffset:0}}
+  .title{font-size:clamp(36px,6vw,64px); font-weight:800; letter-spacing:.4px}
+  .caption{color:var(--muted); margin-top:6px}
+  .hash{margin-top:10px; font:500 13px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px}
 
-  /* Moment (verification) */
-  .moment {
-    margin-top: clamp(18px, 4vw, 32px);
-    display:grid; place-items:center; text-align:center;
-  }
-  .ring {
-    width: 112px; height: 112px; border-radius: 50%;
-    background: conic-gradient(var(--brand) 0 25%, var(--ring-track) 25% 100%);
-    -webkit-mask: radial-gradient(farthest-side, transparent 64%, #000 65%);
-            mask: radial-gradient(farthest-side, transparent 64%, #000 65%);
-    animation: spin 1.05s linear infinite;
-    box-shadow: var(--ring-glow);
-  }
-  @keyframes spin { to { transform: rotate(1turn); } }
+  .forensics{margin-top:18px; width:100%; max-width:840px}
+  .forensics .card{background:#fff; border:1px solid #e5e7eb; border-radius:14px}
+  .forensics .card h3{font-size:1rem; margin:0 0 .5rem}
+  .stat-dot{width:.65rem; height:.65rem; border-radius:50%; display:inline-block; margin-right:.45rem}
+  .yes{background:var(--ok)} .no{background:var(--bad)}
+  .label{color:var(--muted)}
 
-  .moment h2 { font-size: clamp(1.1rem, 3vw, 1.4rem); margin:.9rem 0 0 0; }
-  .moment p  { color: var(--muted); margin: .35rem 0 0 0; }
+  .trust-nudge{margin-top:18px; font-size:.95rem; color:var(--muted)}
+  .trust-nudge a{text-decoration:none}
+  footer{margin-top:22px; text-align:center; color:var(--muted); font-size:.95rem}
 
-  /* Verdict stage */
-  .verdict { margin-top: clamp(18px, 4vw, 32px); display:grid; place-items:center; text-align:center; }
-  .icon-box { position: relative; width: 120px; height: 120px; }
-  .ripple {
-    position:absolute; inset:-8px; border-radius:50%;
-    border: 2px solid rgba(22,163,74,.35);
-    opacity: 0; transform: scale(.7);
-  }
-  .ripple.play { animation: ripple 900ms ease-out 1; }
-  @keyframes ripple { 0%{opacity:0; transform:scale(.7);} 35%{opacity:.55;} 100%{opacity:0; transform:scale(1.2);} }
-
-  svg.icon { width: 120px; height: 120px; }
-  .stroke { fill: none; stroke-linecap: round; stroke-width: 10; }
-  .draw { stroke-dasharray: 100; stroke-dashoffset: 100; animation: dash .6s ease-out forwards; }
-  @keyframes dash { to { stroke-dashoffset: 0; } }
-
-  .title { font-size: clamp(36px, 6vw, 64px); font-weight: 800; letter-spacing: .4px; }
-  .caption { color: var(--muted); margin-top: 6px; }
-
-  .hash { margin-top: 10px; font: 500 13px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px; }
-
-  /* Forensics (hidden until user presses F) */
-  .forensics { margin-top: 18px; width: 100%; max-width: 840px; }
-  .forensics .card {
-    background: #fff; border:1px solid #e5e7eb; border-radius: 14px;
-  }
-  .forensics .card h3 { font-size: 1rem; margin:0 0 .5rem 0; }
-  .stat-dot { width: .65rem; height: .65rem; border-radius: 50%; display:inline-block; margin-right:.45rem; }
-  .yes { background: var(--ok); } .no { background: var(--bad); }
-  .label { color: var(--muted); }
-
-  .trust-nudge { margin-top: 18px; font-size:.95rem; color: var(--muted); }
-  .trust-nudge a { text-decoration: none; }
-
-  footer { margin-top: 22px; text-align:center; color: var(--muted); font-size:.95rem; }
-
-  /* Reduced motion */
-  @media (prefers-reduced-motion: reduce) {
-    .ring, .draw, .ripple.play { animation: none !important; }
-  }
-
-  /* Mobile polish */
-  @media (max-width: 420px){
-    .hash { word-break: break-all; }
-  }
+  @media (prefers-reduced-motion: reduce){ .ring, .draw, .ripple.play{animation:none !important} }
+  @media (max-width:420px){ .hash{word-break:break-all} }
 </style>
 </head>
 <body>
@@ -1883,7 +1822,7 @@ function renderHome(issuerDomain: string, nonce: string) {
       <div class="brand">
         <img src="https://dmj.one/logo.png" alt="dmj.one logo">
         <h1>Document Trust Verification</h1>
-        <p>Single‑step authenticity check for documents issued by <span class="fw-semibold">${issuerDomain}</span>.</p>
+        <p>Official document authenticity check for documents issued by <span class="fw-semibold">${issuerDomain}</span>.</p>
       </div>
 
       <!-- SINGLE ACTION -->
@@ -1896,7 +1835,7 @@ function renderHome(issuerDomain: string, nonce: string) {
         </label>
       </div>
 
-      <!-- PROGRESS MOMENT -->
+      <!-- PROGRESS -->
       <div id="moment" class="moment" hidden>
         <div class="ring" aria-hidden="true"></div>
         <h2 id="busyTitle">Verifying…</h2>
@@ -1907,11 +1846,9 @@ function renderHome(issuerDomain: string, nonce: string) {
       <div id="verdict" class="verdict" hidden aria-live="polite" role="status">
         <div class="icon-box">
           <span id="ripple" class="ripple" aria-hidden="true"></span>
-          <!-- Success icon -->
           <svg id="iconSuccess" class="icon" viewBox="0 0 120 120" hidden>
             <path class="stroke" stroke="var(--ok)" pathLength="100" d="M30 62 L52 84 L92 36"></path>
           </svg>
-          <!-- Failure icon -->
           <svg id="iconFail" class="icon" viewBox="0 0 120 120" hidden>
             <path class="stroke" stroke="var(--bad)" pathLength="100" d="M36 36 L84 84"></path>
             <path class="stroke" stroke="var(--bad)" pathLength="100" d="M84 36 L36 84"></path>
@@ -1922,7 +1859,7 @@ function renderHome(issuerDomain: string, nonce: string) {
         <div class="hash" id="sha">SHA‑256: —</div>
       </div>
 
-      <!-- FORENSICS (toggle with F) -->
+      <!-- FORENSICS (press F) -->
       <div id="fx" class="forensics" hidden>
         <div class="card p-3">
           <h3 class="mb-2">Forensic Report</h3>
@@ -1960,197 +1897,188 @@ function renderHome(issuerDomain: string, nonce: string) {
   </main>
 
 <script nonce="__CSP_NONCE__">
-(() => {
-  // --- Elements
-  const input   = document.getElementById('fileInput') as HTMLInputElement;
-  const cta     = document.getElementById('cta') as HTMLLabelElement;
-  const ctaText = document.getElementById('ctaText') as HTMLElement;
+(function(){
+  // -------- Elements (plain JS: no TS 'as' assertions) --------
+  var input   = document.getElementById('fileInput');
+  var cta     = document.getElementById('cta');
+  var ctaText = document.getElementById('ctaText');
 
-  const moment  = document.getElementById('moment') as HTMLDivElement;
-  const busySub = document.getElementById('busySub') as HTMLElement;
+  var moment  = document.getElementById('moment');
+  var busySub = document.getElementById('busySub');
 
-  const verdict        = document.getElementById('verdict') as HTMLDivElement;
-  const iconSuccess    = document.getElementById('iconSuccess') as SVGSVGElement;
-  const iconFail       = document.getElementById('iconFail') as SVGSVGElement;
-  const ripple         = document.getElementById('ripple') as HTMLSpanElement;
-  const verdictTitle   = document.getElementById('verdictTitle') as HTMLElement;
-  const verdictCaption = document.getElementById('verdictCaption') as HTMLElement;
-  const shaChip        = document.getElementById('sha') as HTMLElement;
+  var verdict        = document.getElementById('verdict');
+  var iconSuccess    = document.getElementById('iconSuccess');
+  var iconFail       = document.getElementById('iconFail');
+  var ripple         = document.getElementById('ripple');
+  var verdictTitle   = document.getElementById('verdictTitle');
+  var verdictCaption = document.getElementById('verdictCaption');
+  var shaChip        = document.getElementById('sha');
 
-  const fxWrap  = document.getElementById('fx') as HTMLDivElement;
-  const raw     = document.getElementById('raw') as HTMLElement;
+  var fxWrap  = document.getElementById('fx');
+  var raw     = document.getElementById('raw');
 
-  const dots = {
-    d_sig:  document.getElementById('d_sig')  as HTMLSpanElement,
-    d_crypto:document.getElementById('d_crypto')as HTMLSpanElement,
-    d_cover: document.getElementById('d_cover') as HTMLSpanElement,
-    d_ours:  document.getElementById('d_ours')  as HTMLSpanElement,
-    d_reg:   document.getElementById('d_reg')   as HTMLSpanElement,
-    d_rev:   document.getElementById('d_rev')   as HTMLSpanElement,
+  var dots = {
+    d_sig:   document.getElementById('d_sig'),
+    d_crypto:document.getElementById('d_crypto'),
+    d_cover: document.getElementById('d_cover'),
+    d_ours:  document.getElementById('d_ours'),
+    d_reg:   document.getElementById('d_reg'),
+    d_rev:   document.getElementById('d_rev')
   };
-  const issuerEl = document.getElementById('issuer') as HTMLElement;
+  var issuerEl = document.getElementById('issuer');
 
-  // --- State + guards
-  let inFlight = false;
-  let controller: AbortController | null = null;
+  // -------- State & guards --------
+  var inFlight = false;
+  var controller = null;
 
-  // Ensure fresh start after reload (fixes the F5/no-button issue)
-  function resetUI() {
-    input.value = ''; // always allow reselecting same file
+  function resetUI(){
+    if (input) input.value = '';
     inFlight = false;
-    controller?.abort(); controller = null;
+    if (controller && controller.abort) controller.abort();
+    controller = null;
 
-    cta.setAttribute('aria-disabled','false');
-    cta.classList.remove('disabled');
-    ctaText.textContent = 'Upload Document';
+    if (cta) { cta.setAttribute('aria-disabled','false'); cta.classList.remove('disabled'); }
+    if (ctaText) ctaText.textContent = 'Upload Document';
 
-    moment.hidden = true;
-    verdict.hidden = true;
-    iconSuccess.hidden = true;
-    iconFail.hidden = true;
-    ripple.classList.remove('play');
+    if (moment) moment.hidden = true;
+    if (verdict) verdict.hidden = true;
+    if (iconSuccess) iconSuccess.hidden = true;
+    if (iconFail) iconFail.hidden = true;
+    if (ripple) ripple.classList.remove('play');
 
-    fxWrap.hidden = true;
-    raw.textContent = '';
-    Object.values(dots).forEach(d => { d.className = 'stat-dot'; });
-    issuerEl.textContent = '';
-    shaChip.textContent = 'SHA‑256: —';
-    verdictTitle.textContent = '';
-    verdictCaption.textContent = '';
+    if (fxWrap) fxWrap.hidden = true;
+    if (raw) raw.textContent = '';
+    for (var k in dots){ if (dots[k]) dots[k].className = 'stat-dot'; }
+    if (issuerEl) issuerEl.textContent = '';
+    if (shaChip) shaChip.textContent = 'SHA‑256: —';
+    if (verdictTitle) verdictTitle.textContent = '';
+    if (verdictCaption) verdictCaption.textContent = '';
   }
 
-  resetUI(); // run on load
+  resetUI(); // on first load
+  window.addEventListener('pageshow', resetUI); // refresh/back → fresh CTA (supported across major browsers). 
 
-  function lock(locked: boolean) {
+  function lock(locked){
+    if (!cta) return;
     cta.setAttribute('aria-disabled', locked ? 'true' : 'false');
     if (locked) cta.classList.add('disabled'); else cta.classList.remove('disabled');
   }
 
-  function shortHash(hex?: string) {
+  function shortHash(hex){
     if (!hex || hex.length < 16) return '—';
     return hex.slice(0,16) + '…' + hex.slice(-16);
   }
 
-  function setDot(el: HTMLElement, ok: boolean | undefined) {
-    el.className = 'stat-dot ' + (ok ? 'yes' : 'no');
+  function setDot(el, ok){ if(el) el.className = 'stat-dot ' + (ok ? 'yes' : 'no'); }
+
+  function showBusy(filename){
+    if (moment) moment.hidden = false;
+    if (verdict) verdict.hidden = true;
+    if (busySub) busySub.textContent = filename || '';
   }
 
-  function showBusy(filename?: string) {
-    moment.hidden = false;
-    verdict.hidden = true;
-    busySub.textContent = filename || '';
-  }
-
-  function showVerdict(data: any) {
-    moment.hidden = true;
-    verdict.hidden = false;
-
-    const valid = !!(data?.verdict === 'valid' || data?.valid === true);
-    const reasons = Array.isArray(data?.reasons) ? data.reasons : [];
-    shaChip.textContent = 'SHA‑256: ' + shortHash(data?.sha256 || data?.hash);
-
-    // animate icon
-    iconSuccess.hidden = !valid;
-    iconFail.hidden    = valid;
-    ripple.classList.remove('play');
-
-    // trigger line drawing
-    const successPath = iconSuccess.querySelector('path');
-    const failPaths = iconFail.querySelectorAll('path');
-    [successPath, ...failPaths as any].forEach((p: any) => { if (p) { p.classList.remove('draw'); void p.getBBox(); p.classList.add('draw'); } });
-
-    if (valid) {
-      verdictTitle.textContent = 'VALID';
-      verdictTitle.style.color = 'var(--ok)';
-      verdictCaption.textContent = 'Trust established';
-      ripple.classList.add('play');
-    } else {
-      verdictTitle.textContent = 'TAMPERED';
-      verdictTitle.style.color = 'var(--bad)';
-      verdictCaption.textContent = reasons[0] || 'Signature or digest mismatch';
-      // subtle, crisp copy – no shake needed
+  function animatePaths(svg){
+    if (!svg) return;
+    var ps = svg.querySelectorAll('path');
+    for (var i=0;i<ps.length;i++){
+      ps[i].classList.remove('draw');
+      // reflow to retrigger animation
+      void ps[i].getBoundingClientRect();
+      ps[i].classList.add('draw');
     }
+  }
 
-    // Populate forensics (hidden by default)
-    setDot(dots.d_sig,    !!data?.hasSignature);
-    setDot(dots.d_crypto, !!data?.isValid);
-    setDot(dots.d_cover,  !!data?.coversDocument);
-    setDot(dots.d_ours,   !!(data?.issuedByUs || data?.issued));
-    setDot(dots.d_reg,    !!data?.issued);
-    setDot(dots.d_rev,     data?.revoked === false);
-    issuerEl.textContent = data?.issuer || '';
-    raw.textContent = JSON.stringify(data || {}, null, 2);
+  function showVerdict(data){
+    if (moment) moment.hidden = true;
+    if (verdict) verdict.hidden = false;
 
-    // Ready for another check with the same single CTA
-    ctaText.textContent = 'Upload Another Document';
+    var valid = !!(data && (data.verdict === 'valid' || data.valid === true));
+    var reasons = (data && Array.isArray(data.reasons)) ? data.reasons : [];
+
+    if (shaChip) shaChip.textContent = 'SHA‑256: ' + shortHash((data && (data.sha256 || data.hash)) || '');
+
+    if (iconSuccess) iconSuccess.hidden = !valid;
+    if (iconFail) iconFail.hidden = valid;
+    if (ripple) { ripple.classList.remove('play'); if (valid) ripple.classList.add('play'); }
+
+    animatePaths(valid ? iconSuccess : iconFail);
+
+    if (verdictTitle){ verdictTitle.textContent = valid ? 'VALID' : 'TAMPERED'; verdictTitle.style.color = valid ? 'var(--ok)' : 'var(--bad)'; }
+    if (verdictCaption) verdictCaption.textContent = valid ? 'Trust established' : (reasons[0] || 'Signature or digest mismatch');
+
+    setDot(dots.d_sig,    !!(data && data.hasSignature));
+    setDot(dots.d_crypto, !!(data && data.isValid));
+    setDot(dots.d_cover,  !!(data && data.coversDocument));
+    setDot(dots.d_ours,   !!(data && (data.issuedByUs || data.issued)));
+    setDot(dots.d_reg,    !!(data && data.issued));
+    setDot(dots.d_rev,     data ? data.revoked === false : false);
+    if (issuerEl) issuerEl.textContent = (data && data.issuer) || '';
+    if (raw) raw.textContent = JSON.stringify(data || {}, null, 2);
+
+    if (ctaText) ctaText.textContent = 'Upload Another Document';
     lock(false);
 
-    // brief hint for power users
-    try {
-      const hint = document.createElement('div');
-      hint.textContent = 'Press F to view the forensic report';
-      hint.style.cssText = 'margin-top:8px;color:#64748b;font-size:13px';
-      verdict.appendChild(hint);
-      setTimeout(()=> { if(hint && hint.parentNode) hint.parentNode.removeChild(hint); }, 3500);
-    } catch{}
+    // brief, non-intrusive hint
+    var hint = document.createElement('div');
+    hint.textContent = 'Press F to view the forensic report';
+    hint.style.cssText = 'margin-top:8px;color:#64748b;font-size:13px';
+    if (verdict) verdict.appendChild(hint);
+    setTimeout(function(){ if(hint && hint.parentNode) hint.parentNode.removeChild(hint); }, 3000);
   }
 
-  async function verify(file: File) {
+  async function verify(file){
     if (inFlight) return;
     inFlight = true; lock(true);
+    showBusy(file && file.name);
 
-    showBusy(file?.name);
-    try {
-      const fd = new FormData();
+    try{
+      var fd = new FormData();
       fd.set('file', file, file.name);
 
-      controller = new AbortController();
-      const timeout = setTimeout(() => controller?.abort(), 20000);
+      controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var to = null;
+      if (controller) { to = setTimeout(function(){ try{ controller.abort(); }catch(e){} }, 20000); }
 
-      const res = await fetch('/verify?json=1', {
-        method: 'POST',
-        headers: { 'Accept':'application/json' },
+      var res = await fetch('/verify?json=1', {
+        method:'POST',
+        headers:{ 'Accept':'application/json' },
         body: fd,
-        signal: controller.signal
+        signal: controller ? controller.signal : undefined
       });
-      clearTimeout(timeout);
 
+      if (to) clearTimeout(to);
       if (!res.ok) throw new Error('Server returned ' + res.status);
-      const data = await res.json();
+
+      var data = await res.json();
       showVerdict(data);
-    } catch (err: any) {
-      showVerdict({ verdict: 'tampered', reasons: [err?.message || 'Verification failed'] });
-    } finally {
-      inFlight = false;
-      controller = null;
-      // Always allow re‑selecting same file afterward
-      input.value = '';
+    } catch(err){
+      showVerdict({ verdict:'tampered', reasons:[ (err && err.message) ? err.message : 'Verification failed' ] });
+    } finally{
+      inFlight = false; controller = null;
+      if (input) input.value = ''; // allow same file again
     }
   }
 
-  // Events
-  input.addEventListener('click', () => { input.value = ''; });
-  input.addEventListener('change', () => {
-    const f = input.files && input.files[0];
-    if (!f) return;
-    ctaText.textContent = 'Uploading…';
-    verify(f);
-  });
+  if (input){
+    input.addEventListener('click', function(){ input.value = ''; });
+    input.addEventListener('change', function(){
+      var f = input.files && input.files[0];
+      if (!f) return;
+      if (ctaText) ctaText.textContent = 'Uploading…';
+      verify(f);
+    });
+  }
 
-  // Keyboard focusability for CTA (label already opens file dialog)
-  cta.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!inFlight) input.click(); }
-  });
+  if (cta){
+    cta.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!inFlight && input) input.click(); }
+    });
+  }
 
-  // Special key: F = Forensics toggle
-  document.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key.toLowerCase() === 'f') {
-      fxWrap.hidden = !fxWrap.hidden;
-    }
+  // Press F = toggle forensics
+  document.addEventListener('keydown', function(e){
+    if ((e.key || '').toLowerCase() === 'f' && fxWrap){ fxWrap.hidden = !fxWrap.hidden; }
   });
-
-  // Defensive: On visibility restore (F5/refresh or browser back), ensure UI is fresh
-  window.addEventListener('pageshow', () => resetUI(), { once: true });
 })();
 </script>
 </body>
@@ -2158,6 +2086,7 @@ function renderHome(issuerDomain: string, nonce: string) {
 
   return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
+
 
 
 function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
