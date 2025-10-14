@@ -73,8 +73,8 @@ DMJ_SHIP_CA_SERIES="${DMJ_SHIP_CA_SERIES:-r1}"  # The end-user kit you ship. Pin
 DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by default
 DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
 DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
-DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-1}"       # 1 = rotate signer freely
-DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-0}" # 0 = never overwrite user Trust Kit ZIP
+DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-0}"       # 1 = rotate signer freely - dont - invalidates files
+DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
 
 # Require D1 id (single shared DB)
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
@@ -1726,461 +1726,432 @@ function renderHome(issuerDomain: string, nonce: string) {
   const pkiZip = `https://pki.${issuerDomain}/dmj-one-trust-kit.zip`;
 
   const html = `<!doctype html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en" data-bs-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta name="color-scheme" content="dark light" />
-<title>dmj.one Trust Services — Document Verification</title>
+<meta name="color-scheme" content="light" />
+<title>dmj.one · Trust Verification</title>
 
-<link rel="shortcut icon" href="//dmj.one/logo.png">
-<link rel="fluid-icon" href="//dmj.one//logo.png">
-<link rel="apple-touch-icon" href="//dmj.one//logo.png">
+<link rel="icon" href="https://dmj.one/logo.png">
+<link rel="apple-touch-icon" href="https://dmj.one/logo.png">
 
-<!-- Core CSS -->
+<!-- Core CSS only (no JS needed) -->
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
 
-<!-- Animations + bg (cdnjs per CSP) -->
-<link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
-<script nonce="__CSP_NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js" crossorigin="anonymous"></script>
-
 <style>
   :root{
-    --brand: #60a5fa; /* azure accent */
-    --bg: #0b0f14;    /* deep blue-black */
-    --panel: rgba(255,255,255,.05);
-    --panel-border: rgba(255,255,255,.08);
-    --muted: #a1aab7;
-    --ok: #17b26a;
-    --bad: #ef4343;
+    /* Light, calm, premium */
+    --bg: #f7fafc;
+    --surface: #ffffff;
+    --ink: #0f172a;
+    --muted:#64748b;
+    --brand:#2563eb;
+    --ok:#16a34a;
+    --bad:#dc2626;
+    --ring-track:#e5e7eb;
+    --ring-glow: 0 10px 40px rgba(37, 99, 235, .12);
   }
 
   html, body { height: 100%; }
   body {
     margin: 0;
-    background: var(--bg);
-    color: #e7ebf2;
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(37,99,235,.06), transparent 60%),
+      radial-gradient(1000px 500px at 120% 10%, rgba(34,197,94,.05), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
     overflow-x: hidden;
   }
 
-  /* cinematic, subtle bg */
-  #particles-js { position: fixed; inset: 0; z-index: 0; }
-  .bg-gradient-overlay {
-    position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background:
-      radial-gradient(800px 400px at 20% -10%, rgba(96,165,250,.08), transparent 60%),
-      radial-gradient(900px 500px at 80% -10%, rgba(34,197,94,.06), transparent 60%);
-  }
-
-  /* stage */
+  /* Stage */
   .stage {
-    position: relative; z-index: 1;
     min-height: 100dvh;
     display: grid;
     place-items: center;
-    padding: 2rem 1rem;
+    padding: clamp(16px, 3vw, 32px);
   }
-  .hero {
-    width: min(960px, 100%);
-    backdrop-filter: saturate(140%) blur(10px);
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: 1rem;
-    box-shadow: 0 10px 40px rgba(0,0,0,.45);
-    padding: clamp(1.25rem, 3vw, 2rem);
-  }
-
-  .brand-head { display: grid; justify-items: center; gap: .75rem; text-align: center; }
-  .brand-head img { height: clamp(44px, 8vw, 64px); width: auto; filter: drop-shadow(0 6px 18px rgba(0,0,0,.45)); }
-  .brand-head h1 { font-size: clamp(1.25rem, 3.2vw, 1.75rem); margin: 0; letter-spacing: .2px; }
-  .brand-sub { color: var(--muted); font-size: clamp(.95rem, 2.2vw, 1rem); }
-
-  /* single action */
-  .upload-wrap { display: grid; gap: 1rem; margin-top: 1.25rem; }
-  .dropzone {
-    border: 1px dashed rgba(255,255,255,.18);
-    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-    border-radius: .9rem;
-    padding: clamp(1.25rem, 5vw, 2.25rem);
-    text-align: center;
-    transition: border-color .2s ease, background-color .2s ease, transform .08s ease, opacity .2s ease;
-    cursor: pointer; outline: none; user-select: none;
-  }
-  .dropzone:hover, .dropzone.dragover {
-    border-color: rgba(96,165,250,.6);
-    background: linear-gradient(180deg, rgba(96,165,250,.08), rgba(255,255,255,.03));
-  }
-  .dropzone:active { transform: scale(.998); }
-  .dropzone[aria-disabled="true"] { opacity: .5; pointer-events: none; }
-  .dropzone .icon { font-size: clamp(1.8rem, 5.4vw, 2.25rem); color: var(--brand); }
-  .dropzone .title { margin-top: .5rem; font-weight: 600; font-size: clamp(1.05rem, 2.6vw, 1.2rem); }
-  .dropzone .hint { color: var(--muted); font-size: .95rem; }
-
-  /* trust kit nudge */
-  .trust-kit { text-align: center; color: var(--muted); font-size: .95rem; }
-  .trust-kit a { text-decoration: none; }
-  .trust-kit a .bi { vertical-align: -2px; }
-
-  /* live state (progress sweep) */
-  .live { margin-top: 1rem; border: 1px solid var(--panel-border); background: rgba(255,255,255,.03); border-radius: .8rem; padding: 1rem; }
-  .progress-rail { position: relative; height: 4px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
-  .progress-sweep { position:absolute; inset:0; transform: translateX(-100%); animation: sweep 1.2s cubic-bezier(.4,0,.2,1) infinite; background: linear-gradient(90deg, transparent, rgba(96,165,250,.85), rgba(52,211,153,.85), transparent); }
-  @keyframes sweep { 0% { transform: translateX(-100%);} 100% { transform: translateX(100%);} }
-
-  /* verdict */
-  .verdict { margin-top: 1rem; border: 1px solid var(--panel-border); background: rgba(255,255,255,.03); border-radius: .8rem; padding: clamp(1.25rem, 4vw, 2rem); }
-  .verdict-stage { text-align: center; }
-  .icon-wrap { position: relative; width: 84px; height: 84px; margin: 0 auto; }
-  .icon-wrap i { font-size: 84px; line-height: 84px; }
-  /* ripple for 'trust established' */
-  .pulse-ring { position:absolute; inset: -10px; border-radius: 999px; border: 2px solid rgba(23,178,106,.35); opacity: 0; }
-  .pulse-ring.play { animation: pulse 1.2s ease-out 1; }
-  @keyframes pulse { 0%{ transform: scale(.7); opacity:.0;} 35%{ opacity:.5;} 100%{ transform: scale(1.25); opacity:0;} }
-
-  /* brand loop (line-drawn circle, only on success) */
-  .brand-loop { margin: .5rem auto 0; width: 96px; height: 96px; }
-  .brand-loop circle { fill: none; stroke: rgba(96,165,250,.85); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 301; stroke-dashoffset: 301; }
-  .brand-loop.play circle { animation: draw 700ms ease-out forwards; }
-  @keyframes draw { to { stroke-dashoffset: 0; } }
-
-  .verdict-badge { font-size: clamp(34px, 5.4vw, 64px); line-height: 1.1; letter-spacing: .5px; }
-  .verdict-caption { color: var(--muted); font-size: 1rem; }
-  .hash-chip {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: .9rem; background: rgba(255,255,255,.06);
-    border: 1px solid rgba(255,255,255,.12); padding: .35rem .55rem; border-radius: .5rem;
+  .frame {
+    width: min(880px, 100%);
+    background: var(--surface);
+    border-radius: 18px;
+    border: 1px solid rgba(2,6,23,.06);
+    box-shadow:
+      0 1px 2px rgba(0,0,0,.04),
+      0 10px 30px rgba(0,0,0,.06);
+    padding: clamp(16px, 4vw, 32px);
   }
 
-  /* Advanced */
-  .adv-link { display:inline-flex; gap:.35rem; align-items:center; margin-top: .75rem; text-decoration: none; }
-  .adv-card { padding: 1rem; border-radius: .8rem; border: 1px solid var(--panel-border); background: rgba(255,255,255,.02); }
+  .brand {
+    display: grid; justify-items: center; text-align:center; gap:.5rem;
+  }
+  .brand img { height: clamp(44px, 8vw, 64px); width: auto; }
+  .brand h1 { font-size: clamp(1.25rem, 3.2vw, 1.75rem); margin:0; }
+  .brand p { color: var(--muted); margin:0; }
 
-  .stat-dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; margin-right: .4rem; }
-  .stat-yes { background: var(--ok); } .stat-no { background: var(--bad); }
+  /* Single button CTA (label for file input) */
+  .cta-wrap { display:grid; place-items:center; margin-top: clamp(16px, 3vw, 28px); }
+  .cta {
+    display:inline-flex; align-items:center; gap:.6rem;
+    padding: 16px 22px;
+    border-radius: 999px;
+    background: var(--ink);
+    color: #fff;
+    font-weight: 600;
+    border: 1px solid rgba(2,6,23,.1);
+    box-shadow: 0 6px 24px rgba(15,23,42,.18);
+    cursor: pointer;
+    user-select: none;
+    transition: transform .06s ease, box-shadow .2s ease, opacity .2s ease;
+  }
+  .cta:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(15,23,42,.22); }
+  .cta:active { transform: translateY(0); }
+  .cta[aria-disabled="true"] { opacity:.6; pointer-events:none; }
+  .cta .kbd { font: 500 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#cbd5e1; border:1px solid rgba(255,255,255,.25); padding:2px 6px; border-radius:6px; }
 
-  /* Footer */
-  footer.site-footer { position: relative; z-index: 1; border-top: 1px solid var(--panel-border); background: rgba(255,255,255,.02); }
-  footer .inner { max-width: 1100px; margin: 0 auto; padding: 1rem 1rem; display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: center; color: var(--muted); font-size: .95rem; }
-  footer a { color: #c8d1df; text-decoration: none; } footer a:hover { color: #ffffff; text-decoration: underline; }
+  /* Moment (verification) */
+  .moment {
+    margin-top: clamp(18px, 4vw, 32px);
+    display:grid; place-items:center; text-align:center;
+  }
+  .ring {
+    width: 112px; height: 112px; border-radius: 50%;
+    background: conic-gradient(var(--brand) 0 25%, var(--ring-track) 25% 100%);
+    -webkit-mask: radial-gradient(farthest-side, transparent 64%, #000 65%);
+            mask: radial-gradient(farthest-side, transparent 64%, #000 65%);
+    animation: spin 1.05s linear infinite;
+    box-shadow: var(--ring-glow);
+  }
+  @keyframes spin { to { transform: rotate(1turn); } }
 
-  /* reduce motion: keep it classy & comfortable */
+  .moment h2 { font-size: clamp(1.1rem, 3vw, 1.4rem); margin:.9rem 0 0 0; }
+  .moment p  { color: var(--muted); margin: .35rem 0 0 0; }
+
+  /* Verdict stage */
+  .verdict { margin-top: clamp(18px, 4vw, 32px); display:grid; place-items:center; text-align:center; }
+  .icon-box { position: relative; width: 120px; height: 120px; }
+  .ripple {
+    position:absolute; inset:-8px; border-radius:50%;
+    border: 2px solid rgba(22,163,74,.35);
+    opacity: 0; transform: scale(.7);
+  }
+  .ripple.play { animation: ripple 900ms ease-out 1; }
+  @keyframes ripple { 0%{opacity:0; transform:scale(.7);} 35%{opacity:.55;} 100%{opacity:0; transform:scale(1.2);} }
+
+  svg.icon { width: 120px; height: 120px; }
+  .stroke { fill: none; stroke-linecap: round; stroke-width: 10; }
+  .draw { stroke-dasharray: 100; stroke-dashoffset: 100; animation: dash .6s ease-out forwards; }
+  @keyframes dash { to { stroke-dashoffset: 0; } }
+
+  .title { font-size: clamp(36px, 6vw, 64px); font-weight: 800; letter-spacing: .4px; }
+  .caption { color: var(--muted); margin-top: 6px; }
+
+  .hash { margin-top: 10px; font: 500 13px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#0f172a; background:#f1f5f9; border:1px solid #e2e8f0; padding:6px 10px; border-radius:8px; }
+
+  /* Forensics (hidden until user presses F) */
+  .forensics { margin-top: 18px; width: 100%; max-width: 840px; }
+  .forensics .card {
+    background: #fff; border:1px solid #e5e7eb; border-radius: 14px;
+  }
+  .forensics .card h3 { font-size: 1rem; margin:0 0 .5rem 0; }
+  .stat-dot { width: .65rem; height: .65rem; border-radius: 50%; display:inline-block; margin-right:.45rem; }
+  .yes { background: var(--ok); } .no { background: var(--bad); }
+  .label { color: var(--muted); }
+
+  .trust-nudge { margin-top: 18px; font-size:.95rem; color: var(--muted); }
+  .trust-nudge a { text-decoration: none; }
+
+  footer { margin-top: 22px; text-align:center; color: var(--muted); font-size:.95rem; }
+
+  /* Reduced motion */
   @media (prefers-reduced-motion: reduce) {
-    .animate__animated, .pulse-ring.play, .brand-loop.play circle, .progress-sweep { animation: none !important; }
-    #particles-js { display:none !important; }
+    .ring, .draw, .ripple.play { animation: none !important; }
   }
 
-  /* Small screens */
-  @media (max-width: 420px) { .hash-chip { display:inline-block; max-width:100%; overflow:hidden; text-overflow: ellipsis; } }
+  /* Mobile polish */
+  @media (max-width: 420px){
+    .hash { word-break: break-all; }
+  }
 </style>
 </head>
-
 <body>
-  <!-- animated tech background -->
-  <div id="particles-js" aria-hidden="true"></div>
-  <div class="bg-gradient-overlay" aria-hidden="true"></div>
-
-  <!-- Centered content -->
   <main class="stage">
-    <section class="hero animate__animated animate__fadeInDown">
-      <div class="brand-head">
-        <img src="https://dmj.one/logo.png" alt="dmj.one logo" width="128" height="128" />
-        <h1 class="mb-1">dmj.one Trust Services</h1>
-        <div class="brand-sub">
-          Official Document Authenticity Verifier — Upload a PDF to check if it is issued by <span class="fw-semibold">${issuerDomain}</span> and unaltered.
-        </div>
+    <section class="frame" id="app">
+      <div class="brand">
+        <img src="https://dmj.one/logo.png" alt="dmj.one logo">
+        <h1>Document Trust Verification</h1>
+        <p>Single‑step authenticity check for documents issued by <span class="fw-semibold">${issuerDomain}</span>.</p>
       </div>
 
-      <!-- Single action -->
-      <div class="upload-wrap">
-        <input id="fileInput" class="d-none" type="file" name="file" accept="application/pdf" />
-        <label for="fileInput" class="dropzone" id="dropzone" role="button" tabindex="0" aria-controls="fileInput" aria-disabled="false">
-          <div class="icon"><i class="bi-upload"></i></div>
-          <div class="title">Upload Document</div>
-          <div class="hint">Single step. We verify signature & registry automatically.</div>
+      <!-- SINGLE ACTION -->
+      <div class="cta-wrap">
+        <input id="fileInput" class="d-none" type="file" accept="application/pdf" />
+        <label id="cta" class="cta" for="fileInput" role="button" aria-disabled="false">
+          <i class="bi-upload"></i>
+          <span id="ctaText">Upload Document</span>
+          <span class="kbd d-none d-sm-inline">PDF</span>
         </label>
+      </div>
 
-        <!-- subtle trust kit -->
-        <div class="trust-kit">
-          <i class="bi-shield-check me-1"></i>
-          <a href="${pkiZip}" download class="link-light">Install the Trust&nbsp;Kit</a>
-          <span class="ms-1">to see green checks inside Acrobat/Reader automatically.</span>
+      <!-- PROGRESS MOMENT -->
+      <div id="moment" class="moment" hidden>
+        <div class="ring" aria-hidden="true"></div>
+        <h2 id="busyTitle">Verifying…</h2>
+        <p id="busySub" class="text-secondary"></p>
+      </div>
+
+      <!-- VERDICT -->
+      <div id="verdict" class="verdict" hidden aria-live="polite" role="status">
+        <div class="icon-box">
+          <span id="ripple" class="ripple" aria-hidden="true"></span>
+          <!-- Success icon -->
+          <svg id="iconSuccess" class="icon" viewBox="0 0 120 120" hidden>
+            <path class="stroke" stroke="var(--ok)" pathLength="100" d="M30 62 L52 84 L92 36"></path>
+          </svg>
+          <!-- Failure icon -->
+          <svg id="iconFail" class="icon" viewBox="0 0 120 120" hidden>
+            <path class="stroke" stroke="var(--bad)" pathLength="100" d="M36 36 L84 84"></path>
+            <path class="stroke" stroke="var(--bad)" pathLength="100" d="M84 36 L36 84"></path>
+          </svg>
         </div>
+        <div id="verdictTitle" class="title mt-2"></div>
+        <div id="verdictCaption" class="caption"></div>
+        <div class="hash" id="sha">SHA‑256: —</div>
+      </div>
 
-        <!-- live state -->
-        <div id="liveState" class="live animate__animated animate__fadeIn" hidden>
-          <div class="d-flex align-items-center gap-3">
-            <div>
-              <div class="fw-semibold" id="stateLine">Starting verification…</div>
-              <div class="small text-secondary" id="fileName"></div>
+      <!-- FORENSICS (toggle with F) -->
+      <div id="fx" class="forensics" hidden>
+        <div class="card p-3">
+          <h3 class="mb-2">Forensic Report</h3>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <ul class="list-unstyled mb-0 small">
+                <li><span id="d_sig" class="stat-dot"></span>Signature object present</li>
+                <li><span id="d_crypto" class="stat-dot"></span>Cryptographic validity</li>
+                <li><span id="d_cover" class="stat-dot"></span>Signature covers entire document</li>
+              </ul>
+            </div>
+            <div class="col-md-6">
+              <ul class="list-unstyled mb-0 small">
+                <li><span id="d_ours" class="stat-dot"></span>Signed by dmj.one key</li>
+                <li><span id="d_reg" class="stat-dot"></span>Registered by dmj.one</li>
+                <li><span id="d_rev" class="stat-dot"></span>Revocation check</li>
+                <li class="mt-2 text-break"><span class="label">Issuer DN:</span> <code id="issuer"></code></li>
+              </ul>
             </div>
           </div>
-          <div class="progress-rail mt-3" aria-label="Verifying">
-            <div class="progress-sweep"></div>
-          </div>
-        </div>
-
-        <!-- verdict -->
-        <div id="verdictWrap" class="verdict animate__animated animate__fadeInUp" hidden>
-          <div id="verdictCard" class="verdict-stage" role="status" aria-live="polite">
-            <div class="icon-wrap">
-              <span id="pulseRing" class="pulse-ring" aria-hidden="true"></span>
-              <i id="verdictIcon" class="bi"></i>
-            </div>
-            <svg id="brandLoop" class="brand-loop" viewBox="0 0 100 100" aria-hidden="true">
-              <circle cx="50" cy="50" r="48"></circle>
-            </svg>
-
-            <div id="verdictText" class="verdict-badge fw-bold"></div>
-            <div id="verdictCaption" class="verdict-caption mt-1"></div>
-
-            <div class="mt-3">
-              <span class="hash-chip" id="shaChip" title="SHA‑256"></span>
-            </div>
-
-            <!-- Advanced report link (kept as link, not a button) -->
-            <a href="#" id="toggleAdvanced" class="adv-link">
-              <i class="bi-caret-right-fill"></i><span>View advanced report</span>
-            </a>
-
-            <!-- Advanced panel -->
-            <div id="advancedPanel" class="mt-3" hidden>
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <div class="adv-card">
-                    <div class="mb-2 fw-semibold">Signature &amp; Document</div>
-                    <ul class="list-unstyled mb-0 small">
-                      <li><span class="stat-dot" id="sigObjDot"></span>Signature object present</li>
-                      <li><span class="stat-dot" id="cryptoDot"></span>Embedded signature is cryptographically valid</li>
-                      <li><span class="stat-dot" id="coverDot"></span>Signature covers the whole document</li>
-                    </ul>
-                  </div>
-                </div>
-                <div class="col-md-6">
-                  <div class="adv-card">
-                    <div class="mb-2 fw-semibold">Issuer &amp; Registry</div>
-                    <ul class="list-unstyled mb-0 small">
-                      <li><span class="stat-dot" id="oursDot"></span>Signed by dmj.one key</li>
-                      <li><span class="stat-dot" id="regDot"></span>Registered by dmj.one</li>
-                      <li><span class="stat-dot" id="revokedDot"></span>Revocation check</li>
-                      <li class="mt-2 text-break"><span class="text-secondary">Issuer DN:</span> <code id="issuerDn"></code></li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-              <div class="mt-3 small text-secondary">Tip: Install the Trust Kit so Acrobat/Reader shows “signature is valid” automatically.</div>
-            </div>
-          </div>
+          <pre id="raw" class="mt-3 small text-secondary" style="white-space:pre-wrap;word-break:break-word;"></pre>
         </div>
       </div>
+
+      <div class="trust-nudge text-center">
+        <i class="bi-shield-check me-1"></i>
+        <a href="${pkiZip}" download>Install the dmj.one Trust Kit</a>
+        <span class="ms-1">for instant green checks in Acrobat/Reader.</span>
+      </div>
+
+      <footer class="pt-2">
+        © dmj.one Trust Services · <a class="text-decoration-none" href="https://dmj.one/privacy">Privacy</a> · <a class="text-decoration-none" href="https://dmj.one/tos">Terms</a>
+      </footer>
     </section>
   </main>
 
-  <!-- Footer -->
-  <footer class="site-footer">
-    <div class="inner">
-      <span class="opacity-75">© dmj.one Trust Services</span>
-      <span class="mx-1">•</span>
-      <a href="//dmj.one/privacy">Privacy</a>
-      <span class="mx-1">•</span>
-      <a href="//dmj.one/tos">Terms &amp; Conditions</a>
-    </div>
-  </footer>
-
 <script nonce="__CSP_NONCE__">
-  // particles.js init (disabled if user prefers reduced motion)
-  (function(){
-    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if(reduce) { var el = document.getElementById('particles-js'); if(el) el.style.display = 'none'; return; }
-    if(window.particlesJS){
-      particlesJS('particles-js', {
-        "particles": {
-          "number": { "value": 60, "density": { "enable": true, "value_area": 1000 } },
-          "color": { "value": ["#60a5fa","#34d399","#93c5fd"] },
-          "shape": { "type": "circle" },
-          "opacity": { "value": 0.35 },
-          "size": { "value": 2.3, "random": true },
-          "line_linked": { "enable": true, "distance": 130, "color": "#60a5fa", "opacity": 0.25, "width": 1 },
-          "move": { "enable": true, "speed": 1.1, "direction": "none", "out_mode": "out" }
-        },
-        "interactivity": { "detect_on": "canvas", "events": { "onhover": { "enable": true, "mode": "grab" }, "resize": true }, "modes": { "grab": { "distance": 140, "line_linked": { "opacity": 0.35 } } } },
-        "retina_detect": true
-      });
-    }
-  })();
-</script>
+(() => {
+  // --- Elements
+  const input   = document.getElementById('fileInput') as HTMLInputElement;
+  const cta     = document.getElementById('cta') as HTMLLabelElement;
+  const ctaText = document.getElementById('ctaText') as HTMLElement;
 
-<script nonce="__CSP_NONCE__">
-  (function(){
-    const fileInput    = document.getElementById('fileInput');
-    const dropzone     = document.getElementById('dropzone');
-    const liveState    = document.getElementById('liveState');
-    const stateLine    = document.getElementById('stateLine');
-    const fileNameEl   = document.getElementById('fileName');
-    const verdictWrap  = document.getElementById('verdictWrap');
-    const verdictCard  = document.getElementById('verdictCard');
-    const verdictIcon  = document.getElementById('verdictIcon');
-    const verdictText  = document.getElementById('verdictText');
-    const verdictCaption = document.getElementById('verdictCaption');
-    const shaChip      = document.getElementById('shaChip');
-    const pulseRing    = document.getElementById('pulseRing');
-    const brandLoop    = document.getElementById('brandLoop');
+  const moment  = document.getElementById('moment') as HTMLDivElement;
+  const busySub = document.getElementById('busySub') as HTMLElement;
 
-    const toggleAdvanced = document.getElementById('toggleAdvanced');
-    const advancedPanel  = document.getElementById('advancedPanel');
+  const verdict        = document.getElementById('verdict') as HTMLDivElement;
+  const iconSuccess    = document.getElementById('iconSuccess') as SVGSVGElement;
+  const iconFail       = document.getElementById('iconFail') as SVGSVGElement;
+  const ripple         = document.getElementById('ripple') as HTMLSpanElement;
+  const verdictTitle   = document.getElementById('verdictTitle') as HTMLElement;
+  const verdictCaption = document.getElementById('verdictCaption') as HTMLElement;
+  const shaChip        = document.getElementById('sha') as HTMLElement;
 
-    const dots = {
-      sigObjDot: document.getElementById('sigObjDot'),
-      cryptoDot: document.getElementById('cryptoDot'),
-      coverDot: document.getElementById('coverDot'),
-      oursDot: document.getElementById('oursDot'),
-      regDot: document.getElementById('regDot'),
-      revokedDot: document.getElementById('revokedDot'),
-    };
-    const issuerDn = document.getElementById('issuerDn');
+  const fxWrap  = document.getElementById('fx') as HTMLDivElement;
+  const raw     = document.getElementById('raw') as HTMLElement;
 
-    function setDot(el, ok){
-      el.classList.toggle('stat-yes', !!ok);
-      el.classList.toggle('stat-no', !ok);
-    }
+  const dots = {
+    d_sig:  document.getElementById('d_sig')  as HTMLSpanElement,
+    d_crypto:document.getElementById('d_crypto')as HTMLSpanElement,
+    d_cover: document.getElementById('d_cover') as HTMLSpanElement,
+    d_ours:  document.getElementById('d_ours')  as HTMLSpanElement,
+    d_reg:   document.getElementById('d_reg')   as HTMLSpanElement,
+    d_rev:   document.getElementById('d_rev')   as HTMLSpanElement,
+  };
+  const issuerEl = document.getElementById('issuer') as HTMLElement;
 
-    function show(state){
-      if(state === 'busy'){
-        verdictWrap.hidden = true;
-        liveState.hidden = false;
-      } else if(state === 'done'){
-        liveState.hidden = true;
-        verdictWrap.hidden = false;
-        // retrigger entrance
-        verdictWrap.classList.remove('animate__fadeInUp');
-        void verdictWrap.offsetWidth;
-        verdictWrap.classList.add('animate__fadeInUp');
-      }
-    }
+  // --- State + guards
+  let inFlight = false;
+  let controller: AbortController | null = null;
 
-    toggleAdvanced.addEventListener('click', function(e){
-      e.preventDefault();
-      const open = advancedPanel.hidden;
-      advancedPanel.hidden = !open;
-      this.querySelector('i').className = open ? 'bi-caret-down-fill' : 'bi-caret-right-fill';
-      this.querySelector('span').textContent = open ? 'Hide advanced report' : (verdictText.textContent === 'TAMPERED' ? 'See reasons' : 'View advanced report');
-    });
+  // Ensure fresh start after reload (fixes the F5/no-button issue)
+  function resetUI() {
+    input.value = ''; // always allow reselecting same file
+    inFlight = false;
+    controller?.abort(); controller = null;
 
-    // Prevent double uploads / race conditions
-    let inFlight = false;
-    let controller = null;
-    function lockUI(locked){
-      dropzone.setAttribute('aria-disabled', locked ? 'true' : 'false');
-      if(locked){ dropzone.classList.add('disabled'); } else { dropzone.classList.remove('disabled'); }
-    }
+    cta.setAttribute('aria-disabled','false');
+    cta.classList.remove('disabled');
+    ctaText.textContent = 'Upload Document';
 
-    function shortHash(hex){
-      if(!hex || hex.length < 16) return 'n/a';
-      return hex.slice(0, 16) + '…' + hex.slice(-16);
-    }
+    moment.hidden = true;
+    verdict.hidden = true;
+    iconSuccess.hidden = true;
+    iconFail.hidden = true;
+    ripple.classList.remove('play');
 
-    function renderVerdict(r){
-      const isValid = (r && (r.verdict === 'valid' || r.valid === true));
-      verdictIcon.className = isValid ? 'bi-shield-check text-success' : 'bi-shield-x text-danger';
-      verdictText.className  = 'verdict-badge fw-bold ' + (isValid ? 'text-success' : 'text-danger');
-      verdictText.textContent = isValid ? 'VALID' : 'TAMPERED';
-      verdictCaption.textContent = isValid ? 'Trust established' : (Array.isArray(r?.reasons) && r.reasons.length ? r.reasons[0] : 'Signature or digest mismatch');
+    fxWrap.hidden = true;
+    raw.textContent = '';
+    Object.values(dots).forEach(d => { d.className = 'stat-dot'; });
+    issuerEl.textContent = '';
+    shaChip.textContent = 'SHA‑256: —';
+    verdictTitle.textContent = '';
+    verdictCaption.textContent = '';
+  }
 
-      shaChip.textContent = shortHash(r?.sha256 || r?.hash);
+  resetUI(); // run on load
 
-      setDot(dots.sigObjDot, !!r?.hasSignature);
-      setDot(dots.cryptoDot, !!r?.isValid);
-      setDot(dots.coverDot, !!r?.coversDocument);
-      setDot(dots.oursDot, !!r?.issuedByUs || !!r?.issued);
-      setDot(dots.regDot, !!r?.issued);
-      setDot(dots.revokedDot, r?.revoked === false);
+  function lock(locked: boolean) {
+    cta.setAttribute('aria-disabled', locked ? 'true' : 'false');
+    if (locked) cta.classList.add('disabled'); else cta.classList.remove('disabled');
+  }
 
-      issuerDn.textContent = r?.issuer || '';
+  function shortHash(hex?: string) {
+    if (!hex || hex.length < 16) return '—';
+    return hex.slice(0,16) + '…' + hex.slice(-16);
+  }
 
-      // Cinematic micro‑interactions, success only
-      pulseRing.classList.remove('play');
-      brandLoop.classList.remove('play');
-      if(isValid){
-        void pulseRing.offsetWidth; pulseRing.classList.add('play');
-        void brandLoop.offsetWidth; brandLoop.classList.add('play');
-      }
+  function setDot(el: HTMLElement, ok: boolean | undefined) {
+    el.className = 'stat-dot ' + (ok ? 'yes' : 'no');
+  }
+
+  function showBusy(filename?: string) {
+    moment.hidden = false;
+    verdict.hidden = true;
+    busySub.textContent = filename || '';
+  }
+
+  function showVerdict(data: any) {
+    moment.hidden = true;
+    verdict.hidden = false;
+
+    const valid = !!(data?.verdict === 'valid' || data?.valid === true);
+    const reasons = Array.isArray(data?.reasons) ? data.reasons : [];
+    shaChip.textContent = 'SHA‑256: ' + shortHash(data?.sha256 || data?.hash);
+
+    // animate icon
+    iconSuccess.hidden = !valid;
+    iconFail.hidden    = valid;
+    ripple.classList.remove('play');
+
+    // trigger line drawing
+    const successPath = iconSuccess.querySelector('path');
+    const failPaths = iconFail.querySelectorAll('path');
+    [successPath, ...failPaths as any].forEach((p: any) => { if (p) { p.classList.remove('draw'); void p.getBBox(); p.classList.add('draw'); } });
+
+    if (valid) {
+      verdictTitle.textContent = 'VALID';
+      verdictTitle.style.color = 'var(--ok)';
+      verdictCaption.textContent = 'Trust established';
+      ripple.classList.add('play');
+    } else {
+      verdictTitle.textContent = 'TAMPERED';
+      verdictTitle.style.color = 'var(--bad)';
+      verdictCaption.textContent = reasons[0] || 'Signature or digest mismatch';
+      // subtle, crisp copy – no shake needed
     }
 
-    async function startVerification(f){
-      if(!f || inFlight) return;
-      inFlight = true; lockUI(true);
-      try{
-        stateLine.textContent = 'Uploading & verifying…';
-        dropzone.classList.add('d-none');
-        fileNameEl.textContent = f.name;
-        show('busy');
+    // Populate forensics (hidden by default)
+    setDot(dots.d_sig,    !!data?.hasSignature);
+    setDot(dots.d_crypto, !!data?.isValid);
+    setDot(dots.d_cover,  !!data?.coversDocument);
+    setDot(dots.d_ours,   !!(data?.issuedByUs || data?.issued));
+    setDot(dots.d_reg,    !!data?.issued);
+    setDot(dots.d_rev,     data?.revoked === false);
+    issuerEl.textContent = data?.issuer || '';
+    raw.textContent = JSON.stringify(data || {}, null, 2);
 
-        const fd = new FormData(); fd.set('file', f, f.name);
-        controller = new AbortController();
-        const to = setTimeout(()=> controller.abort('timeout'), 20000);
+    // Ready for another check with the same single CTA
+    ctaText.textContent = 'Upload Another Document';
+    lock(false);
 
-        const res = await fetch('/verify?json=1', {
-          method: 'POST',
-          body: fd,
-          headers: { 'Accept': 'application/json' },
-          signal: controller.signal
-        });
-        clearTimeout(to);
-
-        if(!res.ok) throw new Error('Server returned ' + res.status);
-        const r = await res.json();
-
-        renderVerdict(r);
-        show('done');
-
-        // Persist last result (optional feel‑good)
-        try { sessionStorage.setItem('dmj:last', JSON.stringify({ t: Date.now(), r })); } catch(e){}
-      } catch(err){
-        renderVerdict({ verdict: 'tampered', reasons: [ (err && err.message) ? err.message : 'Verification failed' ] });
-        show('done');
-      } finally {
-        // allow selecting same file again
-        fileInput.value = '';
-        inFlight = false; lockUI(false);
-        controller = null;
-      }
-    }
-
-    // restore last verdict (if any)
+    // brief hint for power users
     try {
-      const last = sessionStorage.getItem('dmj:last');
-      if(last){
-        const r = JSON.parse(last).r;
-        renderVerdict(r);
-        show('done');
-        dropzone.classList.add('d-none');
-      }
-    } catch(e){}
+      const hint = document.createElement('div');
+      hint.textContent = 'Press F to view the forensic report';
+      hint.style.cssText = 'margin-top:8px;color:#64748b;font-size:13px';
+      verdict.appendChild(hint);
+      setTimeout(()=> { if(hint && hint.parentNode) hint.parentNode.removeChild(hint); }, 3500);
+    } catch{}
+  }
 
-    // Keyboard activation
-    dropzone.addEventListener('keydown', (e) => {
-      if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if(!inFlight) fileInput.click(); }
-    });
+  async function verify(file: File) {
+    if (inFlight) return;
+    inFlight = true; lock(true);
 
-    // Ensure selecting the *same* file fires 'change' next time
-    fileInput.addEventListener('click', () => { fileInput.value = ''; });
+    showBusy(file?.name);
+    try {
+      const fd = new FormData();
+      fd.set('file', file, file.name);
 
-    // Drag & drop
-    ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); if(!inFlight) dropzone.classList.add('dragover'); }));
-    ['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('dragover'); }));
-    dropzone.addEventListener('drop', (e)=>{
-      if(inFlight) return;
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if(f && f.type === 'application/pdf') { startVerification(f); }
-      else if(f) { alert('Please drop a PDF file.'); }
-    });
+      controller = new AbortController();
+      const timeout = setTimeout(() => controller?.abort(), 20000);
 
-    // File picker
-    fileInput.addEventListener('change', function(){
-      const f = this.files && this.files[0];
-      if(!f) return; startVerification(f);
-    });
-  })();
+      const res = await fetch('/verify?json=1', {
+        method: 'POST',
+        headers: { 'Accept':'application/json' },
+        body: fd,
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) throw new Error('Server returned ' + res.status);
+      const data = await res.json();
+      showVerdict(data);
+    } catch (err: any) {
+      showVerdict({ verdict: 'tampered', reasons: [err?.message || 'Verification failed'] });
+    } finally {
+      inFlight = false;
+      controller = null;
+      // Always allow re‑selecting same file afterward
+      input.value = '';
+    }
+  }
+
+  // Events
+  input.addEventListener('click', () => { input.value = ''; });
+  input.addEventListener('change', () => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    ctaText.textContent = 'Uploading…';
+    verify(f);
+  });
+
+  // Keyboard focusability for CTA (label already opens file dialog)
+  cta.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!inFlight) input.click(); }
+  });
+
+  // Special key: F = Forensics toggle
+  document.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key.toLowerCase() === 'f') {
+      fxWrap.hidden = !fxWrap.hidden;
+    }
+  });
+
+  // Defensive: On visibility restore (F5/refresh or browser back), ensure UI is fresh
+  window.addEventListener('pageshow', () => resetUI(), { once: true });
+})();
 </script>
 </body>
 </html>`;
