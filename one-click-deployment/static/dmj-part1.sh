@@ -70,8 +70,7 @@ sudo chmod 700 "$DMJ_HOME"
 sudo chmod -R go-rwx "$DMJ_HOME"
 
 echo "[i] Generating ocsp and pki domain's LetsEncrypt Certificate"
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
-sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
+sudo certbot --nginx -d ocsp.dmj.one -d pki.dmj.one --agree-tos -m contact@dmj.one --no-redirect --non-interactive
 
 # Ensure legacy ~/.wrangler points at XDG .wrangler
 if [ ! -e "$DMJ_LEGACY_WR_DIR" ]; then
