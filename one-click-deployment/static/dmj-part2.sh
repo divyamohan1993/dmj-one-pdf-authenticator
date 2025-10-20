@@ -1546,9 +1546,9 @@ server {
   location / {
     proxy_pass         http://127.0.0.1:9080/;
     proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   Content-Length $content_length;
-    proxy_set_header   Content-Type $http_content_type;
+    proxy_set_header   Host \$host;
+    proxy_set_header   Content-Length \$content_length;
+    proxy_set_header   Content-Type \$http_content_type;
     proxy_buffering    off;
   }
 }
@@ -1557,17 +1557,17 @@ server {
   server_name ${OCSP_DOMAIN};
 
   # ssl_certificate and ssl_certificate_key managed by certbot
-  ssl_certificate /etc/letsencrypt/live/ocsp.dmj.one/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/ocsp.dmj.one/privkey.pem;
+  ssl_certificate /etc/letsencrypt/live/${OCSP_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${OCSP_DOMAIN}/privkey.pem;
 
   gzip off;
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
     proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   Content-Length $content_length;
-    proxy_set_header   Content-Type $http_content_type;
+    proxy_set_header   Host \$host;
+    proxy_set_header   Content-Length \$content_length;
+    proxy_set_header   Content-Type \$http_content_type;
     proxy_buffering    off;
   }
 }

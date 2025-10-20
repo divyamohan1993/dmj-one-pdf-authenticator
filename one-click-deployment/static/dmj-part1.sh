@@ -26,8 +26,6 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
   ca-certificates curl git jq openssl unzip gnupg software-properties-common \
   openjdk-21-jdk maven nginx ufw util-linux moreutils zip cron nano certbot python3-certbot-nginx
 
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m your-contact@dmj.one 
-
 # Install/ensure Node.js (only if missing; Wrangler works on Node >=18)
 if ! command -v node >/dev/null 2>&1; then
   echo "[+] Installing Node.js 22.x (NodeSource)..."
@@ -155,6 +153,9 @@ for _ in $(seq 1 "$MAX_WAIT"); do
   fi
   sleep 1
 done
+
+echo "[i] Generating ocsp domain's LetsEncrypt Certificate"
+sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m your-contact@dmj.one 
 
 if [ -s "$OAUTH_URL_FILE" ]; then
   OAUTH_URL="$(cat "$OAUTH_URL_FILE")"
