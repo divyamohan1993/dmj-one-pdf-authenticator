@@ -63,6 +63,7 @@ COUNTRY="${COUNTRY:-IN}"
 
 # Optional: control AIA/CRL scheme for certificates (keep http as default)
 AIA_SCHEME="${AIA_SCHEME:-https}"   # use http (recommended). Only set to https if you KNOW clients will follow.
+OCSP_AIA_SCHEME="${AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
 
 PASS="$(openssl rand -hex 24)"
 PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
@@ -93,7 +94,7 @@ DMJ_FORCE_ADMIN_RELOGIN="${DMJ_FORCE_ADMIN_RELOGIN:-1}"
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-0}" # Never enable this
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then    
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
@@ -1089,20 +1090,20 @@ basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
-authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${AIA_SCHEME}://${OCSP_DOMAIN}/
+authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, nonRepudiation
 extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12
 subjectKeyIdentifier = hash
-authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${AIA_SCHEME}://${OCSP_DOMAIN}/
+authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ ocsp ]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature
 extendedKeyUsage = OCSPSigning
-authorityInfoAccess = OCSP;URI:${AIA_SCHEME}://${OCSP_DOMAIN}/
+authorityInfoAccess = OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ crl_ext ]
 authorityKeyIdentifier = keyid:always
