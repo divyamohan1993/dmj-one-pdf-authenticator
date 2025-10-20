@@ -944,7 +944,7 @@ public class SignerServer {
 
         ctx.contentType("application/pdf");
         ctx.header("X-Signed-By", issuer);
-        ctx.header("X-Cert-Serial", dm.serialHex)
+        ctx.header("X-Cert-Serial", dm.serialHex);
         ctx.result(new ByteArrayInputStream(signed));
       } catch (Exception e){
         ctx.status(500).json(Map.of("error","sign failed", "detail", e.getMessage()));
