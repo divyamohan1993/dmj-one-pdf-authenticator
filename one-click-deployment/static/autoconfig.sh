@@ -38,7 +38,8 @@ as_dmj() {
 # Part 1 (system setup)
 # -------------------------------
 echo "[+] Running Part 1 installer..."
-sudo bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) | sudo bash'
+curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s)" \
+  | bash
 
 # -------------------------------
 # Wrangler auth check (service acct)
@@ -53,9 +54,9 @@ WHOAMI_OUTPUT="$(as_dmj bash -lc 'wrangler whoami' 2>&1 || true)"
 if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are logged in|Account Name|Email|User'; then
   echo "[✓] Wrangler is logged in. Proceeding to Part 2."
 
-  echo "[+] Running Part 2..." 
-  sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN \
-    bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
+  echo "[+] Running Part 2..."
+  curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s)" \
+    | env CF_D1_DATABASE_ID="$CF_D1_DATABASE_ID" DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" SIGNER_DOMAIN="$SIGNER_DOMAIN" bash
 
   echo "[✓] Both parts executed successfully."
 else
@@ -64,21 +65,3 @@ else
   echo "[i] Exiting without running Part 2."
   exit 1
 fi
-
-exit 0
-
-if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are logged in|Account Name|Email|User'; then
-  echo "[✓] Wrangler is logged in. Proceeding to Part 2."
-
-  echo "[+] Running Part 2..." 
-  sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN \
-    bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
-
-  echo "[✓] Both parts executed successfully."
-else
-  echo "[!] Wrangler authentication not detected for ${DMJ_USER}."
-  echo "[!] Please log in with: sudo -u ${DMJ_USER} -H wrangler login"
-  echo "[i] Exiting without running Part 2."
-  exit 1
-fi
-
