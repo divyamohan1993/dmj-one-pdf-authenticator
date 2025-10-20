@@ -63,7 +63,7 @@ COUNTRY="${COUNTRY:-IN}"
 
 # Optional: control AIA/CRL scheme for certificates (keep http as default)
 AIA_SCHEME="${AIA_SCHEME:-https}"   # use http (recommended). Only set to https if you KNOW clients will follow.
-OCSP_AIA_SCHEME="${AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
+OCSP_AIA_SCHEME="${OCSP_AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
 
 PASS="$(openssl rand -hex 24)"
 PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
