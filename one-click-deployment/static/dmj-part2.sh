@@ -41,11 +41,7 @@ WORKER_DIR="/opt/dmj/worker"
 SIGNER_DIR="/opt/dmj/signer-vm"
 NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
-SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (no file needed)
-
-# Ensure base app dirs are owned by the locked user
-sudo install -d -m 0755 -o "$DMJ_USER" -g "$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"
- 
+SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (no file needed) 
 
 # --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
 PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
@@ -122,6 +118,9 @@ case "${DMJ_VERBOSE,,}" in
   1|true|yes) VERBOSE=1 ;;
   *)          VERBOSE=0 ;;
 esac
+
+# Ensure base app dirs are owned by the locked user
+sudo install -d -m 0755 -o "$DMJ_USER" -g "$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"
 
 # Keep a console FD before we redirect
 exec 3>&1
