@@ -1513,7 +1513,7 @@ sudo tee /usr/local/bin/dmj-stack >/dev/null <<STACK
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-LOG_DIR="/var/log/dmj"
+
 mkdir -p "$LOG_DIR"
 trap 'trap - TERM INT; kill 0' TERM INT
 
@@ -1525,13 +1525,13 @@ trap 'trap - TERM INT; kill 0' TERM INT
   -rkey ${OCSP_DIR}/ocsp.key \
   -port 9080 -text -nmin 5 -no_nonce \
   -out "${LOG_DIR}/ocsp.log" &
-OCSP_PID=$!
+OCSP_PID=\$!
 
 # Signer (Java)
 /usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
-SIGNER_PID=$!
+SIGNER_PID=\$!
 
-wait -n "$OCSP_PID" "$SIGNER_PID"
+wait -n "\$OCSP_PID" "\$SIGNER_PID"
 STACK
 sudo chmod 0755 /usr/local/bin/dmj-stack
 
