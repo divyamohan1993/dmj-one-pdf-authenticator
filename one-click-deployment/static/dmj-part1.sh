@@ -203,9 +203,6 @@ EOSH
   sudo chmod 0755 /usr/local/bin/dmj-wrangler
 fi
 
-cd ~
-curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) &> dmj-part1.sh
-
 sudo tee ${STATE_DIR}/rp2.sh >/dev/null <<RP2
 # rp2.sh
 # set your D1 database id (from `wrangler d1 list`, or Dashboard)
