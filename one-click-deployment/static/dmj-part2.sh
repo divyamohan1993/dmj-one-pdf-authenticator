@@ -1,6 +1,7 @@
 # dmj-part2.sh
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ### --- Config / Inputs -------------------------------------------------------
 LOG_DIR="/var/log/dmj"
@@ -13,7 +14,10 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
-cd $LOG_DIR && sudo rm -rf *
+# cd $LOG_DIR && sudo rm -rf *
+# keep last 10 logs; delete older
+find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
+
 
 DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
 
@@ -1505,7 +1509,7 @@ ExecStart=/usr/bin/openssl ocsp \
   -rsigner ${OCSP_DIR}/ocsp.crt \
   -rkey    ${OCSP_DIR}/ocsp.key \
   -port 9080 \
-  -text -nmin 5 \
+  -text -nmin 5 -no_nonce \
   -out /var/log/dmj/ocsp.log
 Restart=always
 RestartSec=5s
@@ -1533,10 +1537,15 @@ server {
     application/pkix-cert crt cer;
     application/pkix-crl  crl;
   }
-  location / { try_files \$uri =404; }
+  location / {
+    try_files \$uri =404;    
+  }
+  # For ad-hoc downloads only, keep no-store:
+  location /dl/ {
+    add_header Cache-Control "no-store" always;
+  }
 }
-server {
-  server {
+server {  
   listen 443 ssl;
   server_name ${PKI_DOMAIN};
 
@@ -1552,7 +1561,13 @@ server {
     application/pkix-cert crt cer;
     application/pkix-crl  crl;
   }
-  location / { try_files \$uri =404; }
+  location / { 
+    try_files \$uri =404;
+  }  
+  # For ad-hoc downloads only, keep no-store:
+  location /dl/ {
+    add_header Cache-Control "no-store" always;
+  }
 }
 NGX
 
@@ -1569,7 +1584,7 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type \$http_content_type;
-    proxy_buffering    off;
+    proxy_buffering    off;    
   }
 }
 server {
@@ -1588,7 +1603,7 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type \$http_content_type;
-    proxy_buffering    off;
+    proxy_buffering    off;    
   }
 }
 NGX
@@ -1936,6 +1951,7 @@ function cookie(name:string, value:string, opts:Record<string,string|number|bool
   if(opts["Path"]) pairs.push(`Path=${opts["Path"]}`);
   pairs.push("HttpOnly");
   pairs.push("SameSite=Strict");
+  pairs.push("Secure");
   return pairs.join("; ");
 }
 async function signSession(env: Env, payload: any){

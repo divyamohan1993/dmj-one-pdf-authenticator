@@ -1,5 +1,5 @@
-# dmj-part1.sh
 #!/usr/bin/env bash
+# dmj-part1.sh
 set -euo pipefail
 
 ### Constants / paths
