@@ -369,6 +369,10 @@ import org.bouncycastle.asn1.cms.CMSAttributes;
 import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.pkcs.PKCS10CertificationRequest;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.IOUtils;
@@ -389,6 +393,9 @@ import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.Security;
 import java.security.cert.X509Certificate;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.cert.CertificateFactory;
 import java.time.Instant;
 import java.util.*;
 
@@ -406,9 +413,96 @@ public class SignerServer {
   static final String HMAC_TS = Optional.ofNullable(System.getenv("DMJ_HMAC_TS_HEADER")).orElse("x-worker-ts");
   static final String HMAC_NONCE = Optional.ofNullable(System.getenv("DMJ_HMAC_NONCE_HEADER")).orElse("x-worker-nonce");
 
+  static final Path ICA_DIR  = Paths.get(Optional.ofNullable(System.getenv("DMJ_ICA_DIR")).orElse("/opt/dmj/pki/ica"));
+  static final Path ROOT_DIR = Paths.get(Optional.ofNullable(System.getenv("DMJ_ROOT_DIR")).orElse("/opt/dmj/pki/root"));
+  static final Path PKI_PUB  = Paths.get(Optional.ofNullable(System.getenv("DMJ_PKI_PUB")).orElse("/opt/dmj/pki/pub"));
+  static final String OPENSSL = Optional.ofNullable(System.getenv("DMJ_OPENSSL_BIN")).orElse("openssl");
+
   static final Set<String> RECENT_NONCES = Collections.synchronizedSet(new LinkedHashSet<>());
 
   static { Security.addProvider(new BouncyCastleProvider()); }
+
+  // load ICA cert once for “issuedByUs” checks
+  // (used to determine whether a signature's issuer == our ICA)
+  static X509Certificate readX509(Path p) throws Exception {
+    try (InputStream in = Files.newInputStream(p)) {
+      return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(in);
+    }
+  }
+  static final X509Certificate ICA_CERT;
+  static {
+    X509Certificate tmp;
+    try { tmp = readX509(ICA_DIR.resolve("ica.crt")); } catch(Exception e){ tmp = null; }
+    ICA_CERT = tmp;
+  }
+
+  // --- helper: generate per-document cert via OpenSSL CA ---
+  static class DocMaterial {
+    final PrivateKey priv; final X509Certificate leaf;
+    final List<X509Certificate> chain; final String serialHex;
+    DocMaterial(PrivateKey p, X509Certificate c, List<X509Certificate> ch, String s){priv=p;leaf=c;chain=ch;serialHex=s;}
+  }
+  static DocMaterial issueDocCert(String cn) throws Exception {
+    // 1) keypair
+    KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+    kpg.initialize(3072);
+    KeyPair kp = kpg.generateKeyPair();
+
+    // 2) CSR (PEM)
+    X500Name subject = new X500Name("C=IN,O=dmj.one Trust Services,OU=Document Signing,CN="+cn);
+    PKCS10CertificationRequest csr = new JcaPKCS10CertificationRequestBuilder(subject, kp.getPublic())
+      .build(new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(kp.getPrivate()));
+    Path csrPem = Files.createTempFile("dmj", ".csr");
+    try (JcaPEMWriter pw = new JcaPEMWriter(Files.newBufferedWriter(csrPem))) { pw.writeObject(csr); }
+
+    // 3) Issue with ICA (PEM cert out)
+    Path certPem = Files.createTempFile("dmj", ".crt");
+    Process p = new ProcessBuilder(
+        OPENSSL, "ca", "-batch",
+        "-config", ICA_DIR.resolve("openssl.cnf").toString(),
+        "-extensions", "usr_cert", "-days", "365", "-md", "sha256", "-notext",
+        "-in", csrPem.toString(), "-out", certPem.toString()
+    ).inheritIO().start();
+    if (p.waitFor() != 0) throw new RuntimeException("openssl ca failed");
+
+    // 4) parse cert + serial + chain
+    X509Certificate leaf = readX509(certPem);
+    String serialHex = leaf.getSerialNumber().toString(16);
+    List<X509Certificate> chain = new ArrayList<>();
+    chain.add(leaf);
+    chain.add(readX509(ICA_DIR.resolve("ica.crt")));   // include ICA so validators can build path
+    // (optionally also add root if desired)
+    return new DocMaterial(kp.getPrivate(), leaf, chain, serialHex);
+  }
+
+  // --- new: revoke by serial ---
+  static void revokeBySerialHex(String serialHex) throws Exception {
+    String sHex = serialHex.startsWith("0x") ? serialHex.substring(2) : serialHex;
+    Path certPath = ICA_DIR.resolve("newcerts").resolve(sHex.toUpperCase()+".pem");
+    if (!Files.exists(certPath)) {
+      // fallback: try lowercase
+      certPath = ICA_DIR.resolve("newcerts").resolve(sHex.toLowerCase()+".pem");
+    }
+    Process r = new ProcessBuilder(OPENSSL, "ca",
+      "-config", ICA_DIR.resolve("openssl.cnf").toString(),
+      "-revoke", certPath.toString(),
+      "-crl_reason", "superseded"
+    ).inheritIO().start();
+    if (r.waitFor()!=0) throw new RuntimeException("revoke failed");
+
+    // regenerate CRL & publish
+    Process g = new ProcessBuilder(OPENSSL, "ca",
+      "-config", ICA_DIR.resolve("openssl.cnf").toString(),
+      "-gencrl", "-out", ICA_DIR.resolve("ica.crl").toString()
+    ).inheritIO().start();
+    if (g.waitFor()!=0) throw new RuntimeException("gencrl failed");
+    // publish + symlink (AIA/CDP paths)
+    Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    Files.deleteIfExists(PKI_PUB.resolve("ica.crl"));
+    Files.createSymbolicLink(PKI_PUB.resolve("ica.crl"), ICA_DIR.resolve("ica.crl"));
+    // restart OCSP so it picks up DB/CRL changes
+    new ProcessBuilder("systemctl","restart","dmj-ocsp.service").inheritIO().start().waitFor();
+  }
 
   static class Keys {
     final PrivateKey priv;
@@ -622,10 +716,28 @@ public class SignerServer {
             anyValid |= ok;
 
             // SPKI match = "issuedByUs"
-            String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
-            String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
-            if (ok && signerSpki.equals(ourSpki)) issuedByUs = true;
-            issuerDn = signerHolder.getSubject().toString();
+            // String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
+            // String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
+            // if (ok && signerSpki.equals(ourSpki)) issuedByUs = true;
+            // issuerDn = signerHolder.getSubject().toString();
+            // "issuedByUs": prefer robust check -> leaf issuer == our ICA subject.
+            if (ok) {
+              try {
+                if (ICA_CERT != null) {
+                  X509CertificateHolder icaHolder =
+                      new X509CertificateHolder(ICA_CERT.getEncoded());
+                  if (signerHolder.getIssuer().equals(icaHolder.getSubject())) {
+                    issuedByUs = true;
+                  }
+                } else {
+                  // legacy fallback: SPKI match with our static leaf
+                  String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
+                  String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
+                  if (signerSpki.equals(ourSpki)) issuedByUs = true;
+                }
+              } catch (Exception ignore) {}
+            }
+            issuerDn = signerHolder.getIssuer().toString();
           }
         } catch (Exception e) {
           errorMsg = "exception: " + e.getClass().getSimpleName() + (e.getMessage()!=null?(" - " + e.getMessage()):"");
@@ -645,11 +757,11 @@ public class SignerServer {
     return out;
   }
 
-  static final Path PKI_PUB = Paths.get(
-    Optional.ofNullable(System.getenv("DMJ_PKI_PUB")).orElse("/opt/dmj/pki/pub")
-  );
+  // static final Path PKI_PUB = Paths.get(
+  //   Optional.ofNullable(System.getenv("DMJ_PKI_PUB")).orElse("/opt/dmj/pki/pub")
+  // );
   static final String PKI_BASE = Optional.ofNullable(System.getenv("DMJ_PKI_BASE"))
-                                         .orElse("https://pki.dmj.one");
+                                         .orElse("https://pki.dmj.one"); // host where AIA/CRL/Trust‑kit are served
   
   static void addZipFile(ZipOutputStream zos, Path src, String name) throws IOException {
     if (!Files.exists(src)) return;
@@ -781,7 +893,7 @@ public class SignerServer {
       } catch (Exception e) {
         ctx.status(200).json(Map.of("hasSignature", false,"isValid", false,"issuedByUs", false,"coversDocument", false,"issuer","", "subFilter","", "error","exception: " + e.getClass().getSimpleName()));
       }
-    });
+    });    
 
     app.post("/bundle", ctx -> {
       String hmac = ctx.header(HMAC_HEADER), ts = ctx.header(HMAC_TS), nonce = ctx.header(HMAC_NONCE);
@@ -822,14 +934,34 @@ public class SignerServer {
       if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }      
 
       try {
-        byte[] prepared = applyDocInfoPreSign(data);                 // ← NEW, metadata rewrite
-        byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← pass chain here        
+        // byte[] prepared = applyDocInfoPreSign(data);                 // ← NEW, metadata rewrite
+        // byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← pass chain here        
+        // Issue a one-off document certificate (ephemeral keypair + ICA‑issued leaf)
+        String cn = "dmj.one Document " + java.util.UUID.randomUUID().toString().substring(0,8);
+        DocMaterial dm = issueDocCert(cn);
+        byte[] prepared = applyDocInfoPreSign(data);
+        byte[] signed = signPdf(prepared, dm.priv, dm.chain);
+
         ctx.contentType("application/pdf");
         ctx.header("X-Signed-By", issuer);
+        ctx.header("X-Cert-Serial", dm.serialHex)
         ctx.result(new ByteArrayInputStream(signed));
       } catch (Exception e){
         ctx.status(500).json(Map.of("error","sign failed", "detail", e.getMessage()));
       }
+    });
+
+    // HMAC‑gated: revoke by serial (updates CRL and restarts OCSP)
+    app.post("/revoke", ctx -> {
+      String hmac = ctx.header(HMAC_HEADER), ts = ctx.header(HMAC_TS), nonce = ctx.header(HMAC_NONCE);
+      if (hmac==null || ts==null || nonce==null) { ctx.status(401).json(Map.of("error","missing auth")); return; }
+      String serial = Optional.ofNullable(ctx.formParam("serial")).orElse("");
+      byte[] body = ("serial="+serial).getBytes(StandardCharsets.UTF_8);
+      boolean ok=false;
+      try { ok = verifyHmac(shared, "POST", "/revoke", body, ts, nonce, hmac); } catch(Exception ignore){}
+      if (!ok || serial.isBlank()) { ctx.status(401).json(Map.of("error","bad auth or serial missing")); return; }
+      try { revokeBySerialHex(serial); ctx.json(Map.of("revoked", true, "serial", serial)); }
+      catch(Exception e){ ctx.status(500).json(Map.of("error","revoke failed","detail", e.getMessage())); }
     });
 
     app.get("/healthz", ctx -> ctx.result("ok"));
@@ -1260,10 +1392,27 @@ HTML
       dmj-one-trust-kit-SHA256SUMS.txt install-dmj-certificates.bat )
 fi
 
+
 # Always point this public name at the pinned series
 ( cd "${PKI_PUB}" && ln -sf "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" dmj-one-trust-kit.zip )
 
+# Provide files at the exact paths embedded in certificates:
+sudo ln -sf "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
+sudo ln -sf "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
+sudo ln -sf "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
+sudo ln -sf "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
 
+# sudo nginx -t && sudo systemctl reload nginx
+
+sudo tee /usr/local/bin/dmj-refresh-crl >/dev/null <<REFRESHCRL
+#!/usr/bin/env bash
+set -euo pipefail
+ICA_DIR="/opt/dmj/pki/ica"; PKI_PUB="/opt/dmj/pki/pub"
+openssl ca -config "${ICA_DIR}/openssl.cnf" -gencrl -out "${ICA_DIR}/ica.crl"
+install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
+ln -sf "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"
+REFRESHCRL
+sudo chmod +x /usr/local/bin/dmj-refresh-crl
 
 
 say "[+] Building Java signer..."
@@ -1348,10 +1497,16 @@ Description=dmj.one OCSP Responder
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/openssl ocsp -port 127.0.0.1:9080 \
- -index ${ICA_DIR}/index.txt -rsigner ${OCSP_DIR}/ocsp.crt -rkey ${OCSP_DIR}/ocsp.key \
- -CA ${ICA_DIR}/ica.crt -ignore_err -text
+ExecStart=/usr/bin/openssl ocsp \
+  -index ${ICA_DIR}/index.txt \
+  -CA     ${ICA_DIR}/ica.crt \
+  -rsigner ${OCSP_DIR}/ocsp.crt \
+  -rkey    ${OCSP_DIR}/ocsp.key \
+  -port 127.0.0.1:9080 \
+  -text -nmin 0 -ndays 7 \
+  -out /var/log/dmj/ocsp.log
 Restart=always
+RestartSec=5s
 WorkingDirectory=${OCSP_DIR}
 
 [Install]
@@ -1359,6 +1514,7 @@ WantedBy=multi-user.target
 OCSP
 sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-ocsp.service
+sudo systemctl restart dmj-ocsp.service
 
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
 sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
@@ -1395,26 +1551,52 @@ sudo ln -sf /etc/nginx/sites-available/dmj-pki  /etc/nginx/sites-enabled/dmj-pki
 sudo ln -sf /etc/nginx/sites-available/dmj-ocsp /etc/nginx/sites-enabled/dmj-ocsp
 sudo nginx -t && sudo systemctl reload nginx
 
-say "[+] Adding Cron Job..."
-# Cron job schedule: Every day at 2:00 AM
+# say "[+] Adding Cron Job..."
+# # Cron job schedule: Every day at 2:00 AM
+# CRON_SCHEDULE="0 2 * * *"
+# COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
+# CRON_JOB="$CRON_SCHEDULE $COMMAND"
+
+# # Safely get existing crontab or empty if none exists
+# existing_cron=$(crontab -l 2>/dev/null || true)
+
+# # Filter out any existing lines matching COMMAND
+# filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" || true)
+
+# # Add new cron job line
+# new_cron=$(printf "%s\n%s\n" "$filtered_cron" "$CRON_JOB")
+
+# # Install new crontab
+# printf "%s\n" "$new_cron" | crontab -
+
+# echo "Cron job added:"
+# echo "$CRON_JOB"
+
+echo "[+] Adding Cron Job..."
+
+# Cron job schedules
 CRON_SCHEDULE="0 2 * * *"
 COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
 CRON_JOB="$CRON_SCHEDULE $COMMAND"
 
+CRON_JOB2="0 */6 * * * /usr/local/bin/dmj-refresh-crl"
+
 # Safely get existing crontab or empty if none exists
 existing_cron=$(crontab -l 2>/dev/null || true)
 
-# Filter out any existing lines matching COMMAND
-filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" || true)
+# Filter out any existing lines matching the commands
+filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" | grep -Fv "$CRON_JOB2" || true)
 
-# Add new cron job line
-new_cron=$(printf "%s\n%s\n" "$filtered_cron" "$CRON_JOB")
+# Add new cron job lines
+new_cron=$(printf "%s\n%s\n%s\n" "$filtered_cron" "$CRON_JOB" "$CRON_JOB2")
 
 # Install new crontab
 printf "%s\n" "$new_cron" | crontab -
 
-echo "Cron job added:"
+echo "Cron jobs added:"
 echo "$CRON_JOB"
+echo "$CRON_JOB2"
+
 
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
@@ -1576,7 +1758,8 @@ async function ensureSchema(env: Env) {
        meta_json TEXT,
        signed_at INTEGER,
        revoked_at INTEGER,
-       revoke_reason TEXT
+       revoke_reason TEXT,
+       cert_serial TEXT
      )`,
     `CREATE INDEX IF NOT EXISTS ${p}documents_sha_idx ON ${p}documents(doc_sha256)`,    
     `CREATE TABLE IF NOT EXISTS ${p}doc_verifications(
@@ -1623,6 +1806,12 @@ async function ensureSchema(env: Env) {
 
   for (const sql of stmts) {
     await env.DB.prepare(sql).run();
+  }
+  // Schema drift fixer: add 'cert_serial' to existing databases (no-op if present).
+  try {
+    await env.DB.prepare(`ALTER TABLE ${p}documents ADD COLUMN cert_serial TEXT`).run();
+  } catch (e) {
+    /* ignore: column already exists */
   }
 }
 
@@ -2923,6 +3112,7 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
         body: (()=>{ const fd = new FormData(); fd.set("file", new Blob([buf], {type:"application/pdf"}), "in.pdf"); return fd; })()
       });
       if(!res.ok) return json({error:"signer error", detail: await res.text()}, 502);
+      const certSerial = res.headers.get("x-cert-serial") || "";
       const signed = await res.arrayBuffer();
       const sha = await sha256(signed);              // hash of the *signed* file
 
@@ -2945,9 +3135,9 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
 
       await env.DB
         .prepare(`INSERT OR IGNORE INTO ${p}documents
-                  (id,doc_sha256,meta_json,signed_at,revoked_at)
-                  VALUES(?,?,?,?,NULL)`)
-        .bind(crypto.randomUUID(), sha, meta || "{}", now())
+                  (id,doc_sha256,meta_json,signed_at,revoked_at,cert_serial)
+                  VALUES(?,?,?,?,NULL,?)`)
+        .bind(crypto.randomUUID(), sha, meta || "{}", now(), certSerial)
         .run();
       // Upsert the verification result
       await env.DB
@@ -3021,6 +3211,33 @@ Having problems installing? Mail us at contact@dmj.one
     if (u.pathname === adminPath + "/revoke"){     
       const p = env.DB_PREFIX;
       const sha = String(form.get("sha")||"");
+      // Look up certificate serial for this document
+      const row = await env.DB
+        .prepare(`SELECT cert_serial FROM ${p}documents WHERE doc_sha256=?`)
+        .bind(sha)
+        .first() as any;
+      const serial = row?.cert_serial || "";
+      if (!serial) return json({error:"no cert serial recorded for this document"}, 400);
+
+      // HMAC‑gated call to signer /revoke
+      const params = new URLSearchParams({ serial });
+      const bodyBytes = new TextEncoder().encode(params.toString());
+      const { ts, nonce, sig } = await hmac(env, bodyBytes, "POST", "/revoke");
+      const HH = env.WORKER_HMAC_HEADER || "x-worker-hmac";
+      const HT = env.WORKER_HMAC_TS_HEADER || "x-worker-ts";
+      const HN = env.WORKER_HMAC_NONCE_HEADER || "x-worker-nonce";
+      const r = await fetch(new URL("/revoke", env.SIGNER_API_BASE).toString(), {
+        method: "POST",
+        headers: {
+          [HH]: sig,
+          [HT]: ts,
+          [HN]: nonce,
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        body: params
+      });
+      if (!r.ok) return json({error:"revoke failed at signer"}, 502);
+
       await env.DB
         .prepare(`UPDATE ${p}documents SET revoked_at=? WHERE doc_sha256=?`)
         .bind(now(), sha)
@@ -3179,7 +3396,8 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}documents(
   meta_json TEXT,
   signed_at INTEGER,
   revoked_at INTEGER,
-  revoke_reason TEXT
+  revoke_reason TEXT,
+  cert_serial TEXT
 );
 CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_sha_idx ON ${DB_PREFIX}documents(doc_sha256);
 CREATE TABLE IF NOT EXISTS ${DB_PREFIX}doc_verifications(
@@ -3218,6 +3436,12 @@ SQL
 
 say "[+] Applying schema to remote D1..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
+
+# Older databases may lack the new 'cert_serial' column.
+# CREATE TABLE IF NOT EXISTS won't add columns, so add it explicitly and ignore errors if it exists.
+say "[i] Ensuring cert_serial column exists..."
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN cert_serial TEXT;" ) || true
+
 
 # Optional clean-up: remove any server-side session records (not strictly required,
 # since rotating SESSION_HMAC_KEY already invalidates cookies, but keeps table tidy).
