@@ -155,7 +155,8 @@ for _ in $(seq 1 "$MAX_WAIT"); do
 done
 
 echo "[i] Generating ocsp domain's LetsEncrypt Certificate"
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m your-contact@dmj.one 
+sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
+sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
 
 if [ -s "$OAUTH_URL_FILE" ]; then
   OAUTH_URL="$(cat "$OAUTH_URL_FILE")"

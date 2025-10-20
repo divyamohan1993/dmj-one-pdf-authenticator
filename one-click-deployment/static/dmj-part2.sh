@@ -1505,7 +1505,7 @@ ExecStart=/usr/bin/openssl ocsp \
   -rsigner ${OCSP_DIR}/ocsp.crt \
   -rkey    ${OCSP_DIR}/ocsp.key \
   -port 9080 \
-  -text -ndays 7 \
+  -text -nmin 5 \
   -out /var/log/dmj/ocsp.log
 Restart=always
 RestartSec=5s
@@ -1525,6 +1525,25 @@ sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
 server {
   listen 80;
   server_name ${PKI_DOMAIN};
+  root ${PKI_PUB};
+  autoindex off;
+  add_header Cache-Control "public, max-age=3600";
+  # correct content types
+  types {
+    application/pkix-cert crt cer;
+    application/pkix-crl  crl;
+  }
+  location / { try_files \$uri =404; }
+}
+server {
+  server {
+  listen 443 ssl;
+  server_name ${PKI_DOMAIN};
+
+  # ssl_certificate and ssl_certificate_key managed by certbot
+  ssl_certificate /etc/letsencrypt/live/${PKI_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${PKI_DOMAIN}/privkey.pem;
+  
   root ${PKI_PUB};
   autoindex off;
   add_header Cache-Control "public, max-age=3600";
