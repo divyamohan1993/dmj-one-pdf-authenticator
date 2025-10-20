@@ -20,7 +20,7 @@ LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
 
 
-DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
@@ -100,7 +100,7 @@ DMJ_FORCE_ADMIN_RELOGIN="${DMJ_FORCE_ADMIN_RELOGIN:-1}"
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-0}" # Never enable this
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then    
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
