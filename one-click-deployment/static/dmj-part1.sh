@@ -3,6 +3,8 @@
 set -euo pipefail
 umask 077
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+
 ### Constants / paths
 LOG_DIR="/var/log/dmj"
 STATE_DIR="/var/lib/dmj"
@@ -37,10 +39,16 @@ echo "[+] Node: $(node -v); npm: $(npm -v)"
 
 # Install Wrangler (global) if missing
 if ! command -v wrangler >/dev/null 2>&1; then
-  echo "[+] Installing Wrangler CLI..."
-  sudo npm i -g wrangler@latest
+  echo "[+] Installing Wrangler CLI..."  
+  ( umask 022; sudo npm i -g wrangler@latest )
 fi
+# Ensure PATH sees global npm bin (and typical system bins)
+export PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
 WRANGLER_BIN="$(command -v wrangler)"
+# Repair permissions in case global umask 077 impacted install
+sudo chmod 0755 "$WRANGLER_BIN" || true
+WR_GLOBAL_ROOT="$(npm root -g 2>/dev/null || echo /usr/local/lib/node_modules)"
+[ -d "$WR_GLOBAL_ROOT/wrangler" ] && sudo chmod -R a+rX "$WR_GLOBAL_ROOT/wrangler" || true
 echo "[+] Wrangler: $("$WRANGLER_BIN" --version)"
 
 # Ensure nginx is running (used in Part 2)
@@ -80,8 +88,12 @@ fi
 
 # Helper to run commands as the service user, with HOME/XDG set
 as_dmj() {
-  sudo -u "$DMJ_USER" -H env HOME="$DMJ_HOME" XDG_CONFIG_HOME="$DMJ_XDG" "$@"
+  # sudo -u "$DMJ_USER" -H env HOME="$DMJ_HOME" XDG_CONFIG_HOME="$DMJ_XDG" "$@"
+  sudo --preserve-env=CLOUDFLARE_API_TOKEN \
+    -u "$DMJ_USER" -H env \
+    HOME="$DMJ_HOME" XDG_CONFIG_HOME="$DMJ_XDG" PATH="/usr/local/bin:/usr/bin:/bin" "$@"
 }
+
 
 # If root has a token file but service-user doesn't, migrate it (one-time)
 ROOT_CFG1="/root/.wrangler/config/default.toml"
@@ -111,7 +123,8 @@ fi
 
 # === CONSOLIDATED AUTH CHECK (always as service user) =======================
 echo "[+] Checking Wrangler auth (service acct: ${DMJ_USER})..."
-WHOAMI_OUTPUT="$( (as_dmj "$WRANGLER_BIN" whoami 2>&1 || true) )"
+# WHOAMI_OUTPUT="$( (as_dmj "$WRANGLER_BIN" whoami 2>&1 || true) )"
+WHOAMI_OUTPUT="$( (as_dmj wrangler whoami 2>&1 || true) )"
 
 if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are not authenticated|not authenticated'; then
   echo "[!] Wrangler is NOT authenticated for ${DMJ_USER}."
@@ -123,7 +136,17 @@ else
       echo "[+] Installing dmj-wrangler helper..."
       sudo bash -c "cat > /usr/local/bin/dmj-wrangler" <<'EOSH'
 #!/usr/bin/env bash
-exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config wrangler "$@"
+# exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config wrangler "$@"
+set -euo pipefail
+# Optional token file support
+if [ -f /etc/dmj/wrangler.env ]; then
+  set -a
+  . /etc/dmj/wrangler.env
+  set +a
+fi
+exec sudo --preserve-env=CLOUDFLARE_API_TOKEN \
+  -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config PATH=/usr/local/bin:/usr/bin:/bin \
+  "$(command -v wrangler)" "$@"
 EOSH
       sudo chmod 0755 /usr/local/bin/dmj-wrangler
     fi
@@ -155,12 +178,13 @@ fi
 # Start wrangler login as service user, write its real PID, and tee output
 # into a root-writable log (login server listens on localhost:8976).
 ( set -o pipefail;
-  as_dmj bash -lc 'echo $$ > "'"$PID_FILE"'"; exec '"$WRANGLER_BIN"' login --browser=false'
+  # as_dmj bash -lc 'echo $$ > "'"$PID_FILE"'"; exec '"$WRANGLER_BIN"' login --browser=false'
+  as_dmj bash -lc 'echo $$ > "'"$PID_FILE"'"; CI=0 exec wrangler login --browser=false'
 ) 2>&1 | tee -a "$LOGIN_LOG" &
 
 echo "[i] Waiting for OAuth URL from wrangler (PID file: $PID_FILE)..."
 : > "$OAUTH_URL_FILE"
-MAX_WAIT="${WRANGLER_LOGIN_MAX_WAIT:-90}"
+MAX_WAIT="${WRANGLER_LOGIN_MAX_WAIT:-30}"
 for _ in $(seq 1 "$MAX_WAIT"); do
   if grep -Eo 'https://dash\.cloudflare\.com/oauth2/(auth|authorize)\?[^ ]+' "$LOGIN_LOG" \
       | head -n1 | sponge "$OAUTH_URL_FILE"; then
@@ -198,7 +222,17 @@ if [ ! -x /usr/local/bin/dmj-wrangler ]; then
   echo "[+] Installing dmj-wrangler helper..."
   sudo bash -c "cat > /usr/local/bin/dmj-wrangler" <<'EOSH'
 #!/usr/bin/env bash
-exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config wrangler "$@"
+# exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config wrangler "$@"
+set -euo pipefail
+# Optional token file support
+if [ -f /etc/dmj/wrangler.env ]; then
+  set -a
+  . /etc/dmj/wrangler.env
+  set +a
+fi
+exec sudo --preserve-env=CLOUDFLARE_API_TOKEN \
+  -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config PATH=/usr/local/bin:/usr/bin:/bin \
+  "$(command -v wrangler)" "$@"
 EOSH
   sudo chmod 0755 /usr/local/bin/dmj-wrangler
 fi
