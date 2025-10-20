@@ -154,10 +154,6 @@ for _ in $(seq 1 "$MAX_WAIT"); do
   sleep 1
 done
 
-echo "[i] Generating ocsp domain's LetsEncrypt Certificate"
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
-sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
-
 if [ -s "$OAUTH_URL_FILE" ]; then
   OAUTH_URL="$(cat "$OAUTH_URL_FILE")"
   echo
@@ -191,6 +187,10 @@ exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/
 EOSH
   sudo chmod 0755 /usr/local/bin/dmj-wrangler
 fi
+
+echo "[i] Generating ocsp domain's LetsEncrypt Certificate"
+sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
+sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
 
 echo "[*] Exiting Part 1 now. After you complete login, run Part 2."
 exit 0

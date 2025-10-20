@@ -59,7 +59,7 @@ This script is **idempotent**. You can run it multiple times; it won’t clobber
 1. **Run Part 1** (installs deps, starts headless Wrangler OAuth, prints URL and exits)
 
 ```bash
-sudo bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) | bash'
+sudo bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) | sudo bash'
 ```
 
 > Part 1 will print (and save) a URL like
