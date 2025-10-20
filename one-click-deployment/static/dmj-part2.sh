@@ -15,7 +15,7 @@ mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 cd $LOG_DIR && sudo rm -rf *
 
-DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
+DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
