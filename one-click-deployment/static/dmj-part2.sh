@@ -1463,6 +1463,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-signer.service
 # Restart Signer
 sudo systemctl restart dmj-signer.service
+sudo systemctl status dmj-signer --no-pager
 
 # nginx site (reverse proxy to dynamic port from /etc/dmj/signer.port)
 say "[+] Creating dmj-signer nginx config..."
@@ -1502,8 +1503,8 @@ ExecStart=/usr/bin/openssl ocsp \
   -CA     ${ICA_DIR}/ica.crt \
   -rsigner ${OCSP_DIR}/ocsp.crt \
   -rkey    ${OCSP_DIR}/ocsp.key \
-  -port 127.0.0.1:9080 \
-  -text -nmin 0 -ndays 7 \
+  -port 9080 \
+  -text -ndays 7 \
   -out /var/log/dmj/ocsp.log
 Restart=always
 RestartSec=5s
@@ -1515,6 +1516,8 @@ OCSP
 sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-ocsp.service
 sudo systemctl restart dmj-ocsp.service
+sudo systemctl status dmj-ocsp --no-pager
+
 
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
 sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
@@ -1537,12 +1540,35 @@ sudo tee /etc/nginx/sites-available/dmj-ocsp >/dev/null <<NGX
 server {
   listen 80;
   server_name ${OCSP_DOMAIN};
-  client_max_body_size 2m;
-  # OCSP requests are small POST/GET; just proxy raw to OpenSSL ocsp at / 
+
+  gzip off;
+
   location / {
-    proxy_pass http://127.0.0.1:9080;
-    proxy_buffering off;
-    proxy_set_header Connection "";
+    proxy_pass         http://127.0.0.1:9080/;
+    proxy_http_version 1.1;
+    proxy_set_header   Host $host;
+    proxy_set_header   Content-Length $content_length;
+    proxy_set_header   Content-Type $http_content_type;
+    proxy_buffering    off;
+  }
+}
+server {
+  listen 443 ssl;
+  server_name ${OCSP_DOMAIN};
+
+  # ssl_certificate and ssl_certificate_key managed by certbot
+  ssl_certificate /etc/letsencrypt/live/ocsp.dmj.one/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/ocsp.dmj.one/privkey.pem;
+
+  gzip off;
+
+  location / {
+    proxy_pass         http://127.0.0.1:9080/;
+    proxy_http_version 1.1;
+    proxy_set_header   Host $host;
+    proxy_set_header   Content-Length $content_length;
+    proxy_set_header   Content-Type $http_content_type;
+    proxy_buffering    off;
   }
 }
 NGX
