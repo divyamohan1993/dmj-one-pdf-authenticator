@@ -26,6 +26,11 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
   ca-certificates curl git jq openssl unzip gnupg software-properties-common \
   openjdk-21-jdk maven nginx ufw util-linux moreutils zip cron nano certbot python3-certbot-nginx
 
+
+echo "[i] Generating ocsp and pki domain's LetsEncrypt Certificate"
+sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
+sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
+
 # Install/ensure Node.js (only if missing; Wrangler works on Node >=18)
 if ! command -v node >/dev/null 2>&1; then
   echo "[+] Installing Node.js 22.x (NodeSource)..."
@@ -187,10 +192,6 @@ exec sudo -u dmjsvc -H env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/
 EOSH
   sudo chmod 0755 /usr/local/bin/dmj-wrangler
 fi
-
-echo "[i] Generating ocsp domain's LetsEncrypt Certificate"
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
-sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
 
 echo "[*] Exiting Part 1 now. After you complete login, run Part 2."
 exit 0
