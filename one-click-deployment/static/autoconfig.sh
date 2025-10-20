@@ -38,8 +38,7 @@ as_dmj() {
 # Part 1 (system setup)
 # -------------------------------
 echo "[+] Running Part 1 installer..."
-curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s)" \
-  | bash
+sudo bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) | sudo bash'
 
 # -------------------------------
 # Wrangler auth check (service acct)
@@ -55,8 +54,10 @@ if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are logged in|Account Name|Email|User'
   echo "[✓] Wrangler is logged in. Proceeding to Part 2."
 
   echo "[+] Running Part 2..."
-  curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s)" \
-    | env CF_D1_DATABASE_ID="$CF_D1_DATABASE_ID" DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" SIGNER_DOMAIN="$SIGNER_DOMAIN" bash
+  # curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s)" \
+  #   | env CF_D1_DATABASE_ID="$CF_D1_DATABASE_ID" DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" SIGNER_DOMAIN="$SIGNER_DOMAIN" bash
+  sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN \
+    bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
 
   echo "[✓] Both parts executed successfully."
 else
