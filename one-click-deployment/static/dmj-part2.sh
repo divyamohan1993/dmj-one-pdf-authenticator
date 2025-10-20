@@ -1985,11 +1985,11 @@ async function ensureSchema(env: Env) {
     await env.DB.prepare(sql).run();
   }
   // Schema drift fixer: add 'cert_serial' to existing databases (no-op if present).
-  try {
-    await env.DB.prepare(`ALTER TABLE ${p}documents ADD COLUMN cert_serial TEXT`).run();
-  } catch (e) {
-    /* ignore: column already exists */
-  }
+  // try {
+  //   await env.DB.prepare(`ALTER TABLE ${p}documents ADD COLUMN cert_serial TEXT`).run();
+  // } catch (e) {
+  //   /* ignore: column already exists */
+  // }
 }
 
 // Store a short-lived downloadable blob and return its id
@@ -3617,8 +3617,8 @@ say "[+] Applying schema to remote D1..."
 
 # Older databases may lack the new 'cert_serial' column.
 # CREATE TABLE IF NOT EXISTS won't add columns, so add it explicitly and ignore errors if it exists.
-say "[i] Ensuring cert_serial column exists..."
-( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN cert_serial TEXT;" ) || true
+# say "[i] Ensuring cert_serial column exists..."
+# ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN cert_serial TEXT;" ) || true
 
 
 # Optional clean-up: remove any server-side session records (not strictly required,
