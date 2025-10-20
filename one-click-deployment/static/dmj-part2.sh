@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 ### --- Config / Inputs -------------------------------------------------------
+DMJ_USER="dmjsvc"
 LOG_DIR="/var/log/dmj"
 STATE_DIR="/var/lib/dmj"
 CONF_DIR="/etc/dmj"
@@ -40,6 +41,11 @@ WORKER_DIR="/opt/dmj/worker"
 SIGNER_DIR="/opt/dmj/signer-vm"
 NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
+SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (no file needed)
+
+# Ensure base app dirs are owned by the locked user
+sudo install -d -m 0755 -o "$DMJ_USER" -g "$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"
+ 
 
 # --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
 PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
@@ -1423,56 +1429,159 @@ sudo chmod +x /usr/local/bin/dmj-refresh-crl
 say "[+] Building Java signer..."
 ( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
 
-# Systemd service
-say "[+] Creating dmj-signer Service..."
-sudo tee /etc/systemd/system/dmj-signer.service >/dev/null <<SERVICE
+# # Systemd service
+# say "[+] Creating dmj-signer Service..."
+# sudo tee /etc/systemd/system/dmj-signer.service >/dev/null <<SERVICE
+# [Unit]
+# Description=DMJ Signer Microservice
+# After=network.target
+
+# [Service]
+# User=root
+# Environment=DMJ_PDF_TITLE=
+# Environment=DMJ_PDF_AUTHOR="Divya Mohan | dmj.one and its stakeholders."
+# Environment=DMJ_PDF_SUBJECT="Verified by ${DMJ_ROOT_DOMAIN} against any tampering."
+# Environment=DMJ_PDF_KEYWORDS=
+# Environment=DMJ_PDF_CREATOR="dmj.one Trust Services"
+# Environment=DMJ_PDF_PRODUCER="dmj.one Signer"
+# Environment=DMJ_PDF_VERSION=1.7            # optional; header like %PDF-1.7
+# Environment=DMJ_PDF_SET_DATES=1            # 1=set dates by default, 0=don’t touch
+# Environment=DMJ_PDF_CREATED_ON=            # ISO-8601 or epoch secs; blank uses existing/now
+# Environment=DMJ_PDF_MODIFIED_ON=           # ISO-8601 or epoch secs; blank -> now
+# Environment=SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
+# Environment=DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
+# Environment=DMJ_PKI_PUB=${PKI_PUB}
+# Environment=DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
+# Environment=DMJ_SIGNER_WORK_DIR=${SIGNER_DIR}
+# Environment=DMJ_P12_ALIAS=${PKCS12_ALIAS}
+# Environment=DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
+# Environment=DMJ_HMAC_TS_HEADER=${WORKER_HMAC_TS_HEADER}
+# Environment=DMJ_HMAC_NONCE_HEADER=${WORKER_HMAC_NONCE_HEADER}
+# Environment=DMJ_SIGNER_PORT_FILE=/etc/dmj/signer.port
+# Environment=DMJ_SIG_NAME="${DMJ_ROOT_DOMAIN}"
+# Environment=DMJ_SIG_LOCATION="${COUNTRY}"
+# Environment=DMJ_CONTACT_EMAIL="${SUPPORT_EMAIL}"
+# Environment=DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
+# ExecStart=/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar
+# Restart=on-failure
+# WorkingDirectory=${SIGNER_DIR}
+
+# [Install]
+# WantedBy=multi-user.target
+# SERVICE
+
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now dmj-signer.service
+# # Restart Signer
+# sudo systemctl restart dmj-signer.service
+# sudo systemctl status dmj-signer --no-pager
+
+### --- Single “stack” entrypoint and unit (Signer + OCSP under dmjsvc) -------
+say "[+] Writing environment file for the stack..."
+DMJ_ENV_FILE="${CONF_DIR}/dmj-signer.env"
+sudo tee "$DMJ_ENV_FILE" >/dev/null <<ENV
+# Non-secret runtime configuration for the Signer/stack
+DMJ_PDF_TITLE=
+DMJ_PDF_AUTHOR="Divya Mohan | dmj.one and its stakeholders."
+DMJ_PDF_SUBJECT="Verified by ${DMJ_ROOT_DOMAIN} against any tampering."
+DMJ_PDF_KEYWORDS=
+DMJ_PDF_CREATOR="dmj.one Trust Services"
+DMJ_PDF_PRODUCER="dmj.one Signer"
+DMJ_PDF_VERSION=1.7
+DMJ_PDF_SET_DATES=1
+DMJ_PDF_CREATED_ON=
+DMJ_PDF_MODIFIED_ON=
+DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
+DMJ_PKI_PUB=${PKI_PUB}
+DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
+DMJ_SIGNER_WORK_DIR=${SIGNER_DIR}
+DMJ_P12_ALIAS=${PKCS12_ALIAS}
+DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
+DMJ_HMAC_TS_HEADER=${WORKER_HMAC_TS_HEADER}
+DMJ_HMAC_NONCE_HEADER=${WORKER_HMAC_NONCE_HEADER}
+DMJ_SIGNER_PORTS=${SIGNER_FIXED_PORT}
+DMJ_SIGNER_PORT_FILE=/run/dmj/signer.port
+DMJ_OPENSSL_BIN=openssl
+DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
+DMJ_SIG_LOCATION=${COUNTRY}
+DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
+DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
+ENV
+sudo chmod 0640 "$DMJ_ENV_FILE"
+
+say "[+] Creating dmj-stack supervisor..."
+sudo tee /usr/local/bin/dmj-stack >/dev/null <<STACK
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+LOG_DIR="/var/log/dmj"
+mkdir -p "$LOG_DIR"
+trap 'trap - TERM INT; kill 0' TERM INT
+
+# OCSP (port 9080)
+/usr/bin/openssl ocsp \
+  -index ${ICA_DIR}/index.txt \
+  -CA ${ICA_DIR}/ica.crt \
+  -rsigner ${OCSP_DIR}/ocsp.crt \
+  -rkey ${OCSP_DIR}/ocsp.key \
+  -port 9080 -text -nmin 5 -no_nonce \
+  -out "${LOG_DIR}/ocsp.log" &
+OCSP_PID=$!
+
+# Signer (Java)
+/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
+SIGNER_PID=$!
+
+wait -n "$OCSP_PID" "$SIGNER_PID"
+STACK
+sudo chmod 0755 /usr/local/bin/dmj-stack
+
+say "[+] Creating single hardened systemd unit (dmj.service)..."
+sudo tee /etc/systemd/system/dmj-signer.service >/dev/null <<'UNIT'
 [Unit]
-Description=DMJ Signer Microservice
-After=network.target
+Description=dmj.one stack (Signer + OCSP)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=root
-Environment=DMJ_PDF_TITLE=
-Environment=DMJ_PDF_AUTHOR="Divya Mohan | dmj.one and its stakeholders."
-Environment=DMJ_PDF_SUBJECT="Verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-Environment=DMJ_PDF_KEYWORDS=
-Environment=DMJ_PDF_CREATOR="dmj.one Trust Services"
-Environment=DMJ_PDF_PRODUCER="dmj.one Signer"
-Environment=DMJ_PDF_VERSION=1.7            # optional; header like %PDF-1.7
-Environment=DMJ_PDF_SET_DATES=1            # 1=set dates by default, 0=don’t touch
-Environment=DMJ_PDF_CREATED_ON=            # ISO-8601 or epoch secs; blank uses existing/now
-Environment=DMJ_PDF_MODIFIED_ON=           # ISO-8601 or epoch secs; blank -> now
-Environment=SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
-Environment=DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
-Environment=DMJ_PKI_PUB=${PKI_PUB}
-Environment=DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
-Environment=DMJ_SIGNER_WORK_DIR=${SIGNER_DIR}
-Environment=DMJ_P12_ALIAS=${PKCS12_ALIAS}
-Environment=DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
-Environment=DMJ_HMAC_TS_HEADER=${WORKER_HMAC_TS_HEADER}
-Environment=DMJ_HMAC_NONCE_HEADER=${WORKER_HMAC_NONCE_HEADER}
-Environment=DMJ_SIGNER_PORT_FILE=/etc/dmj/signer.port
-Environment=DMJ_SIG_NAME="${DMJ_ROOT_DOMAIN}"
-Environment=DMJ_SIG_LOCATION="${COUNTRY}"
-Environment=DMJ_CONTACT_EMAIL="${SUPPORT_EMAIL}"
-Environment=DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-ExecStart=/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar
+User=dmjsvc
+Group=dmjsvc
+Type=simple
+EnvironmentFile=-/etc/dmj/dmj-worker.secrets
+EnvironmentFile=-/etc/dmj/dmj-signer.env
+WorkingDirectory=/opt/dmj/signer-vm
+ExecStart=/usr/local/bin/dmj-stack
 Restart=on-failure
-WorkingDirectory=${SIGNER_DIR}
+# --- hardening ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+RuntimeDirectory=dmj
+RuntimeDirectoryMode=0750
+ReadWritePaths=/var/log/dmj /var/lib/dmj /opt/dmj /run/dmj
 
 [Install]
 WantedBy=multi-user.target
-SERVICE
+UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-signer.service
-# Restart Signer
-sudo systemctl restart dmj-signer.service
+sudo systemctl restart dmj-signer
 sudo systemctl status dmj-signer --no-pager
+
 
 # nginx site (reverse proxy to dynamic port from /etc/dmj/signer.port)
 say "[+] Creating dmj-signer nginx config..."
-SIGNER_PORT="$(cat /etc/dmj/signer.port 2>/dev/null || echo 18080)"
 sudo tee "$NGINX_SITE" >/dev/null <<NGX
 server {
   listen 80;
@@ -1480,7 +1589,7 @@ server {
   client_max_body_size 25m;
 
   location / {
-    proxy_pass http://127.0.0.1:${SIGNER_PORT};
+    proxy_pass http://127.0.0.1:${SIGNER_FIXED_PORT};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -1495,33 +1604,33 @@ sudo nginx -t && sudo systemctl reload nginx
 say "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 
 
-# --- OCSP responder (OpenSSL) behind NGINX ocsp.${DMJ_ROOT_DOMAIN} ----------
-say "[+] Creating OSCP Responder nginx..."
-sudo tee /etc/systemd/system/dmj-ocsp.service >/dev/null <<OCSP
-[Unit]
-Description=dmj.one OCSP Responder
-After=network.target
+# # --- OCSP responder (OpenSSL) behind NGINX ocsp.${DMJ_ROOT_DOMAIN} ----------
+# say "[+] Creating OSCP Responder nginx..."
+# sudo tee /etc/systemd/system/dmj-ocsp.service >/dev/null <<OCSP
+# [Unit]
+# Description=dmj.one OCSP Responder
+# After=network.target
 
-[Service]
-ExecStart=/usr/bin/openssl ocsp \
-  -index ${ICA_DIR}/index.txt \
-  -CA     ${ICA_DIR}/ica.crt \
-  -rsigner ${OCSP_DIR}/ocsp.crt \
-  -rkey    ${OCSP_DIR}/ocsp.key \
-  -port 9080 \
-  -text -nmin 5 -no_nonce \
-  -out /var/log/dmj/ocsp.log
-Restart=always
-RestartSec=5s
-WorkingDirectory=${OCSP_DIR}
+# [Service]
+# ExecStart=/usr/bin/openssl ocsp \
+#   -index ${ICA_DIR}/index.txt \
+#   -CA     ${ICA_DIR}/ica.crt \
+#   -rsigner ${OCSP_DIR}/ocsp.crt \
+#   -rkey    ${OCSP_DIR}/ocsp.key \
+#   -port 9080 \
+#   -text -nmin 5 -no_nonce \
+#   -out /var/log/dmj/ocsp.log
+# Restart=always
+# RestartSec=5s
+# WorkingDirectory=${OCSP_DIR}
 
-[Install]
-WantedBy=multi-user.target
-OCSP
-sudo systemctl daemon-reload
-sudo systemctl enable --now dmj-ocsp.service
-sudo systemctl restart dmj-ocsp.service
-sudo systemctl status dmj-ocsp --no-pager
+# [Install]
+# WantedBy=multi-user.target
+# OCSP
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now dmj-ocsp.service
+# sudo systemctl restart dmj-ocsp.service
+# sudo systemctl status dmj-ocsp --no-pager
 
 
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
@@ -1642,8 +1751,10 @@ CRON_JOB="$CRON_SCHEDULE $COMMAND"
 
 CRON_JOB2="0 */6 * * * /usr/local/bin/dmj-refresh-crl"
 
-# Safely get existing crontab or empty if none exists
-existing_cron=$(crontab -l 2>/dev/null || true)
+# # Safely get existing crontab or empty if none exists
+# existing_cron=$(crontab -l 2>/dev/null || true)
+# Install into dmjsvc's user crontab so tasks run under the locked user
+existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
 
 # Filter out any existing lines matching the commands
 filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" | grep -Fv "$CRON_JOB2" || true)
@@ -1651,13 +1762,19 @@ filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" | grep -Fv "$CRON_JO
 # Add new cron job lines
 new_cron=$(printf "%s\n%s\n%s\n" "$filtered_cron" "$CRON_JOB" "$CRON_JOB2")
 
-# Install new crontab
-printf "%s\n" "$new_cron" | crontab -
+# # Install new crontab
+# printf "%s\n" "$new_cron" | crontab -
+
+# Install/replace user crontab
+printf "%s\n" "$new_cron" | sudo crontab -u "$DMJ_USER" -
 
 echo "Cron jobs added:"
 echo "$CRON_JOB"
 echo "$CRON_JOB2"
 
+# Tighten ownership for runtime keys/dirs so dmjsvc can run OCSP and ICA ops
+sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj"
+sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
 
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # dmj-part1.sh
 set -euo pipefail
+umask 077
 
 ### Constants / paths
 LOG_DIR="/var/log/dmj"
@@ -25,11 +26,6 @@ sudo apt-get update -y
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
   ca-certificates curl git jq openssl unzip gnupg software-properties-common \
   openjdk-21-jdk maven nginx ufw util-linux moreutils zip cron nano certbot python3-certbot-nginx
-
-
-echo "[i] Generating ocsp and pki domain's LetsEncrypt Certificate"
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
-sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
 
 # Install/ensure Node.js (only if missing; Wrangler works on Node >=18)
 if ! command -v node >/dev/null 2>&1; then
@@ -57,11 +53,25 @@ if ! id -u "$DMJ_USER" >/dev/null 2>&1; then
     --shell /usr/sbin/nologin "$DMJ_USER"
 fi
 
+# Harden service account (keep it non-interactive and locked) — idempotent
+sudo usermod -s /usr/sbin/nologin "$DMJ_USER" || true
+sudo passwd -l "$DMJ_USER" >/dev/null 2>&1 || true
+sudo usermod -L "$DMJ_USER" >/dev/null 2>&1 || true
+
+# Ensure service‑owned runtime/log state; /etc/dmj remains root‑owned
+sudo install -d -m 0750 -o "$DMJ_USER" -g "$DMJ_USER" "$LOG_DIR" "$STATE_DIR"
+# Base app prefix used in Part 2
+sudo install -d -m 0755 -o "$DMJ_USER" -g "$DMJ_USER" /opt/dmj
+
 # Prepare config dirs (XDG + legacy symlink), secure permissions
 sudo mkdir -p "$DMJ_WR_CFG_DIR"
 sudo chown -R "$DMJ_USER:$DMJ_USER" "$DMJ_HOME"
 sudo chmod 700 "$DMJ_HOME"
 sudo chmod -R go-rwx "$DMJ_HOME"
+
+echo "[i] Generating ocsp and pki domain's LetsEncrypt Certificate"
+sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
+sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one 
 
 # Ensure legacy ~/.wrangler points at XDG .wrangler
 if [ ! -e "$DMJ_LEGACY_WR_DIR" ]; then
@@ -193,5 +203,21 @@ EOSH
   sudo chmod 0755 /usr/local/bin/dmj-wrangler
 fi
 
-echo "[*] Exiting Part 1 now. After you complete login, run Part 2."
+cd ~
+curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part1.sh?nocache=$(date +%s) &> dmj-part1.sh
+
+sudo tee ${STATE_DIR}/rp2.sh >/dev/null <<RP2
+# rp2.sh
+# set your D1 database id (from `wrangler d1 list`, or Dashboard)
+export CF_D1_DATABASE_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# optional: customize domains
+export DMJ_ROOT_DOMAIN="dmj.one"
+export SIGNER_DOMAIN="signer.dmj.one"   # must point to this VM via Cloudflare DNS (proxied)
+
+sudo --preserve-env=CF_D1_DATABASE_ID,DMJ_ROOT_DOMAIN,SIGNER_DOMAIN \
+  bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s) | bash'
+RP2
+
+echo "[*] Exiting Part 1 now. After you complete login, run Part 2. After login, edit the D1 id usint nano and once done, run: sudo bash ${STATE_DIR}/rp2.sh"
 exit 0
