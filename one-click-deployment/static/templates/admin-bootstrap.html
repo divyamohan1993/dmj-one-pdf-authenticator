@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin bootstrap · dmj.one</title>
+  <link rel="shortcut icon" href="//dmj.one/logo.png">
+  <link rel="fluid-icon" href="//dmj.one//logo.png">
+  <link rel="apple-touch-icon" href="//dmj.one//logo.png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+  <style>code.key{font-size:1.15rem;padding:.6rem .8rem;background:#f6f7f9;border:1px solid #e9eef3;border-radius:.5rem;display:block}</style>
+</head>
+<body class="bg-light">
+  <main class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-lg-8">
+        <div class="alert alert-primary d-flex align-items-center" role="alert">
+          <i class="bi-info-circle me-2"></i>
+          <div><b>Shown once:</b> Save this admin portal key for <span class="text-nowrap">{{ISSUER}}</span>.</div>
+        </div>
+        <div class="card shadow-sm">
+          <div class="card-body p-4">
+            <h1 class="h4 mb-3">Your admin portal key</h1>
+            <code class="key" id="theKey">{{KEY}}</code>
+            <button class="btn btn-outline-secondary mt-3" id="copyBtn"><i class="bi-clipboard me-2"></i>Copy</button>
+            <hr class="my-4" />
+            <p class="text-secondary small mb-0">Treat this like a password. Rotation is automatic at each deploy; you’ll see a new key here next time.</p>
+            <a class="btn btn-primary mt-3" href="{{ADMIN_PATH}}">Continue to Admin login</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script nonce="__CSP_NONCE__">
+    document.getElementById('copyBtn').addEventListener('click', async ()=>{
+      const t = document.getElementById('theKey').innerText.trim();
+      try{ await navigator.clipboard.writeText(t); 
+        const b = document.getElementById('copyBtn'); b.innerHTML='<i class="bi-check2 me-2"></i>Copied'; setTimeout(()=>b.innerHTML='<i class="bi-clipboard me-2"></i>Copy', 1800);
+      }catch{}
+    });
+  </script>
+</body></html>

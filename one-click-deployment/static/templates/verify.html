@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>Verify</title>
+  <body style="font-family:ui-sans-serif;padding:32px">
+  <h1>Verification result</h1>
+  <p>SHA-256: <code>\${sha}</code></p>
+  <p>Status: \${statusHtml}</p>
+  <ul>
+    <li>Registered by dmj.one: \${issued ? "✅" : "❌"}</li>
+    <li>Revoked: \${revoked ? "❌ (revoked)" : "✅ (not revoked)"}</li>
+    <li>Signature object present: \${vinfo.hasSignature ? "✅" : "❌"}</li>
+    <li>Embedded signature cryptographically valid: \${vinfo.isValid ? "✅" : "❌"}</li>
+    <li>Covers whole document (ByteRange): \${vinfo.coversDocument ? "✅" : "❌"}</li>
+    <li>Signed by our key (dmj.one): \${vinfo.issuedByUs ? "✅" : "❌"}</li>
+    <li>Issuer (from signature): <code>\${vinfo.issuer||""}</code></li>
+  </ul>
+  <h2>\${(verdict === "valid") ? "✅ Genuine (dmj.one)" : "❌ Not valid / tampered"}</h2>
+  <p><a href="/">Back</a></p></body>
