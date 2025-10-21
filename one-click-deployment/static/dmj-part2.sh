@@ -1810,8 +1810,8 @@ server {
   http2 on;
   server_name ${SIGNER_DOMAIN};
 
-  ssl_certificate     /etc/letsencrypt/live/signer.${DMJ_ROOT_DOMAIN}/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/signer.${DMJ_ROOT_DOMAIN}/privkey.pem;
+  ssl_certificate     /etc/letsencrypt/live/${SIGNER_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${SIGNER_DOMAIN}/privkey.pem;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_signer combined;
   error_log  syslog:server=unix:/dev/log warn;
