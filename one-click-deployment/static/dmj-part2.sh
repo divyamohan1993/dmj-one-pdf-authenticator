@@ -166,7 +166,7 @@ fix_perms() {
   # sudo find "$PKI_DIR"    -type f -exec chmod 0640 {} + 2>/dev/null || true
   # sudo find "$PKI_PUB"    -type f -exec chmod 0644 {} + 2>/dev/null || true
   # sudo find "$PKI_PUB"    -type d -exec chmod 0755 {} + 2>/dev/null || true  
-fix: attempt   
+
   # Public Folder Full access to allow nginx to read
   sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
   sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
