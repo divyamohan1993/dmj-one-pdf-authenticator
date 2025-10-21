@@ -178,6 +178,22 @@ fix_perms() {
       sudo setfacl -d -m "u:${u}:rwX" "$p" || true    # default ACL (inherit on new files/dirs)
     done
   fi
+
+  # Give the service user full ownership of ICA + OCSP + PUB (including CRLs)
+  sudo chown -R dmjsvc:dmjsvc /opt/dmj/pki/ica /opt/dmj/pki/ocsp /opt/dmj/pki/pub
+
+  # CA database files must be writable by dmjsvc
+  sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
+
+  # The newcerts dir must be traversable & readable
+  sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
+
+  # IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
+  # while still letting dmjsvc write new CRLs there:
+  sudo chmod 755 /opt/dmj/pki/pub
+
+  # If index.txt.attr is missing, create it (OpenSSL reads it):
+  sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
 }
 
 # --- Use the Part 1 service-user Wrangler wrapper ----------------------------
@@ -605,6 +621,7 @@ public class SignerServer {
       try (InputStream is = p.getInputStream()) { out = new String(is.readAllBytes(), StandardCharsets.UTF_8); }
       int rc = p.waitFor();
       if (rc != 0 && (row == null || row.status != 'R')) {
+        log.error("openssl revoke failed rc={}, output={}", rc, out);
         // Accept idempotency if OpenSSL says “Already revoked”
         if (out == null || !out.toLowerCase(Locale.ROOT).contains("already revoked")) {
           throw new RuntimeException("revoke failed: " + rc);
@@ -1831,12 +1848,17 @@ sudo tee "$NGINX_SITE" >/dev/null <<NGX
 server {
   listen 80;
   server_name ${SIGNER_DOMAIN};
-  client_max_body_size 25m;
+  
+  client_max_body_size 25m;  
+  client_header_timeout 30s;
+  client_body_timeout   60s;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_signer combined;
   error_log  syslog:server=unix:/dev/log warn;
 
   location / {
+    proxy_request_buffering off;    # stream request body to Jetty
+    proxy_read_timeout 60s;
     proxy_pass http://127.0.0.1:${SIGNER_FIXED_PORT};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
@@ -2102,6 +2124,21 @@ if command -v setfacl >/dev/null 2>&1; then
     setfacl -d -m "u:${DMJ_USER}:rwX" "$p" || true
   done
 fi
+# Give the service user full ownership of ICA + OCSP + PUB (including CRLs)
+sudo chown -R dmjsvc:dmjsvc /opt/dmj/pki/ica /opt/dmj/pki/ocsp /opt/dmj/pki/pub
+
+# CA database files must be writable by dmjsvc
+sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
+
+# The newcerts dir must be traversable & readable
+sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
+
+# IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
+# while still letting dmjsvc write new CRLs there:
+sudo chmod 755 /opt/dmj/pki/pub
+
+# If index.txt.attr is missing, create it (OpenSSL reads it):
+sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
 SH
 sudo chmod +x /usr/local/bin/dmj-fix-perms
 
