@@ -360,6 +360,8 @@ package one.dmj.signer;
 
 import io.javalin.Javalin;
 import io.javalin.http.UploadedFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.bouncycastle.cms.CMSSignedData;
 import org.bouncycastle.cms.SignerInformation;
@@ -416,6 +418,8 @@ import java.util.zip.ZipOutputStream;
 
 
 public class SignerServer {
+
+  private static final Logger log = LoggerFactory.getLogger(SignerServer.class);
 
   static final String WORK_DIR = Optional.ofNullable(System.getenv("DMJ_SIGNER_WORK_DIR")).orElse("/opt/dmj/signer-vm");
   static final Path P12_PATH = Paths.get(WORK_DIR, "keystore.p12");
@@ -478,8 +482,8 @@ public class SignerServer {
     if (p.waitFor() != 0) throw new RuntimeException("openssl ca failed");
 
     // 4) parse cert + serial + chain
-    X509Certificate leaf = readX509(certPem);
-    String serialHex = leaf.getSerialNumber().toString(16);
+    X509Certificate leaf = readX509(certPem);    
+    String serialHex = leaf.getSerialNumber().toString(16).toUpperCase(Locale.ROOT);
     List<X509Certificate> chain = new ArrayList<>();
     chain.add(leaf);
     chain.add(readX509(ICA_DIR.resolve("ica.crt")));   // include ICA so validators can build path
@@ -813,19 +817,23 @@ public class SignerServer {
             // "issuedByUs": prefer robust check -> leaf issuer == our ICA subject.
             if (ok) {
               try {
+                // STRICT: the issuer certificate in the CMS store must have the same SPKI as our ICA cert.
+                // DN alone is NOT sufficient (can be re-used). Compare SPKIs to avoid false positives.
+                // Ref: BouncyCastle CMSSignedData / certificate stores.
                 if (ICA_CERT != null) {
-                  X509CertificateHolder icaHolder =
-                      new X509CertificateHolder(ICA_CERT.getEncoded());
-                  if (signerHolder.getIssuer().equals(icaHolder.getSubject())) {
-                    issuedByUs = true;
+                  var store = sd.getCertificates();
+                  X509CertificateHolder issuerHolder = null;
+                  for (var h : store.getMatches(null)) {
+                    X509CertificateHolder ch = (X509CertificateHolder) h;
+                    if (ch.getSubject().equals(signerHolder.getIssuer())) { issuerHolder = ch; break; }
                   }
-                } else {
-                  // legacy fallback: SPKI match with our static leaf
-                  String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
-                  String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
-                  if (signerSpki.equals(ourSpki)) issuedByUs = true;
+                  if (issuerHolder != null) {
+                    byte[] a = issuerHolder.getSubjectPublicKeyInfo().getEncoded();
+                    byte[] b = SubjectPublicKeyInfo.getInstance(ICA_CERT.getPublicKey().getEncoded()).getEncoded();
+                    if (java.util.Arrays.equals(a, b)) issuedByUs = true;
+                  }
                 }
-              } catch (Exception ignore) {}
+              } catch (Exception ex) { /* ignore, keep issuedByUs=false */ }
             }
             issuerDn = signerHolder.getIssuer().toString();
           }
@@ -968,6 +976,13 @@ public class SignerServer {
     Javalin app = Javalin.create(cfg -> {
       cfg.http.defaultContentType = "application/json";
       cfg.showJavalinBanner = false;
+      // Optional request logging in dev (toggle via env)
+      boolean httpLog = !"0".equals(Optional.ofNullable(System.getenv("DMJ_HTTP_LOG")).orElse("1"));
+      if (httpLog) {
+        try {
+          cfg.bundledPlugins.enableDevLogging(); // emits per-request access logs
+        } catch (Throwable t) { /* ignore if plugin not available */ }
+      }
     });
 
     app.get("/", ctx -> ctx.result("ok"));
@@ -1027,6 +1042,7 @@ public class SignerServer {
         // byte[] prepared = applyDocInfoPreSign(data);                 // ← NEW, metadata rewrite
         // byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← pass chain here        
         // Issue a one-off document certificate (ephemeral keypair + ICA‑issued leaf)
+        log.info("sign: issuing one-off doc cert, size={} bytes", data.length);
         String cn = "dmj.one Document " + java.util.UUID.randomUUID().toString().substring(0,8);
         DocMaterial dm = issueDocCert(cn);
         byte[] prepared = applyDocInfoPreSign(data);
@@ -1037,8 +1053,9 @@ public class SignerServer {
         ctx.header("X-Cert-Serial", dm.serialHex);
         ctx.result(new ByteArrayInputStream(signed));
       } catch (Exception e){
-        ctx.status(500).json(Map.of("error","sign failed", "detail", e.getMessage()));
-      }
+        e.printStackTrace(); // visible in journald
+        ctx.status(500).json(Map.of("error","sign failed", "detail", String.valueOf(e)));
+       }
     });
 
     // HMAC‑gated: revoke by serial (updates CRL and restarts OCSP)
@@ -1051,10 +1068,12 @@ public class SignerServer {
       try { ok = verifyHmac(shared, "POST", "/revoke", body, ts, nonce, hmac); } catch(Exception ignore){}
       if (!ok || serial.isBlank()) { ctx.status(401).json(Map.of("error","bad auth or serial missing")); return; }
       try {
-        boolean changed = revokeBySerialHex(serial);
-        ctx.json(Map.of("revoked", true, "already", !changed, "serial", serial));
+        String norm = normHex(serial);
+        log.info("revoke: requested serial={} (norm={})", serial, norm);
+        boolean changed = revokeBySerialHex(norm);
+        ctx.json(Map.of("revoked", true, "already", !changed, "serial", norm));
       }
-      catch(Exception e){ ctx.status(500).json(Map.of("error","revoke failed","detail", e.getMessage())); }
+      catch(Exception e){ e.printStackTrace(); ctx.status(500).json(Map.of("error","revoke failed","detail", String.valueOf(e))); }
     });
 
     app.get("/healthz", ctx -> ctx.result("ok"));
@@ -1596,6 +1615,8 @@ DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
 DMJ_SIG_LOCATION=${COUNTRY}
 DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
 DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
+DMJ_LOG_VERBOSE=1
+DMJ_HTTP_LOG=1
 ENV
 sudo chmod 0640 "$DMJ_ENV_FILE"
 
@@ -1637,6 +1658,11 @@ SIGNER_DIR="${DMJ_SIGNER_WORK_DIR:-/opt/dmj/signer-vm}"
 OPENSSL_BIN="${DMJ_OPENSSL_BIN:-/usr/bin/openssl}"
 JAVA_BIN="${DMJ_JAVA_BIN:-/usr/bin/java}"
 
+# Verbose journald toggle (1=debug, 0=info)
+VERBOSE="${DMJ_LOG_VERBOSE:-1}"
+[[ "$VERBOSE" = "1" ]] && set -x || true
+
+
 # Small in-memory ring log (journald still has the full stream)
 LOG_RING="${LOG_RING:-/run/dmj/stack.log}"
 LOG_MAX_LINES="${LOG_MAX_LINES:-10000}"
@@ -1663,20 +1689,38 @@ prefix_stream() {
 
 trap 'trap - TERM INT; kill 0' TERM INT
 
-# OCSP (port 9080)
-prefix_stream ocsp "$OPENSSL_BIN" ocsp \
+# Helper that keeps a process alive and logs every line with a prefix
+run_forever() {
+  local label="$1"; shift
+  while true; do
+    # Pipe child stdout+stderr through our prefixer; never exit the supervisor on child errors
+    prefix_stream "$label" "$@"
+    rc=$?
+    ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    echo "[$ts][$label] process exited rc=${rc}; restarting in 1s..." | tee -a "$LOG_RING"
+    sleep 1
+  done
+}
+
+# OCSP (port 9080): OpenSSL OCSP children auto-reload index changes. No manual restart needed.
+# Ref: docs.openssl.org 'openssl-ocsp' (children detect index changes).
+#
+# Use -nmin to refresh status frequently.
+#
+run_forever ocsp "$OPENSSL_BIN" ocsp \
   -index "${ICA_DIR}/index.txt" \
   -CA     "${ICA_DIR}/ica.crt" \
   -rsigner "${OCSP_DIR}/ocsp.crt" \
   -rkey    "${OCSP_DIR}/ocsp.key" \
   -port 9080 -text -nmin 5 -no_nonce &
-OCSP_PID=$!
 
-# Signer (Java)
-prefix_stream signer "$JAVA_BIN" -jar "${SIGNER_DIR}/target/dmj-signer-1.0.0.jar" &
-SIGNER_PID=$!
+# Signer (Java) with configurable log level and HTTP access logging toggle
+JAVA_LOG_LEVEL=$([[ "$VERBOSE" = "1" ]] && echo "debug" || echo "info")
+run_forever signer "$JAVA_BIN" \
+  -Dorg.slf4j.simpleLogger.defaultLogLevel="${JAVA_LOG_LEVEL}" \
+  -jar "${SIGNER_DIR}/target/dmj-signer-1.0.0.jar" &
 
-wait -n "$OCSP_PID" "$SIGNER_PID"
+wait  # keep supervisor in the foreground
 STACK
 sudo chmod 0755 /usr/local/bin/dmj-stack
 
@@ -1745,6 +1789,9 @@ server {
   listen 80;
   server_name ${SIGNER_DOMAIN};
   client_max_body_size 25m;
+
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_signer combined;
+  error_log  syslog:server=unix:/dev/log warn;
 
   location / {
     proxy_pass http://127.0.0.1:${SIGNER_FIXED_PORT};
@@ -3870,3 +3917,32 @@ echo "------------------------------------------------------------------"
 
 say "[i] Admin Access: https://documents.dmj.one/${ADMIN_PATH}"
 say "[✓] Done."
+
+# --- Optional: systemd unit to tail Worker logs into journald ---------------
+sudo tee /etc/systemd/system/dmj-worker-tail.service >/dev/null <<UNIT
+[Unit]
+Description=Cloudflare Worker tail -> journald
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=${DMJ_USER}
+Group=${DMJ_USER}
+Type=simple
+WorkingDirectory=${WORKER_DIR}
+EnvironmentFile=-/etc/dmj/dmj-worker.secrets
+StandardOutput=journal
+StandardError=inherit
+ExecStart=${WR} tail --name ${WORKER_NAME} --format=pretty
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# Enable/disable wrangler tail based on verbosity toggle
+if [ "\${DMJ_LOG_VERBOSE:-1}" = "1" ]; then
+  sudo systemctl enable --now dmj-worker-tail.service || true
+else
+  sudo systemctl disable --now dmj-worker-tail.service 2>/dev/null || true
+fi
