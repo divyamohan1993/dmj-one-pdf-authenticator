@@ -153,20 +153,14 @@ fix_perms() {
   # Ownership
   sudo chown -R "$u:$u" "${paths[@]}" 2>/dev/null || true
 
-  # Directories: 0750 (+ setgid so new subdirs keep group)
-  # sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
-  # sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
+  # Directories: 0750 (+ setgid so new subdirs keep group)  
   sudo find "$OPT_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true   
   sudo find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true  
+  sudo chmod 0751 /opt/dmj /opt/dmj/pki
   
   # Generic files: 0640 (configs, sources, data)
   sudo find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true  
-  # sudo find "$WORKER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
-  # sudo find "$SIGNER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
-  # sudo find "$PKI_DIR"    -type f -exec chmod 0640 {} + 2>/dev/null || true
-  # sudo find "$PKI_PUB"    -type f -exec chmod 0644 {} + 2>/dev/null || true
-  # sudo find "$PKI_PUB"    -type d -exec chmod 0755 {} + 2>/dev/null || true  
-
+  
   # Public Folder Full access to allow nginx to read
   sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
   sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
@@ -188,16 +182,6 @@ fix_perms() {
       sudo setfacl -d -m "u:${u}:rwX" "$p" || true    # default ACL (inherit on new files/dirs)
     done
   fi
-
-  # CA database files must be writable by dmjsvc
-  # sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
-
-  # The newcerts dir must be traversable & readable
-  # sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
-
-  # IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
-  # while still letting dmjsvc write new CRLs there:
-  # sudo chmod 755 /opt/dmj/pki/pub
 
   # If index.txt.attr is missing, create it (OpenSSL reads it):
   sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
@@ -2060,6 +2044,7 @@ NGX
 sudo ln -sf /etc/nginx/sites-available/dmj-pki  /etc/nginx/sites-enabled/dmj-pki
 sudo ln -sf /etc/nginx/sites-available/dmj-ocsp /etc/nginx/sites-enabled/dmj-ocsp
 sudo nginx -t && sudo systemctl reload nginx
+sudo -u www-data test -r /opt/dmj/pki/pub/ica.crt && echo "WWW ZIP FAIL:nginx can read ica.crt" || echo "WWW ZIP FAIL: nginx cannot read ica.crt"
 
 # say "[+] Adding Cron Job..."
 # # Cron job schedule: Every day at 2:00 AM
@@ -2176,6 +2161,7 @@ chown -R "$DMJ_USER:$DMJ_USER" "${paths[@]}" 2>/dev/null || true
 # Directories: 0750 and setgid so new subdirs keep group
 find "$OPT_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
 find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
+chmod 0751 /opt/dmj /opt/dmj/pki 2>/dev/null || true
 
 # Generic files: 0640
 find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
