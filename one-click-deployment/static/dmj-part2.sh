@@ -157,6 +157,8 @@ fix_perms() {
   sudo find "$OPT_DIR" -type d -exec chmod 0751 {} + 2>/dev/null || true   
   sudo find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true  
   
+  sudo chmod 0711 /opt
+
   # Generic files: 0640 (configs, sources, data)
   sudo find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true  
     
