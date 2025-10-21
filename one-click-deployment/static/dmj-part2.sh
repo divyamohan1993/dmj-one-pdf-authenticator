@@ -1658,8 +1658,8 @@ DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
 DMJ_SIG_LOCATION=${COUNTRY}
 DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
 DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-DMJ_LOG_VERBOSE=1
-DMJ_HTTP_LOG=1
+DMJ_LOG_VERBOSE=0
+DMJ_HTTP_LOG=0
 ENV
 sudo chmod 0640 "$DMJ_ENV_FILE"
 
@@ -3684,10 +3684,26 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
 
       // New behavior: return one ZIP that contains (1) signed.pdf and (2) Trust Kit ZIP + README-FIRST.txt
       const kitUrl = new URL("/dmj-one-trust-kit.zip", env.PKI_BASE).toString();
-      const kitRes = await fetch(kitUrl);
-      if (!kitRes.ok) return json({error:"trust-kit fetch failed", detail: await kitRes.text()}, 502);
-      const kit = new Uint8Array(await kitRes.arrayBuffer());
-
+      // Try to fetch the Trust Kit; if it fails (TLS/DNS not ready), gracefully fall back to direct PDF.
+      let kit: Uint8Array | null = null;
+      try {
+        const kitRes = await fetch(kitUrl);
+        if (kitRes.ok) {
+          kit = new Uint8Array(await kitRes.arrayBuffer());
+        }
+      } catch (_) { /* ignore bootstrap network/SSL errors */ }
+      if (!kit) {
+        return new Response(signed, {
+          headers: {
+            "content-type":"application/pdf",
+            "content-disposition":`attachment; filename="signed.pdf"`,
+            "x-doc-sha256": sha,
+            "x-issuer": env.ISSUER,
+            "x-doc-verified":"true",
+            "x-note": "trust-kit-unavailable"
+          }
+        });
+      }
       const readmeFirst = new TextEncoder().encode(
       `dmj.one - Digital Signature Root Certificate
 =====================================================
@@ -3873,7 +3889,17 @@ export default {
 }
 TS
 
-# wrangler configuration (use JSONC as per latest recommendation) 
+# Detect reachable scheme for signer/pki to avoid TLS bootstrap race
+SIGNER_PROTO="https"
+if ! curl -fsS --max-time 5 "https://${SIGNER_DOMAIN}/healthz" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "http://${SIGNER_DOMAIN}/healthz" >/dev/null 2>&1; then SIGNER_PROTO="http"; fi
+fi
+PKI_PROTO="https"
+if ! curl -fsS --max-time 5 "https://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "http://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; then PKI_PROTO="http"; fi
+fi
+
+# wrangler configuration (use JSONC as per latest recommendation)
 as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 {
   "\$schema": "node_modules/wrangler/config-schema.json",
@@ -3890,9 +3916,9 @@ as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
   ],
   "vars": {
     "ISSUER":        "${DMJ_ROOT_DOMAIN}",
-    "SIGNER_API_BASE": "https://${SIGNER_DOMAIN}",
+    "SIGNER_API_BASE": "${SIGNER_PROTO}://${SIGNER_DOMAIN}",
     "DB_PREFIX":     "${DB_PREFIX}",
-    "PKI_BASE":      "https://${PKI_DOMAIN}",
+    "PKI_BASE":      "${SIGNER_PROTO}://${PKI_DOMAIN}",
     "BUNDLE_TRUST_KIT": "1",            // 1 = return a zip bundle (PDF + Trust Kit)
     "ADMIN_PATH":    "${ADMIN_PATH}",   // randomized each run
     "WORKER_HMAC_HEADER": "${WORKER_HMAC_HEADER}",
