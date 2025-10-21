@@ -484,6 +484,11 @@ public class SignerServer {
     chain.add(leaf);
     chain.add(readX509(ICA_DIR.resolve("ica.crt")));   // include ICA so validators can build path
     // (optionally also add root if desired)
+    // return new DocMaterial(kp.getPrivate(), leaf, chain, serialHex);
+
+    // Best-effort cleanup of temp files (cert and CSR are now in index/newcerts)
+    try { Files.deleteIfExists(csrPem); } catch (Exception ignore) {}
+    try { Files.deleteIfExists(certPem); } catch (Exception ignore) {}
     return new DocMaterial(kp.getPrivate(), leaf, chain, serialHex);
   }
 
@@ -645,6 +650,10 @@ public class SignerServer {
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
       sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // Adobe-compatible detached CMS
+      // OPTION 1: Prefer ETSI.CAdES.detached (PAdES); legacy ADBE is still widely accepted but not future-proof
+      // sig.setSubFilter(COSName.getPDFName("ETSI.CAdES.detached"));
+      // OPTION 2: PAdES-friendly detached CMS (see ETSI PAdES / PDFBox external signing) - Future Updates
+      // sig.setSubFilter(PDSignature.SUBFILTER_ETSI_CADES_DETACHED);
       sig.setName(sigName);
       sig.setLocation(sigLoc);
       sig.setReason(sigReason);
@@ -1501,6 +1510,8 @@ DMJ_PDF_MODIFIED_ON=
 DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
 DMJ_PKI_PUB=${PKI_PUB}
 DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
+DMJ_ICA_DIR=${ICA_DIR}
+DMJ_OCSP_DIR=${OCSP_DIR}
 DMJ_SIGNER_WORK_DIR=${SIGNER_DIR}
 DMJ_P12_ALIAS=${PKCS12_ALIAS}
 DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
@@ -1542,52 +1553,58 @@ say "[+] Creating dmj-stack supervisor..."
 # wait -n "\$OCSP_PID" "\$SIGNER_PID"
 # STACK
 sudo tee /usr/local/bin/dmj-stack >/dev/null <<'STACK'
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 umask 077
 mkdir -p /run/dmj
 
-# In‑memory ring (last N lines) to bound RAM; journald still has the full stream.
-LOG_RING="\${LOG_RING:-/run/dmj/stack.log}"
-LOG_MAX_LINES="\${LOG_MAX_LINES:-10000}"
-: > "\$LOG_RING"; chmod 0640 "\$LOG_RING" || true
+# Resolve paths from env (with sensible defaults)
+ICA_DIR="${DMJ_ICA_DIR:-/opt/dmj/pki/ica}"
+OCSP_DIR="${DMJ_OCSP_DIR:-/opt/dmj/pki/ocsp}"
+SIGNER_DIR="${DMJ_SIGNER_WORK_DIR:-/opt/dmj/signer-vm}"
+OPENSSL_BIN="${DMJ_OPENSSL_BIN:-/usr/bin/openssl}"
+JAVA_BIN="${DMJ_JAVA_BIN:-/usr/bin/java}"
+
+# Small in-memory ring log (journald still has the full stream)
+LOG_RING="${LOG_RING:-/run/dmj/stack.log}"
+LOG_MAX_LINES="${LOG_MAX_LINES:-10000}"
+: > "$LOG_RING"; chmod 0640 "$LOG_RING" || true
 
 trim_ring() {
-  local tmp="\${LOG_RING}.tmp"
-  tail -n "\$LOG_MAX_LINES" "\$LOG_RING" > "\$tmp" 2>/dev/null || true
-  mv -f "\$tmp" "\$LOG_RING" 2>/dev/null || true
+  local tmp="${LOG_RING}.tmp"
+  tail -n "$LOG_MAX_LINES" "$LOG_RING" > "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$LOG_RING" 2>/dev/null || true
 }
 
-# Prefix and tee each child’s stdout/stderr to journald (via our own stdout) and ring buffer
 prefix_stream() {
-  local label="\$1"; shift
+  local label="$1"; shift
   local cnt=0
-  stdbuf -oL -eL "\$@" 2>&1 | while IFS= read -r line; do
-    ts=\$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-    msg="[\$ts][\$label] \$line"
-    echo "\$msg"
-    printf '%s\n' "\$msg" >> "\$LOG_RING" || true
-    cnt=\$((cnt+1))
+  stdbuf -oL -eL "$@" 2>&1 | while IFS= read -r line; do
+    ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    msg="[$ts][$label] $line"
+    echo "$msg"
+    printf '%s\n' "$msg" >> "$LOG_RING" || true
+    cnt=$((cnt+1))
     if (( cnt % 200 == 0 )); then trim_ring; fi
   done
 }
 
 trap 'trap - TERM INT; kill 0' TERM INT
 
-# OCSP (port 9080) → verbose, no file logs
-prefix_stream ocsp /usr/bin/openssl ocsp \
-  -index ${ICA_DIR}/index.txt \
-  -CA ${ICA_DIR}/ica.crt \
-  -rsigner ${OCSP_DIR}/ocsp.crt \
-  -rkey ${OCSP_DIR}/ocsp.key \
+# OCSP (port 9080)
+prefix_stream ocsp "$OPENSSL_BIN" ocsp \
+  -index "${ICA_DIR}/index.txt" \
+  -CA     "${ICA_DIR}/ica.crt" \
+  -rsigner "${OCSP_DIR}/ocsp.crt" \
+  -rkey    "${OCSP_DIR}/ocsp.key" \
   -port 9080 -text -nmin 5 -no_nonce &
-OCSP_PID=\$!
+OCSP_PID=$!
 
 # Signer (Java)
-prefix_stream signer /usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
-SIGNER_PID=\$!
+prefix_stream signer "$JAVA_BIN" -jar "${SIGNER_DIR}/target/dmj-signer-1.0.0.jar" &
+SIGNER_PID=$!
 
-wait -n "\$OCSP_PID" "\$SIGNER_PID"
+wait -n "$OCSP_PID" "$SIGNER_PID"
 STACK
 sudo chmod 0755 /usr/local/bin/dmj-stack
 
@@ -1605,7 +1622,7 @@ Type=simple
 EnvironmentFile=-/etc/dmj/dmj-worker.secrets
 EnvironmentFile=-/etc/dmj/dmj-signer.env
 WorkingDirectory=/opt/dmj/signer-vm
-ExecStart=/usr/local/bin/dmj-stack
+ExecStart=/bin/bash /usr/local/bin/dmj-stack
 Restart=on-failure
 # log to journald; do not write local files
 StandardOutput=journal
@@ -1632,7 +1649,7 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 PrivateDevices=yes
 ProtectProc=invisible
-MemoryDenyWriteExecute=yes
+MemoryDenyWriteExecute=no
 # Narrow syscalls to a conservative baseline; adjust if you see denials in the journal
 SystemCallFilter=@system-service @basic-io @file-system @network-io
 RuntimeDirectory=dmj
@@ -3356,6 +3373,7 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
 
 
   if (req.method === "POST"){
+    // if (!sameOrigin(req)) return new Response("bad origin", { status: 403 });
     const form = await req.formData();    
     if (u.pathname === adminPath + "/login"){
       const pass = String(form.get("password")||"");
