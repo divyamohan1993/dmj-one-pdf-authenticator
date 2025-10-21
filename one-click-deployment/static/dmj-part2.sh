@@ -3172,8 +3172,7 @@ function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
                 </div>
               </div>
               <button class="btn btn-primary w-100">Login</button>
-            </form>
-            <div class="small text-secondary mt-3">Your key is verified server‑side using PBKDF2‑HMAC‑SHA256.</div>
+            </form>            
           </div>
         </div>
       </div>
