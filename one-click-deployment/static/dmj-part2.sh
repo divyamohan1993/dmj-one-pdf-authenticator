@@ -46,6 +46,7 @@ SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (
 PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
 OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
 
+OPT_DIR="/opt/dmj"
 PKI_DIR="/opt/dmj/pki"
 ROOT_DIR="${PKI_DIR}/root"
 ICA_DIR="${PKI_DIR}/ica"
@@ -147,22 +148,31 @@ as_dmj() { sudo -u "$DMJ_USER" -H "$@"; }
 fix_perms() {
   set -e
   local u="$DMJ_USER"
-  local paths=( "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" )
+  local paths=( "$OPT_DIR" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" )
 
   # Ownership
   sudo chown -R "$u:$u" "${paths[@]}" 2>/dev/null || true
 
   # Directories: 0750 (+ setgid so new subdirs keep group)
-  sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
-  sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
-
+  # sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+  # sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
+  sudo find "$OPT_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true   
+  sudo find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true  
+  
   # Generic files: 0640 (configs, sources, data)
-  sudo find "$WORKER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
-  sudo find "$SIGNER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
-  sudo find "$PKI_DIR"    -type f -exec chmod 0640 {} + 2>/dev/null || true
-
-  # Executables/scripts we ship
-  sudo chmod 0755 /usr/local/bin/dmj-stack /usr/local/bin/dmj-refresh-crl 2>/dev/null || true
+  sudo find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true  
+  # sudo find "$WORKER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+  # sudo find "$SIGNER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+  # sudo find "$PKI_DIR"    -type f -exec chmod 0640 {} + 2>/dev/null || true
+  # sudo find "$PKI_PUB"    -type f -exec chmod 0644 {} + 2>/dev/null || true
+  # sudo find "$PKI_PUB"    -type d -exec chmod 0755 {} + 2>/dev/null || true  
+fix: attempt   
+  # Public Folder Full access to allow nginx to read
+  sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
+  sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
+  
+  # Make all executables generated executable
+  sudo find /usr/local/bin/ -type f -exec chmod 0755 {} + 2>/dev/null || true
 
   # Sensitive keys
   sudo chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
@@ -173,24 +183,21 @@ fix_perms() {
 
   # Default ACLs so future files are immediately readable by dmjsvc even if created by root
   if command -v setfacl >/dev/null 2>&1; then
-    for p in "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"; do
+    for p in "$OPT_DIR"; do
       sudo setfacl -m "u:${u}:rwX" "$p" || true
       sudo setfacl -d -m "u:${u}:rwX" "$p" || true    # default ACL (inherit on new files/dirs)
     done
   fi
 
-  # Give the service user full ownership of ICA + OCSP + PUB (including CRLs)
-  sudo chown -R dmjsvc:dmjsvc /opt/dmj/pki/ica /opt/dmj/pki/ocsp /opt/dmj/pki/pub
-
   # CA database files must be writable by dmjsvc
-  sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
+  # sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
 
   # The newcerts dir must be traversable & readable
-  sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
+  # sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
 
   # IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
   # while still letting dmjsvc write new CRLs there:
-  sudo chmod 755 /opt/dmj/pki/pub
+  # sudo chmod 755 /opt/dmj/pki/pub
 
   # If index.txt.attr is missing, create it (OpenSSL reads it):
   sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
@@ -1578,8 +1585,8 @@ sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
 
 # sudo nginx -t && sudo systemctl reload nginx
 # Ensure runtime ownership **before** any service starts (OCSP must read index/serial)
-sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj" "/opt/dmj/pki/pub/dl"
-sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
+# sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj" "/opt/dmj/pki/pub/dl"
+# sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
 
 sudo tee /usr/local/bin/dmj-refresh-crl >/dev/null <<REFRESHCRL
 #!/usr/bin/env bash
@@ -2106,41 +2113,102 @@ echo "$CRON_JOB"
 echo "$CRON_JOB2"
 
 # Write the fixer script
+# sudo tee /usr/local/bin/dmj-fix-perms >/dev/null <<'SH'
+# #!/usr/bin/env bash
+# set -euo pipefail
+# DMJ_USER="${DMJ_USER:-dmjsvc}"
+# WORKER_DIR="/opt/dmj/worker"; SIGNER_DIR="/opt/dmj/signer-vm"; PKI_DIR="/opt/dmj/pki"; LOG_DIR="/var/log/dmj"
+
+# chown -R "$DMJ_USER:$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" 2>/dev/null || true
+# find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+# find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+# chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
+# chmod 0600 "$PKI_DIR"/ica/ica.key "$PKI_DIR"/ocsp/ocsp.key 2>/dev/null || true
+# [ -f "$SIGNER_DIR/target/dmj-signer-1.0.0.jar" ] && chmod 0644 "$SIGNER_DIR/target/dmj-signer-1.0.0.jar"
+# if command -v setfacl >/dev/null 2>&1; then
+#   for p in "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"; do
+#     setfacl -m "u:${DMJ_USER}:rwX" "$p" || true
+#     setfacl -d -m "u:${DMJ_USER}:rwX" "$p" || true
+#   done
+# fi
+# # Give the service user full ownership of ICA + OCSP + PUB (including CRLs)
+# sudo chown -R dmjsvc:dmjsvc /opt/dmj/pki/ica /opt/dmj/pki/ocsp /opt/dmj/pki/pub
+
+# # CA database files must be writable by dmjsvc
+# sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
+
+# # The newcerts dir must be traversable & readable
+# sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
+
+# # IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
+# # while still letting dmjsvc write new CRLs there:
+# sudo chmod 755 /opt/dmj/pki/pub
+
+# # If index.txt.attr is missing, create it (OpenSSL reads it):
+# sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
+# SH
 sudo tee /usr/local/bin/dmj-fix-perms >/dev/null <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-DMJ_USER="${DMJ_USER:-dmjsvc}"
-WORKER_DIR="/opt/dmj/worker"; SIGNER_DIR="/opt/dmj/signer-vm"; PKI_DIR="/opt/dmj/pki"; LOG_DIR="/var/log/dmj"
 
-chown -R "$DMJ_USER:$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" 2>/dev/null || true
-find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
-find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+# Require root so we don't sprinkle 'sudo' everywhere.
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  echo "dmj-fix-perms must be run as root (try: sudo $0)" >&2
+  exit 1
+fi
+
+# ---- Configurable inputs (override via env if desired) ----------------------
+DMJ_USER="${DMJ_USER:-dmjsvc}"
+
+OPT_DIR="${OPT_DIR:-/opt/dmj}"
+WORKER_DIR="${WORKER_DIR:-$OPT_DIR/worker}"
+SIGNER_DIR="${SIGNER_DIR:-$OPT_DIR/signer-vm}"
+PKI_DIR="${PKI_DIR:-$OPT_DIR/pki}"
+PKI_PUB="${PKI_PUB:-$PKI_DIR/pub}"
+LOG_DIR="${LOG_DIR:-/var/log/dmj}"
+
+paths=( "$OPT_DIR" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" )
+
+# ---- Ownership --------------------------------------------------------------
+chown -R "$DMJ_USER:$DMJ_USER" "${paths[@]}" 2>/dev/null || true
+
+# ---- Base perms under OPT_DIR ----------------------------------------------
+# Directories: 0750 and setgid so new subdirs keep group
+find "$OPT_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
+
+# Generic files: 0640
+find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+
+# ---- Public PKI content (nginx-readable) -----------------------------------
+find "$PKI_PUB" -type d -exec chmod 0755 {} + 2>/dev/null || true
+find "$PKI_PUB" -type f -exec chmod 0644 {} + 2>/dev/null || true
+
+# ---- Executables in /usr/local/bin -----------------------------------------
+# Mark everything under /usr/local/bin executable (matches prior behavior)
+find /usr/local/bin/ -type f -exec chmod 0755 {} + 2>/dev/null || true
+
+# ---- Sensitive keys ---------------------------------------------------------
 chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
 chmod 0600 "$PKI_DIR"/ica/ica.key "$PKI_DIR"/ocsp/ocsp.key 2>/dev/null || true
+
+# ---- Built artifacts needed by classloaders ---------------------------------
 [ -f "$SIGNER_DIR/target/dmj-signer-1.0.0.jar" ] && chmod 0644 "$SIGNER_DIR/target/dmj-signer-1.0.0.jar"
+
+# ---- Default ACLs so files are readable by $DMJ_USER on creation -----------
 if command -v setfacl >/dev/null 2>&1; then
-  for p in "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"; do
-    setfacl -m "u:${DMJ_USER}:rwX" "$p" || true
-    setfacl -d -m "u:${DMJ_USER}:rwX" "$p" || true
-  done
+  setfacl -m "u:${DMJ_USER}:rwX" "$OPT_DIR" || true
+  setfacl -d -m "u:${DMJ_USER}:rwX" "$OPT_DIR" || true   # default (inherit) for new files/dirs
 fi
-# Give the service user full ownership of ICA + OCSP + PUB (including CRLs)
-sudo chown -R dmjsvc:dmjsvc /opt/dmj/pki/ica /opt/dmj/pki/ocsp /opt/dmj/pki/pub
 
-# CA database files must be writable by dmjsvc
-sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
+# Create index.txt.attr only if missing (OpenSSL reads it)
+if [[ ! -f "$PKI_DIR/ica/index.txt.attr" ]]; then
+  install -m 640 /dev/null "$PKI_DIR/ica/index.txt.attr"
+fi
 
-# The newcerts dir must be traversable & readable
-sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
-
-# IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
-# while still letting dmjsvc write new CRLs there:
-sudo chmod 755 /opt/dmj/pki/pub
-
-# If index.txt.attr is missing, create it (OpenSSL reads it):
-sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
+exit 0
 SH
-sudo chmod +x /usr/local/bin/dmj-fix-perms
+sudo chmod 0755 /usr/local/bin/dmj-fix-perms
 
 # Add to dmjsvc’s crontab (you already use per-user cron)
 CRON_JOB3="*/15 * * * * /usr/local/bin/dmj-fix-perms"
