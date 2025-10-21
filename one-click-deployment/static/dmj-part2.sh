@@ -20,7 +20,7 @@ LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
 
 
-DMJ_VERBOSE="${DMJ_VERBOSE:-0}"
+DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
@@ -102,7 +102,7 @@ DMJ_FORCE_ADMIN_RELOGIN="${DMJ_FORCE_ADMIN_RELOGIN:-1}"
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-0}" # Never enable this
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then    
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
@@ -273,12 +273,12 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
     <dependency>
       <groupId>org.apache.pdfbox</groupId>
       <artifactId>pdfbox</artifactId>
-      <version>3.0.5</version>
+      <version>3.0.6</version>
     </dependency>
     <dependency>
       <groupId>org.apache.pdfbox</groupId>
       <artifactId>pdfbox-tools</artifactId>
-      <version>3.0.5</version>
+      <version>3.0.6</version>
     </dependency>
     <!-- Crypto -->
     <dependency>
@@ -300,17 +300,17 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <version>2.17.2</version>
+      <version>2.18.1</version>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>
-      <version>2.0.13</version>
+      <version>2.0.17</version>
     </dependency>    
     <dependency>
       <groupId>org.apache.pdfbox</groupId>
       <artifactId>xmpbox</artifactId>
-      <version>3.0.5</version>
+      <version>3.0.6</version>
     </dependency>
   </dependencies>
 
@@ -320,7 +320,7 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
-        <version>3.5.2</version>
+        <version>3.6.1</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -509,9 +509,14 @@ public class SignerServer {
     ).inheritIO().start();
     if (g.waitFor()!=0) throw new RuntimeException("gencrl failed");
     // publish + symlink (AIA/CDP paths)
-    Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-    Files.deleteIfExists(PKI_PUB.resolve("ica.crl"));
-    Files.createSymbolicLink(PKI_PUB.resolve("ica.crl"), ICA_DIR.resolve("ica.crl"));
+    // Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    // Files.deleteIfExists(PKI_PUB.resolve("ica.crl"));
+
+    // Files.createSymbolicLink(PKI_PUB.resolve("ica.crl"), ICA_DIR.resolve("ica.crl"));
+    Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
+    // ensure AIA/CDP path is a real file (no symlinks; nginx has disable_symlinks on)
+    Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("ica.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
+    
     // restart OCSP so it picks up DB/CRL changes
     new ProcessBuilder("systemctl","restart","dmj-ocsp.service").inheritIO().start().waitFor();
   }
@@ -1512,26 +1517,74 @@ ENV
 sudo chmod 0640 "$DMJ_ENV_FILE"
 
 say "[+] Creating dmj-stack supervisor..."
-sudo tee /usr/local/bin/dmj-stack >/dev/null <<STACK
+# sudo tee /usr/local/bin/dmj-stack >/dev/null <<STACK
+# #!/usr/bin/env bash
+# set -euo pipefail
+# umask 077
+
+# mkdir -p "$LOG_DIR"
+# trap 'trap - TERM INT; kill 0' TERM INT
+
+# # OCSP (port 9080)
+# /usr/bin/openssl ocsp \
+#   -index ${ICA_DIR}/index.txt \
+#   -CA ${ICA_DIR}/ica.crt \
+#   -rsigner ${OCSP_DIR}/ocsp.crt \
+#   -rkey ${OCSP_DIR}/ocsp.key \
+#   -port 9080 -text -nmin 5 -no_nonce \
+#   -out "${LOG_DIR}/ocsp.log" &
+# OCSP_PID=\$!
+
+# # Signer (Java)
+# /usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
+# SIGNER_PID=\$!
+
+# wait -n "\$OCSP_PID" "\$SIGNER_PID"
+# STACK
+sudo tee /usr/local/bin/dmj-stack >/dev/null <<'STACK'
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+mkdir -p /run/dmj
 
-mkdir -p "$LOG_DIR"
+# In‑memory ring (last N lines) to bound RAM; journald still has the full stream.
+LOG_RING="\${LOG_RING:-/run/dmj/stack.log}"
+LOG_MAX_LINES="\${LOG_MAX_LINES:-10000}"
+: > "\$LOG_RING"; chmod 0640 "\$LOG_RING" || true
+
+trim_ring() {
+  local tmp="\${LOG_RING}.tmp"
+  tail -n "\$LOG_MAX_LINES" "\$LOG_RING" > "\$tmp" 2>/dev/null || true
+  mv -f "\$tmp" "\$LOG_RING" 2>/dev/null || true
+}
+
+# Prefix and tee each child’s stdout/stderr to journald (via our own stdout) and ring buffer
+prefix_stream() {
+  local label="\$1"; shift
+  local cnt=0
+  stdbuf -oL -eL "\$@" 2>&1 | while IFS= read -r line; do
+    ts=\$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    msg="[\$ts][\$label] \$line"
+    echo "\$msg"
+    printf '%s\n' "\$msg" >> "\$LOG_RING" || true
+    cnt=\$((cnt+1))
+    if (( cnt % 200 == 0 )); then trim_ring; fi
+  done
+}
+
 trap 'trap - TERM INT; kill 0' TERM INT
 
-# OCSP (port 9080)
-/usr/bin/openssl ocsp \
+# OCSP (port 9080) → verbose, no file logs
+prefix_stream ocsp /usr/bin/openssl ocsp \
   -index ${ICA_DIR}/index.txt \
   -CA ${ICA_DIR}/ica.crt \
   -rsigner ${OCSP_DIR}/ocsp.crt \
   -rkey ${OCSP_DIR}/ocsp.key \
-  -port 9080 -text -nmin 5 -no_nonce \
-  -out "${LOG_DIR}/ocsp.log" &
+  -port 9080 -text -nmin 5 -no_nonce &
 OCSP_PID=\$!
 
 # Signer (Java)
-/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
+prefix_stream signer /usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
 SIGNER_PID=\$!
 
 wait -n "\$OCSP_PID" "\$SIGNER_PID"
@@ -1554,6 +1607,15 @@ EnvironmentFile=-/etc/dmj/dmj-signer.env
 WorkingDirectory=/opt/dmj/signer-vm
 ExecStart=/usr/local/bin/dmj-stack
 Restart=on-failure
+# log to journald; do not write local files
+StandardOutput=journal
+StandardError=inherit
+# Avoid rate limiting the flood while debugging
+LogRateLimitIntervalSec=0
+LogRateLimitBurst=0
+# expose ring size to the stack script
+Environment=LOG_MAX_LINES=10000
+Environment=LOG_RING=/run/dmj/stack.log
 # --- hardening ---
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -1568,6 +1630,11 @@ RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
+PrivateDevices=yes
+ProtectProc=invisible
+MemoryDenyWriteExecute=yes
+# Narrow syscalls to a conservative baseline; adjust if you see denials in the journal
+SystemCallFilter=@system-service @basic-io @file-system @network-io
 RuntimeDirectory=dmj
 RuntimeDirectoryMode=0750
 ReadWritePaths=/var/log/dmj /var/lib/dmj /opt/dmj /run/dmj
@@ -1636,6 +1703,12 @@ say "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 
 
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
+# First, remove conflicting/legacy sites so our servers aren't ignored.
+say "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
+sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
+
 sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
 server {
   listen 80;
@@ -1651,6 +1724,10 @@ server {
   add_header Cache-Control "public, max-age=3600";
   merge_slashes on;
   disable_symlinks on;
+
+  # send logs to journald via syslog
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_pki combined;
+  error_log  syslog:server=unix:/dev/log warn;
 
   # Only GET/HEAD are valid for these endpoints
   location / {
@@ -1669,8 +1746,9 @@ server {
     try_files \$uri =404;
   }
 }
-server {  
-  listen 443 ssl http2;
+server {   
+  listen 443 ssl;
+  http2  on;   # modern enabling of HTTP/2 (listen ... http2 is deprecated)
   server_name ${PKI_DOMAIN};
 
   # ssl_certificate and ssl_certificate_key managed by certbot
@@ -1687,6 +1765,9 @@ server {
   add_header Cache-Control "public, max-age=3600";
   merge_slashes on;
   disable_symlinks on;
+
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_pki combined;
+  error_log  syslog:server=unix:/dev/log warn;
 
   location / {
     limit_except GET HEAD { deny all; }
@@ -1710,6 +1791,8 @@ server {
   server_name ${OCSP_DOMAIN};
 
   gzip off;
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_ocsp combined;
+  error_log  syslog:server=unix:/dev/log warn;
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
@@ -1717,11 +1800,13 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type \$http_content_type;
-    proxy_buffering    off;    
+    proxy_buffering    off;
+    add_header         Content-Type "application/ocsp-response" always;
   }
 }
 server {
   listen 443 ssl;
+  http2  on;
   server_name ${OCSP_DOMAIN};
 
   # ssl_certificate and ssl_certificate_key managed by certbot
@@ -1729,6 +1814,8 @@ server {
   ssl_certificate_key /etc/letsencrypt/live/${OCSP_DOMAIN}/privkey.pem;
 
   gzip off;
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_ocsp combined;
+  error_log  syslog:server=unix:/dev/log warn;
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
@@ -1736,7 +1823,8 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type \$http_content_type;
-    proxy_buffering    off;    
+    proxy_buffering    off;
+    add_header         Content-Type "application/ocsp-response" always;
   }
 }
 NGX
