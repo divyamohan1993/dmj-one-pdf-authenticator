@@ -301,7 +301,8 @@ ADMIN_HASH="$(node -e 'const c=require("node:crypto");const key=process.argv[1];
 ### --- Build signer microservice (Java) --------------------------------------
 echo "[+] Preparing signer microservice at ${SIGNER_DIR} ..."
 sudo mkdir -p "${SIGNER_DIR}/src/main/java/one/dmj/signer"
-as_dmj tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
+# as_dmj tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
+sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
 <project xmlns="http://maven.apache.org/POM/4.0.0"  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0  http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
@@ -401,7 +402,8 @@ POM
 
 # Java server (sign, verify, spki) — trimmed for brevity but complete.
 # --- REPLACE the Java heredoc in rp2.sh with this version ---
-as_dmj tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
+# as_dmj tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
+sudo tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
 package one.dmj.signer;
 
 import io.javalin.Javalin;
@@ -1148,6 +1150,7 @@ public class SignerServer {
   }
 }
 JAVA
+fix_perms
 
 ### --- Build a branded two-tier PKI + OCSP + signer PKCS#12 -------------------
 say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
@@ -2207,7 +2210,8 @@ say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
 sudo mkdir -p "${WORKER_DIR}/src"
 sudo chown -R dmjsvc:dmjsvc "$WORKER_DIR"
 # Worker TS (admin portal, sign, verify, revoke). Uses Web Crypto + D1.
-as_dmj tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
+# as_dmj tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
+sudo tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
 // DMJ Worker — admin portal, sign, verify
 export interface Env {
   DB: D1Database
@@ -3991,7 +3995,8 @@ if ! curl -fsS --max-time 5 "https://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; th
 fi
 
 # wrangler configuration (use JSONC as per latest recommendation)
-as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
+# as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
+sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 {
   "\$schema": "node_modules/wrangler/config-schema.json",
   "name": "${WORKER_NAME}",
@@ -4020,7 +4025,8 @@ as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 JSON
 
 # Seed schema remotely so we can insert bootstrap key
-as_dmj tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
+# as_dmj tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
+sudo tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
 CREATE TABLE IF NOT EXISTS ${DB_PREFIX}documents(
   id TEXT PRIMARY KEY,
   doc_sha256 TEXT UNIQUE,
@@ -4064,10 +4070,10 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}sessions(
   ua_hash TEXT
 );
 SQL
+fix_perms
 
 say "[+] Applying schema to remote D1..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
-fix_perms
 
 # Older databases may lack the new 'cert_serial' column.
 # CREATE TABLE IF NOT EXISTS won't add columns, so add it explicitly and ignore errors if it exists.
