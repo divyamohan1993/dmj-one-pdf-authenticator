@@ -1406,7 +1406,7 @@ HTML
 fi
 
 # Always publish real files (no symlinks) so hardening like disable_symlinks doesn’t break serving
-( cd "${PKI_PUB}" && sudo rm -f "dmj-one-trust-kit.zip" && sudo cp -f "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" "dmj-one-trust-kit.zip" && sudo chmod 0644 "dmj-one-trust-kit.zip"
+cd "${PKI_PUB}" && sudo rm -f "dmj-one-trust-kit.zip" && sudo cp -f "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" "dmj-one-trust-kit.zip" && sudo chmod 0644 "dmj-one-trust-kit.zip"
 
 # Provide files at the exact paths embedded in certificates (copies, not symlinks)
 sudo rm -f "${PKI_PUB}/ica.crt" "${PKI_PUB}/root.crt" "${PKI_PUB}/ica.crl" "${PKI_PUB}/root.crl"
