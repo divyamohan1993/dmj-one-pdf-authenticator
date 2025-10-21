@@ -1805,6 +1805,26 @@ server {
     proxy_set_header X-Forwarded-Proto \$scheme;
   }
 }
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${SIGNER_DOMAIN};
+
+  ssl_certificate     /etc/letsencrypt/live/signer.${DMJ_ROOT_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/signer.${DMJ_ROOT_DOMAIN}/privkey.pem;
+
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_signer combined;
+  error_log  syslog:server=unix:/dev/log warn;
+
+  location / {
+    proxy_pass http://127.0.0.1:${SIGNER_FIXED_PORT};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+  }
+}
 NGX
 sudo ln -sf "$NGINX_SITE" "$NGINX_SITE_LINK"
 sudo nginx -t && sudo systemctl reload nginx
