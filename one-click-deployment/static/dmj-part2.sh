@@ -1521,6 +1521,9 @@ sudo install -m 0644 "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
 sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
 
 # sudo nginx -t && sudo systemctl reload nginx
+# Ensure runtime ownership **before** any service starts (OCSP must read index/serial)
+sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj" "/opt/dmj/pki/pub/dl"
+sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
 
 sudo tee /usr/local/bin/dmj-refresh-crl >/dev/null <<REFRESHCRL
 #!/usr/bin/env bash
@@ -2019,10 +2022,6 @@ printf "%s\n" "$new_cron" | sudo crontab -u "$DMJ_USER" -
 echo "Cron jobs added:"
 echo "$CRON_JOB"
 echo "$CRON_JOB2"
-
-# Tighten ownership for runtime keys/dirs so dmjsvc can run OCSP and ICA ops
-sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj" "/opt/dmj/pki/pub/dl"
-sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
 
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
