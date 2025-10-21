@@ -3995,8 +3995,7 @@ if ! curl -fsS --max-time 5 "https://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; th
 fi
 
 # wrangler configuration (use JSONC as per latest recommendation)
-# as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
-sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
+as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 {
   "\$schema": "node_modules/wrangler/config-schema.json",
   "name": "${WORKER_NAME}",
@@ -4025,8 +4024,7 @@ sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 JSON
 
 # Seed schema remotely so we can insert bootstrap key
-# as_dmj tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
-sudo tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
+as_dmj tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
 CREATE TABLE IF NOT EXISTS ${DB_PREFIX}documents(
   id TEXT PRIMARY KEY,
   doc_sha256 TEXT UNIQUE,
@@ -4070,7 +4068,6 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}sessions(
   ua_hash TEXT
 );
 SQL
-fix_perms
 
 say "[+] Applying schema to remote D1..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
