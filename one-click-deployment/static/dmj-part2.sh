@@ -1644,6 +1644,7 @@ server {
   types {
     application/pkix-cert crt cer;
     application/pkix-crl  crl;
+    application/zip       zip;
   }
   location / {
     try_files \$uri =404;    
@@ -1654,7 +1655,7 @@ server {
   }
 }
 server {  
-  listen 443 ssl;
+  listen 443 ssl http2;
   server_name ${PKI_DOMAIN};
 
   # ssl_certificate and ssl_certificate_key managed by certbot
@@ -1668,6 +1669,7 @@ server {
   types {
     application/pkix-cert crt cer;
     application/pkix-crl  crl;
+    application/zip       zip;
   }
   location / { 
     try_files \$uri =404;
