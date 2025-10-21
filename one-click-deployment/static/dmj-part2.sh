@@ -3990,7 +3990,7 @@ fix_perms
 
 # Deploy Worker (modern command) 
 say "[+] Deploying Worker..."
-( cd "$WORKER_DIR" && as_dmj "$WR" deploy )
+( cd "$WORKER_DIR" && "$WR" deploy )
 
 WORKER_URL="$("$WR" deployments list --format=json | jq -r '.[0].url' || true)"
 echo "------------------------------------------------------------------"
