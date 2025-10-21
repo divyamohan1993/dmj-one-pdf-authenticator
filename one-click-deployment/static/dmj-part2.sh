@@ -154,13 +154,12 @@ fix_perms() {
   sudo chown -R "$u:$u" "${paths[@]}" 2>/dev/null || true
 
   # Directories: 0750 (+ setgid so new subdirs keep group)  
-  sudo find "$OPT_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true   
+  sudo find "$OPT_DIR" -type d -exec chmod 0751 {} + 2>/dev/null || true   
   sudo find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true  
-  sudo chmod 0751 /opt/dmj /opt/dmj/pki
   
   # Generic files: 0640 (configs, sources, data)
   sudo find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true  
-  
+    
   # Public Folder Full access to allow nginx to read
   sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
   sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
@@ -2162,9 +2161,8 @@ chown -R "$DMJ_USER:$DMJ_USER" "${paths[@]}" 2>/dev/null || true
 
 # ---- Base perms under OPT_DIR ----------------------------------------------
 # Directories: 0750 and setgid so new subdirs keep group
-find "$OPT_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+find "$OPT_DIR" -type d -exec chmod 0751 {} + 2>/dev/null || true
 find "$OPT_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
-chmod 0751 /opt/dmj /opt/dmj/pki 2>/dev/null || true
 
 # Generic files: 0640
 find "$OPT_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
