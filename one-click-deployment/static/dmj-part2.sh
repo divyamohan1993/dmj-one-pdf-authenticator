@@ -55,6 +55,8 @@ PKI_PUB="${PKI_DIR}/pub"
 
 DL_DIR="${PKI_PUB}/dl"
 sudo mkdir -p "${DL_DIR}"
+# dl/ must be writable by the non‑root service user for ad‑hoc bundles
+sudo chown "${DMJ_USER}:${DMJ_USER}" "${DL_DIR}"
 sudo chmod 755 "${PKI_PUB}" "${DL_DIR}"
 
 find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete
@@ -1399,18 +1401,19 @@ HTML
       dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
       dmj-one-issuing-ca-r1.crt dmj-one-ica-chain-r1.pem \
       dmj-one-trust-kit-README.txt dmj-one-trust-kit-README.html \
-      dmj-one-trust-kit-SHA256SUMS.txt install-dmj-certificates.bat )
+      dmj-one-trust-kit-SHA256SUMS.txt install-dmj-certificates.bat ) && \
+  sudo chmod 0644 "${PKI_PUB}/dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip"
 fi
 
+# Always publish real files (no symlinks) so hardening like disable_symlinks doesn’t break serving
+( cd "${PKI_PUB}" && cp -f "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" dmj-one-trust-kit.zip && chmod 0644 dmj-one-trust-kit.zip )
 
-# Always point this public name at the pinned series
-( cd "${PKI_PUB}" && ln -sf "dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip" dmj-one-trust-kit.zip )
-
-# Provide files at the exact paths embedded in certificates:
-sudo ln -sf "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
-sudo ln -sf "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
-sudo ln -sf "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
-sudo ln -sf "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
+# Provide files at the exact paths embedded in certificates (copies, not symlinks)
+sudo rm -f "${PKI_PUB}/ica.crt" "${PKI_PUB}/root.crt" "${PKI_PUB}/ica.crl" "${PKI_PUB}/root.crl"
+sudo install -m 0644 "${ICA_DIR}/ica.crt"   "${PKI_PUB}/ica.crt"
+sudo install -m 0644 "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
+sudo install -m 0644 "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
+sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
 
 # sudo nginx -t && sudo systemctl reload nginx
 
@@ -1420,7 +1423,7 @@ set -euo pipefail
 ICA_DIR="/opt/dmj/pki/ica"; PKI_PUB="/opt/dmj/pki/pub"
 openssl ca -config "${ICA_DIR}/openssl.cnf" -gencrl -out "${ICA_DIR}/ica.crl"
 install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
-ln -sf "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"
+install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"   # ensure AIA/CDP path stays readable
 REFRESHCRL
 sudo chmod +x /usr/local/bin/dmj-refresh-crl
 
@@ -1637,21 +1640,33 @@ sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
 server {
   listen 80;
   server_name ${PKI_DOMAIN};
+
   root ${PKI_PUB};
   autoindex off;
+  
+  # Security & cache
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Content-Security-Policy "default-src 'none'" always;
+  add_header Referrer-Policy "no-referrer" always;
   add_header Cache-Control "public, max-age=3600";
-  # correct content types
-  types {
-    application/pkix-cert crt cer;
-    application/pkix-crl  crl;
-    application/zip       zip;
-  }
+  merge_slashes on;
+  disable_symlinks on;
+
+  # Only GET/HEAD are valid for these endpoints
   location / {
-    try_files \$uri =404;    
+    limit_except GET HEAD { deny all; }   # 403 to anything else
+    try_files \$uri =404;
+    types {
+      application/pkix-cert crt cer;
+      application/pkix-crl  crl;
+      application/zip       zip;
+    }
   }
-  # For ad-hoc downloads only, keep no-store:
+
+  # Ad-hoc bundles should not be cached
   location /dl/ {
     add_header Cache-Control "no-store" always;
+    try_files \$uri =404;
   }
 }
 server {  
@@ -1664,19 +1679,27 @@ server {
   
   root ${PKI_PUB};
   autoindex off;
+
+  # Security & cache
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Content-Security-Policy "default-src 'none'" always;
+  add_header Referrer-Policy "no-referrer" always;
   add_header Cache-Control "public, max-age=3600";
-  # correct content types
-  types {
-    application/pkix-cert crt cer;
-    application/pkix-crl  crl;
-    application/zip       zip;
-  }
-  location / { 
+  merge_slashes on;
+  disable_symlinks on;
+
+  location / {
+    limit_except GET HEAD { deny all; }
     try_files \$uri =404;
-  }  
-  # For ad-hoc downloads only, keep no-store:
+    types {
+      application/pkix-cert crt cer;
+      application/pkix-crl  crl;
+      application/zip       zip;
+    }
+  }
   location /dl/ {
     add_header Cache-Control "no-store" always;
+    try_files \$uri =404;
   }
 }
 NGX
@@ -1774,7 +1797,7 @@ echo "$CRON_JOB"
 echo "$CRON_JOB2"
 
 # Tighten ownership for runtime keys/dirs so dmjsvc can run OCSP and ICA ops
-sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj"
+sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj" "/opt/dmj/pki/pub/dl"
 sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
 
 ### --- Worker project --------------------------------------------------------
