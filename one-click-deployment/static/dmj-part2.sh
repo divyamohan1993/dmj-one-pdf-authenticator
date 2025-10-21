@@ -19,7 +19,6 @@ LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 # keep last 10 logs; delete older
 find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
 
-
 DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
 
 # Load installation id / DB_PREFIX
@@ -141,6 +140,46 @@ say(){ printf "%s\n" "$*" >&3; }
 # Error trap prints a friendly pointer to the log
 trap 'rc=$?; say ""; say "[!] Failed at line $LINENO: $BASH_COMMAND (exit $rc)"; say "[i] See full log: $LOG_FILE"; exit $rc' ERR
 
+# Run commands as the locked-down service user
+as_dmj() { sudo -u "$DMJ_USER" -H "$@"; }
+
+# Idempotent permission fixer for all app paths
+fix_perms() {
+  set -e
+  local u="$DMJ_USER"
+  local paths=( "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" )
+
+  # Ownership
+  sudo chown -R "$u:$u" "${paths[@]}" 2>/dev/null || true
+
+  # Directories: 0750 (+ setgid so new subdirs keep group)
+  sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+  sudo find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
+
+  # Generic files: 0640 (configs, sources, data)
+  sudo find "$WORKER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+  sudo find "$SIGNER_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+  sudo find "$PKI_DIR"    -type f -exec chmod 0640 {} + 2>/dev/null || true
+
+  # Executables/scripts we ship
+  sudo chmod 0755 /usr/local/bin/dmj-stack /usr/local/bin/dmj-refresh-crl 2>/dev/null || true
+
+  # Sensitive keys
+  sudo chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
+  sudo chmod 0600 "$PKI_DIR"/ica/ica.key "$PKI_DIR"/ocsp/ocsp.key 2>/dev/null || true
+
+  # Built artifacts that must be world/group-readable for Java/classloader sanity
+  [ -f "$SIGNER_DIR/target/dmj-signer-1.0.0.jar" ] && sudo chmod 0644 "$SIGNER_DIR/target/dmj-signer-1.0.0.jar"
+
+  # Default ACLs so future files are immediately readable by dmjsvc even if created by root
+  if command -v setfacl >/dev/null 2>&1; then
+    for p in "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"; do
+      sudo setfacl -m "u:${u}:rwX" "$p" || true
+      sudo setfacl -d -m "u:${u}:rwX" "$p" || true    # default ACL (inherit on new files/dirs)
+    done
+  fi
+}
+
 # --- Use the Part 1 service-user Wrangler wrapper ----------------------------
 WR="/usr/local/bin/dmj-wrangler"
 if [ ! -x "$WR" ]; then
@@ -255,7 +294,7 @@ ADMIN_HASH="$(node -e 'const c=require("node:crypto");const key=process.argv[1];
 ### --- Build signer microservice (Java) --------------------------------------
 echo "[+] Preparing signer microservice at ${SIGNER_DIR} ..."
 sudo mkdir -p "${SIGNER_DIR}/src/main/java/one/dmj/signer"
-sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
+as_dmj tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
 <project xmlns="http://maven.apache.org/POM/4.0.0"  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0  http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
@@ -355,7 +394,7 @@ POM
 
 # Java server (sign, verify, spki) — trimmed for brevity but complete.
 # --- REPLACE the Java heredoc in rp2.sh with this version ---
-sudo tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
+as_dmj tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
 package one.dmj.signer;
 
 import io.javalin.Javalin;
@@ -1538,6 +1577,7 @@ sudo chmod +x /usr/local/bin/dmj-refresh-crl
 
 say "[+] Building Java signer..."
 ( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
+fix_perms
 
 # # Systemd service
 # say "[+] Creating dmj-signer Service..."
@@ -2043,12 +2083,40 @@ echo "Cron jobs added:"
 echo "$CRON_JOB"
 echo "$CRON_JOB2"
 
+# Write the fixer script
+sudo tee /usr/local/bin/dmj-fix-perms >/dev/null <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+DMJ_USER="${DMJ_USER:-dmjsvc}"
+WORKER_DIR="/opt/dmj/worker"; SIGNER_DIR="/opt/dmj/signer-vm"; PKI_DIR="/opt/dmj/pki"; LOG_DIR="/var/log/dmj"
+
+chown -R "$DMJ_USER:$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" 2>/dev/null || true
+find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
+find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
+chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
+chmod 0600 "$PKI_DIR"/ica/ica.key "$PKI_DIR"/ocsp/ocsp.key 2>/dev/null || true
+[ -f "$SIGNER_DIR/target/dmj-signer-1.0.0.jar" ] && chmod 0644 "$SIGNER_DIR/target/dmj-signer-1.0.0.jar"
+if command -v setfacl >/dev/null 2>&1; then
+  for p in "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"; do
+    setfacl -m "u:${DMJ_USER}:rwX" "$p" || true
+    setfacl -d -m "u:${DMJ_USER}:rwX" "$p" || true
+  done
+fi
+SH
+sudo chmod +x /usr/local/bin/dmj-fix-perms
+
+# Add to dmjsvc’s crontab (you already use per-user cron)
+CRON_JOB3="*/15 * * * * /usr/local/bin/dmj-fix-perms"
+existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
+printf "%s\n%s\n" "$(echo "$existing_cron" | grep -Fv '/usr/local/bin/dmj-fix-perms' || true)" "$CRON_JOB3" | sudo crontab -u "$DMJ_USER" -
+
+
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
 sudo mkdir -p "${WORKER_DIR}/src"
 sudo chown -R dmjsvc:dmjsvc "$WORKER_DIR"
 # Worker TS (admin portal, sign, verify, revoke). Uses Web Crypto + D1.
-sudo tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
+as_dmj tee "${WORKER_DIR}/src/index.ts" >/dev/null <<'TS'
 // DMJ Worker — admin portal, sign, verify
 export interface Env {
   DB: D1Database
@@ -3806,7 +3874,7 @@ export default {
 TS
 
 # wrangler configuration (use JSONC as per latest recommendation) 
-sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
+as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 {
   "\$schema": "node_modules/wrangler/config-schema.json",
   "name": "${WORKER_NAME}",
@@ -3835,7 +3903,7 @@ sudo tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 JSON
 
 # Seed schema remotely so we can insert bootstrap key
-sudo tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
+as_dmj tee "${WORKER_DIR}/schema.sql" >/dev/null <<SQL
 CREATE TABLE IF NOT EXISTS ${DB_PREFIX}documents(
   id TEXT PRIMARY KEY,
   doc_sha256 TEXT UNIQUE,
@@ -3882,6 +3950,7 @@ SQL
 
 say "[+] Applying schema to remote D1..."
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --file ./schema.sql )
+fix_perms
 
 # Older databases may lack the new 'cert_serial' column.
 # CREATE TABLE IF NOT EXISTS won't add columns, so add it explicitly and ignore errors if it exists.
@@ -3917,10 +3986,11 @@ say "[+] Pushing Worker secrets to Cloudflare..."
   # restore previous xtrace state
   eval "$_xtrace_state"
 )
+fix_perms
 
 # Deploy Worker (modern command) 
 say "[+] Deploying Worker..."
-( cd "$WORKER_DIR" && "$WR" deploy )
+( cd "$WORKER_DIR" && as_dmj "$WR" deploy )
 
 WORKER_URL="$("$WR" deployments list --format=json | jq -r '.[0].url' || true)"
 echo "------------------------------------------------------------------"
