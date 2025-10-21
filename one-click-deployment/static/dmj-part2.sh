@@ -493,37 +493,101 @@ public class SignerServer {
   }
 
   // --- new: revoke by serial ---
-  static void revokeBySerialHex(String serialHex) throws Exception {
-    String sHex = serialHex.startsWith("0x") ? serialHex.substring(2) : serialHex;
-    Path certPath = ICA_DIR.resolve("newcerts").resolve(sHex.toUpperCase()+".pem");
-    if (!Files.exists(certPath)) {
-      // fallback: try lowercase
-      certPath = ICA_DIR.resolve("newcerts").resolve(sHex.toLowerCase()+".pem");
-    }
-    Process r = new ProcessBuilder(OPENSSL, "ca",
-      "-config", ICA_DIR.resolve("openssl.cnf").toString(),
-      "-revoke", certPath.toString(),
-      "-crl_reason", "superseded"
-    ).inheritIO().start();
-    if (r.waitFor()!=0) throw new RuntimeException("revoke failed");
+  static String normHex(String h) {
+    String s = h.trim();
+    if (s.startsWith("0x") || s.startsWith("0X")) s = s.substring(2);
+    // drop leading zeros and uppercase (index.txt uses uppercase hex)
+    s = s.replaceFirst("^[0]+", "");
+    if (s.isEmpty()) s = "0";
+    return s.toUpperCase(Locale.ROOT);
+  }
 
-    // regenerate CRL & publish
+  static class IndexRow {
+    final char status; // V/R/E
+    final String serial; // normalized upper hex
+    final String filename; // may be "unknown"
+    IndexRow(char status, String serial, String filename) {
+      this.status = status; this.serial = serial; this.filename = filename;
+    }
+  }
+
+  static IndexRow findInIndex(String serialHex) throws IOException {
+    String want = normHex(serialHex);
+    Path idx = ICA_DIR.resolve("index.txt");
+    if (!Files.exists(idx)) return null;
+    try (BufferedReader br = Files.newBufferedReader(idx)) {
+      for (String ln; (ln = br.readLine()) != null; ) {
+        if (ln.isBlank() || ln.startsWith("#")) continue;
+        // OpenSSL index: status\texpire\trevocation\tserial\tfilename\tsubject
+        // (delimited by tabs; some distros use spaces - be tolerant)
+        String[] parts = ln.split("\\t");
+        if (parts.length < 5) parts = ln.split("\\s+");
+        if (parts.length < 5) continue;
+        String ser = normHex(parts[3]);
+        if (ser.equalsIgnoreCase(want)) {
+          char st = parts[0].isEmpty() ? '?' : parts[0].charAt(0);
+          String fn = parts[4];
+          return new IndexRow(st, ser, fn);
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Returns true if database state changed (i.e., this call actually performed a revoke). */
+  static boolean revokeBySerialHex(String serialHex) throws Exception {
+    IndexRow row = findInIndex(serialHex);
+    if (row != null && (row.status == 'R' || row.status == 'r')) {
+      // Already revoked -> idempotent success
+      // Still refresh CRL below to be safe.
+    } else {
+      // Resolve cert path: prefer index filename if present, else fall back to newcerts/<SERIAL>.pem
+      Path certPath;
+      if (row != null && !"unknown".equalsIgnoreCase(row.filename)) {
+        certPath = ICA_DIR.resolve(row.filename);
+        if (!certPath.isAbsolute()) certPath = ICA_DIR.resolve(row.filename);
+      } else {
+        String sHex = normHex(serialHex);
+        certPath = ICA_DIR.resolve("newcerts").resolve(sHex + ".pem");
+      }
+      // Run revoke and tolerate “already revoked” just in case
+      ProcessBuilder pb = new ProcessBuilder(OPENSSL, "ca",
+        "-config", ICA_DIR.resolve("openssl.cnf").toString(),
+        "-revoke", certPath.toString(),
+        "-crl_reason", "superseded"
+      );
+      pb.redirectErrorStream(true);
+      Process p = pb.start();
+      String out;
+      try (InputStream is = p.getInputStream()) { out = new String(is.readAllBytes(), StandardCharsets.UTF_8); }
+      int rc = p.waitFor();
+      if (rc != 0 && (row == null || row.status != 'R')) {
+        // Accept idempotency if OpenSSL says “Already revoked”
+        if (out == null || !out.toLowerCase(Locale.ROOT).contains("already revoked")) {
+          throw new RuntimeException("revoke failed: " + rc);
+        }
+      }
+    }
+
+    // Regenerate CRL & publish
     Process g = new ProcessBuilder(OPENSSL, "ca",
       "-config", ICA_DIR.resolve("openssl.cnf").toString(),
       "-gencrl", "-out", ICA_DIR.resolve("ica.crl").toString()
     ).inheritIO().start();
     if (g.waitFor()!=0) throw new RuntimeException("gencrl failed");
-    // publish + symlink (AIA/CDP paths)
-    // Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-    // Files.deleteIfExists(PKI_PUB.resolve("ica.crl"));
 
-    // Files.createSymbolicLink(PKI_PUB.resolve("ica.crl"), ICA_DIR.resolve("ica.crl"));
-    Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
-    // ensure AIA/CDP path is a real file (no symlinks; nginx has disable_symlinks on)
-    Files.copy(ICA_DIR.resolve("ica.crl"), PKI_PUB.resolve("ica.crl"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
-    
-    // restart OCSP so it picks up DB/CRL changes
-    new ProcessBuilder("systemctl","restart","dmj-ocsp.service").inheritIO().start().waitFor();
+    // publish to AIA/CDP paths (real files, no symlinks)
+    Files.copy(ICA_DIR.resolve("ica.crl"),
+               PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"),
+               java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+               java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
+    Files.copy(ICA_DIR.resolve("ica.crl"),
+               PKI_PUB.resolve("ica.crl"),
+               java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+               java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
+
+    // No separate dmj-ocsp.service to restart; OpenSSL OCSP re-reads index automatically.
+    return (row == null || row.status != 'R');
   }
 
   static class Keys {
@@ -986,7 +1050,10 @@ public class SignerServer {
       boolean ok=false;
       try { ok = verifyHmac(shared, "POST", "/revoke", body, ts, nonce, hmac); } catch(Exception ignore){}
       if (!ok || serial.isBlank()) { ctx.status(401).json(Map.of("error","bad auth or serial missing")); return; }
-      try { revokeBySerialHex(serial); ctx.json(Map.of("revoked", true, "serial", serial)); }
+      try {
+        boolean changed = revokeBySerialHex(serial);
+        ctx.json(Map.of("revoked", true, "already", !changed, "serial", serial));
+      }
       catch(Exception e){ ctx.status(500).json(Map.of("error","revoke failed","detail", e.getMessage())); }
     });
 
@@ -1020,10 +1087,15 @@ JAVA
 say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
 sudo mkdir -p "${ROOT_DIR}/"{certs,newcerts,private} "${ICA_DIR}/"{certs,newcerts,private} "${OCSP_DIR}" "${PKI_PUB}"
 sudo touch "${ROOT_DIR}/index.txt" "${ICA_DIR}/index.txt"
-[ -f "${ROOT_DIR}/serial" ] || echo 1000 | sudo tee "${ROOT_DIR}/serial" >/dev/null
-[ -f "${ROOT_DIR}/crlnumber" ] || echo 1000 | sudo tee "${ROOT_DIR}/crlnumber" >/dev/null
-[ -f "${ICA_DIR}/serial" ] || echo 2000 | sudo tee "${ICA_DIR}/serial" >/dev/null
-[ -f "${ICA_DIR}/crlnumber" ] || echo 2000 | sudo tee "${ICA_DIR}/crlnumber" >/dev/null
+# Use long, uppercase hex serials so we have room for millions of document certs.
+# OpenSSL reads this serial file as a hex integer and increments for each issuance.
+# The newcerts filename is <SERIAL>.pem, matching this value.
+# Ref: openssl-ca(1), index/newcerts behavior.
+[ -f "${ROOT_DIR}/serial" ]    || printf '%s\n' "$(openssl rand -hex 16 | tr '[:lower:]' '[:upper:]')" | sudo tee "${ROOT_DIR}/serial" >/dev/null
+[ -f "${ROOT_DIR}/crlnumber" ] || printf '%s\n' "$(openssl rand -hex 8  | tr '[:lower:]' '[:upper:]')" | sudo tee "${ROOT_DIR}/crlnumber" >/dev/null
+[ -f "${ICA_DIR}/serial" ]     || printf '%s\n' "$(openssl rand -hex 20 | tr '[:lower:]' '[:upper:]')" | sudo tee "${ICA_DIR}/serial" >/dev/null
+[ -f "${ICA_DIR}/crlnumber" ]  || printf '%s\n' "$(openssl rand -hex 8  | tr '[:lower:]' '[:upper:]')" | sudo tee "${ICA_DIR}/crlnumber" >/dev/null
+
 
 # OpenSSL configs (root + issuing)
 sudo tee "${ROOT_DIR}/openssl.cnf" >/dev/null <<EOF
