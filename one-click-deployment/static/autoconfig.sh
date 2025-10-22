@@ -27,12 +27,6 @@ export DMJ_ROOT_DOMAIN SIGNER_DOMAIN
 
 # Service account
 DMJ_USER="dmjsvc"
-DMJ_HOME="/var/lib/${DMJ_USER}"
-DMJ_XDG="${DMJ_HOME}/.config"
-
-as_dmj() {
-  sudo -u "$DMJ_USER" -H env HOME="$DMJ_HOME" XDG_CONFIG_HOME="$DMJ_XDG" "$@"
-}
 
 # -------------------------------
 # Part 1 (system setup)
@@ -45,20 +39,26 @@ curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authent
 # Wrangler auth check (service acct)
 # -------------------------------
 echo "[+] Checking Wrangler for '${DMJ_USER}'..."
-if ! as_dmj bash -lc 'command -v wrangler >/dev/null 2>&1'; then
+
+# Check if dmj-wrangler is installed and available in PATH
+if ! command -v dmj-wrangler >/dev/null 2>&1; then 
   echo "[x] Wrangler not found on ${DMJ_USER}'s PATH. Aborting."
   exit 1
 fi
 
-WHOAMI_OUTPUT="$(as_dmj bash -lc 'wrangler whoami' 2>&1 || true)"
-if echo "$WHOAMI_OUTPUT" | grep -qiE 'You are logged in|Account Name|Email|User'; then
-  echo "[✓] Wrangler is logged in. Proceeding to Part 2."
+# Run `dmj-wrangler whoami`, capturing output even if it fails
+WHOAMI_OUTPUT="$(dmj-wrangler whoami 2>&1 || true)"
+
+# Check for specific "Virtual WildHogs" account match
+if echo "$WHOAMI_OUTPUT" | grep -q "Virtual WildHogs"; then
+  echo "[✓] Wrangler is logged in as Virtual WildHogs. Proceeding to Part 2."
 
   echo "[+] Running Part 2..."
   curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/dmj-part2.sh?nocache=$(date +%s)" \
     | env CF_D1_DATABASE_ID="$CF_D1_DATABASE_ID" DMJ_ROOT_DOMAIN="$DMJ_ROOT_DOMAIN" SIGNER_DOMAIN="$SIGNER_DOMAIN" bash
 
   echo "[✓] Both parts executed successfully."
+
 else
   echo "[!] Wrangler authentication not detected for ${DMJ_USER}."
   echo "[!] Please log in with: sudo -u ${DMJ_USER} -H wrangler login"
