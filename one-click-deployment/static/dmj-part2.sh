@@ -1093,7 +1093,7 @@ public class SignerServer {
         // byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← pass chain here        
         // Issue a one-off document certificate (ephemeral keypair + ICA‑issued leaf)
         log.info("sign: issuing one-off doc cert, size={} bytes", data.length);
-        String cn = "dmj.one Document " + java.util.UUID.randomUUID().toString().substring(0,8);
+        String cn = "dmj.one Trusted File " + java.util.UUID.randomUUID().toString().substring(0,8).toUpperCase();
         DocMaterial dm = issueDocCert(cn);
         byte[] prepared = applyDocInfoPreSign(data);
         byte[] signed = signPdf(prepared, dm.priv, dm.chain);
