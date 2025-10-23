@@ -45,6 +45,7 @@ SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (
 # --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
 PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
 OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
+TSA_DOMAIN="${TSA_DOMAIN:-tsa.${DMJ_ROOT_DOMAIN}}"
 
 OPT_DIR="/opt/dmj"
 PKI_DIR="/opt/dmj/pki"
@@ -52,12 +53,15 @@ ROOT_DIR="${PKI_DIR}/root"
 ICA_DIR="${PKI_DIR}/ica"
 OCSP_DIR="${PKI_DIR}/ocsp"
 PKI_PUB="${PKI_DIR}/pub"
+TSA_DIR="${PKI_DIR}/tsa"
 
 DL_DIR="${PKI_PUB}/dl"
 sudo mkdir -p "${DL_DIR}"
+sudo mkdir -p "${TSA_DIR}"
 # dl/ must be writable by the non‑root service user for ad‑hoc bundles
 sudo chown "${DMJ_USER}:${DMJ_USER}" "${DL_DIR}"
 sudo chmod 755 "${PKI_PUB}" "${DL_DIR}"
++sudo chown -R "${DMJ_USER}:${DMJ_USER}" "${TSA_DIR}"
 
 find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete
 
@@ -68,6 +72,8 @@ OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder R1}"
 SIGNER_CN="${SIGNER_CN:-dmj.one Signer}"
 ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
 COUNTRY="${COUNTRY:-IN}"
+# TSA (RFC 3161)
+TSA_CN="${TSA_CN:-dmj.one TSA R1}"
 
 # Optional: control AIA/CRL scheme for certificates (keep http as default)
 AIA_SCHEME="${AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
@@ -165,13 +171,18 @@ fix_perms() {
   # Public Folder Full access to allow nginx to read
   sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
   sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
+
   
   # Make all executables generated executable
   sudo find /usr/local/bin/ -type f -exec chmod 0755 {} + 2>/dev/null || true
 
   # Sensitive keys
-  sudo chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
-  sudo chmod 0600 "$PKI_DIR"/ica/ica.key "$PKI_DIR"/ocsp/ocsp.key 2>/dev/null || true
+  [ -f "$PKI_DIR/tsa/tsa.key" ] && sudo chmod 0600 "$PKI_DIR/tsa/tsa.key" 2>/dev/null || true
+  [ -f "$SIGNER_DIR/keystore.pass" ] && sudo chmod 0600 "$SIGNER_DIR/keystore.pass" 2>/dev/null || true
+  [ -f "$SIGNER_DIR/keystore.p12" ] && sudo chmod 0600 "$SIGNER_DIR/keystore.p12" 2>/dev/null || true
+  [ -f "$SIGNER_DIR/signer.key" ] && sudo chmod 0600 "$SIGNER_DIR/signer.key" 2>/dev/null || true  
+  [ -f "$PKI_DIR/ica/ica.key" ] && sudo chmod 0600 "$PKI_DIR/ica/ica.key" 2>/dev/null || true  
+  [ -f "$PKI_DIR/ocsp/ocsp.key" ] && sudo chmod 0600 "$PKI_DIR/ocsp/ocsp.key" 2>/dev/null || true  
 
   # Built artifacts that must be world/group-readable for Java/classloader sanity
   [ -f "$SIGNER_DIR/target/dmj-signer-1.0.0.jar" ] && sudo chmod 0644 "$SIGNER_DIR/target/dmj-signer-1.0.0.jar"
@@ -418,6 +429,7 @@ import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
 import org.bouncycastle.cms.CMSTypedData;
 import org.bouncycastle.cms.CMSProcessableByteArray;
 import org.bouncycastle.cms.CMSSignedDataGenerator;
+import org.bouncycastle.cms.SignerInformationStore;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
@@ -426,9 +438,12 @@ import org.bouncycastle.cert.jcajce.JcaCertStore;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Primitive;
+import org.bouncycastle.asn1.ASN1ObjectIdentifier;
+import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.CMSAttributes;
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
 import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -436,6 +451,11 @@ import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.pkcs.PKCS10CertificationRequest;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.bouncycastle.tsp.TimeStampRequest;
+import org.bouncycastle.tsp.TimeStampRequestGenerator;
+import org.bouncycastle.tsp.TimeStampResponse;
+import org.bouncycastle.tsp.TimeStampToken;
+import org.bouncycastle.tsp.TSPException;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.IOUtils;
@@ -443,6 +463,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 
@@ -455,12 +476,16 @@ import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.Security;
+import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.CertificateFactory;
 import java.time.Instant;
 import java.util.*;
+import java.math.BigInteger;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -485,10 +510,20 @@ public class SignerServer {
 
   static final Set<String> RECENT_NONCES = Collections.synchronizedSet(new LinkedHashSet<>());
 
+  // TSA / LTV / LTA configuration
+  static final String TSA_URL = Optional.ofNullable(System.getenv("DMJ_TSA_URL")).orElse("");
+  static final String TSA_USER = Optional.ofNullable(System.getenv("DMJ_TSA_USER")).orElse("");
+  static final String TSA_PASS = Optional.ofNullable(System.getenv("DMJ_TSA_PASS")).orElse("");
+  static final String TSA_POLICY_OID = Optional.ofNullable(System.getenv("DMJ_TSA_POLICY_OID")).orElse("");
+  static final String TSA_HASH = Optional.ofNullable(System.getenv("DMJ_TSA_HASH")).orElse("SHA-256"); // SHA-256/384/512
+  static final int TSA_TIMEOUT_MS = Integer.parseInt(Optional.ofNullable(System.getenv("DMJ_TSA_TIMEOUT_MS")).orElse("10000"));
+  static final boolean TS_ON_SIGNATURE = !"0".equals(Optional.ofNullable(System.getenv("DMJ_TS_ON_SIGNATURE")).orElse("0"));
+  static final boolean ADD_DOC_TIMESTAMP = !"0".equals(Optional.ofNullable(System.getenv("DMJ_ADD_DOC_TIMESTAMP")).orElse("0")); // for B-LTA
+  static final String OCSP_URL_ENV = Optional.ofNullable(System.getenv("DMJ_OCSP_URL")).orElse(""); // optional; CRL is used anyway
+
   static { Security.addProvider(new BouncyCastleProvider()); }
 
-  // load ICA cert once for “issuedByUs” checks
-  // (used to determine whether a signature's issuer == our ICA)
+  // load ICA cert once for issuedByUs checks
   static X509Certificate readX509(Path p) throws Exception {
     try (InputStream in = Files.newInputStream(p)) {
       return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(in);
@@ -508,19 +543,14 @@ public class SignerServer {
     DocMaterial(PrivateKey p, X509Certificate c, List<X509Certificate> ch, String s){priv=p;leaf=c;chain=ch;serialHex=s;}
   }
   static DocMaterial issueDocCert(String cn) throws Exception {
-    // 1) keypair
     KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
     kpg.initialize(3072);
     KeyPair kp = kpg.generateKeyPair();
-
-    // 2) CSR (PEM)
     X500Name subject = new X500Name("C=IN,O=dmj.one Trust Services,OU=Document Signing,CN="+cn);
     PKCS10CertificationRequest csr = new JcaPKCS10CertificationRequestBuilder(subject, kp.getPublic())
       .build(new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(kp.getPrivate()));
     Path csrPem = Files.createTempFile("dmj", ".csr");
     try (JcaPEMWriter pw = new JcaPEMWriter(Files.newBufferedWriter(csrPem))) { pw.writeObject(csr); }
-
-    // 3) Issue with ICA (PEM cert out)
     Path certPem = Files.createTempFile("dmj", ".crt");
     Process p = new ProcessBuilder(
         OPENSSL, "ca", "-batch",
@@ -529,41 +559,26 @@ public class SignerServer {
         "-in", csrPem.toString(), "-out", certPem.toString()
     ).inheritIO().start();
     if (p.waitFor() != 0) throw new RuntimeException("openssl ca failed");
-
-    // 4) parse cert + serial + chain
-    X509Certificate leaf = readX509(certPem);    
+    X509Certificate leaf = readX509(certPem);
     String serialHex = leaf.getSerialNumber().toString(16).toUpperCase(Locale.ROOT);
     List<X509Certificate> chain = new ArrayList<>();
     chain.add(leaf);
-    chain.add(readX509(ICA_DIR.resolve("ica.crt")));   // include ICA so validators can build path
-    // (optionally also add root if desired)
-    // return new DocMaterial(kp.getPrivate(), leaf, chain, serialHex);
-
-    // Best-effort cleanup of temp files (cert and CSR are now in index/newcerts)
+    chain.add(readX509(ICA_DIR.resolve("ica.crt")));
     try { Files.deleteIfExists(csrPem); } catch (Exception ignore) {}
     try { Files.deleteIfExists(certPem); } catch (Exception ignore) {}
     return new DocMaterial(kp.getPrivate(), leaf, chain, serialHex);
   }
 
-  // --- new: revoke by serial ---
+  // --- revoke helpers (unchanged) ---
   static String normHex(String h) {
     String s = h.trim();
     if (s.startsWith("0x") || s.startsWith("0X")) s = s.substring(2);
-    // drop leading zeros and uppercase (index.txt uses uppercase hex)
     s = s.replaceFirst("^[0]+", "");
     if (s.isEmpty()) s = "0";
     return s.toUpperCase(Locale.ROOT);
   }
-
-  static class IndexRow {
-    final char status; // V/R/E
-    final String serial; // normalized upper hex
-    final String filename; // may be "unknown"
-    IndexRow(char status, String serial, String filename) {
-      this.status = status; this.serial = serial; this.filename = filename;
-    }
-  }
-
+  static class IndexRow { final char status; final String serial; final String filename;
+    IndexRow(char status, String serial, String filename) { this.status = status; this.serial = serial; this.filename = filename; } }
   static IndexRow findInIndex(String serialHex) throws IOException {
     String want = normHex(serialHex);
     Path idx = ICA_DIR.resolve("index.txt");
@@ -571,8 +586,6 @@ public class SignerServer {
     try (BufferedReader br = Files.newBufferedReader(idx)) {
       for (String ln; (ln = br.readLine()) != null; ) {
         if (ln.isBlank() || ln.startsWith("#")) continue;
-        // OpenSSL index: status\texpire\trevocation\tserial\tfilename\tsubject
-        // (delimited by tabs; some distros use spaces - be tolerant)
         String[] parts = ln.split("\\t");
         if (parts.length < 5) parts = ln.split("\\s+");
         if (parts.length < 5) continue;
@@ -586,15 +599,10 @@ public class SignerServer {
     }
     return null;
   }
-
-  /** Returns true if database state changed (i.e., this call actually performed a revoke). */
   static boolean revokeBySerialHex(String serialHex) throws Exception {
     IndexRow row = findInIndex(serialHex);
-    if (row != null && (row.status == 'R' || row.status == 'r')) {
-      // Already revoked -> idempotent success
-      // Still refresh CRL below to be safe.
-    } else {
-      // Resolve cert path: prefer index filename if present, else fall back to newcerts/<SERIAL>.pem
+    if (row != null && (row.status == 'R' || row.status == 'r')) { /* idempotent */ }
+    else {
       Path certPath;
       if (row != null && !"unknown".equalsIgnoreCase(row.filename)) {
         certPath = ICA_DIR.resolve(row.filename);
@@ -603,12 +611,10 @@ public class SignerServer {
         String sHex = normHex(serialHex);
         certPath = ICA_DIR.resolve("newcerts").resolve(sHex + ".pem");
       }
-      // Run revoke and tolerate “already revoked” just in case
       ProcessBuilder pb = new ProcessBuilder(OPENSSL, "ca",
         "-config", ICA_DIR.resolve("openssl.cnf").toString(),
         "-revoke", certPath.toString(),
-        "-crl_reason", "superseded"
-      );
+        "-crl_reason", "superseded");
       pb.redirectErrorStream(true);
       Process p = pb.start();
       String out;
@@ -616,21 +622,16 @@ public class SignerServer {
       int rc = p.waitFor();
       if (rc != 0 && (row == null || row.status != 'R')) {
         log.error("openssl revoke failed rc={}, output={}", rc, out);
-        // Accept idempotency if OpenSSL says “Already revoked”
         if (out == null || !out.toLowerCase(Locale.ROOT).contains("already revoked")) {
           throw new RuntimeException("revoke failed: " + rc);
         }
       }
     }
-
-    // Regenerate CRL & publish
     Process g = new ProcessBuilder(OPENSSL, "ca",
       "-config", ICA_DIR.resolve("openssl.cnf").toString(),
       "-gencrl", "-out", ICA_DIR.resolve("ica.crl").toString()
     ).inheritIO().start();
     if (g.waitFor()!=0) throw new RuntimeException("gencrl failed");
-
-    // publish to AIA/CDP paths (real files, no symlinks)
     Files.copy(ICA_DIR.resolve("ica.crl"),
                PKI_PUB.resolve("dmj-one-issuing-ca-r1.crl"),
                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
@@ -639,36 +640,21 @@ public class SignerServer {
                PKI_PUB.resolve("ica.crl"),
                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
-
-    // No separate dmj-ocsp.service to restart; OpenSSL OCSP re-reads index automatically.
     return (row == null || row.status != 'R');
   }
 
-  static class Keys {
-    final PrivateKey priv;
-    final X509Certificate cert;
-    final List<X509Certificate> chain;
-    Keys(PrivateKey p, X509Certificate c, List<X509Certificate> ch){ this.priv=p; this.cert=c; this.chain=ch; }
-  }
-
+  static class Keys { final PrivateKey priv; final X509Certificate cert; final List<X509Certificate> chain;
+    Keys(PrivateKey p, X509Certificate c, List<X509Certificate> ch){ this.priv=p; this.cert=c; this.chain=ch; } }
   static Keys loadKeys() throws Exception {
     char[] pass = Files.readString(P12_PASS).trim().toCharArray();
     KeyStore ks = KeyStore.getInstance("PKCS12");
     try (InputStream in = Files.newInputStream(P12_PATH)) { ks.load(in, pass); }
     PrivateKey pk = (PrivateKey) ks.getKey(P12_ALIAS, pass);
     X509Certificate leaf = (X509Certificate) ks.getCertificate(P12_ALIAS);
-
-    // IMPORTANT: use fully-qualified type to avoid ambiguity
     java.security.cert.Certificate[] chainArr = ks.getCertificateChain(P12_ALIAS);
     List<X509Certificate> chain = new ArrayList<>();
-    if (chainArr != null) {
-      for (java.security.cert.Certificate c : chainArr) {
-        chain.add((X509Certificate) c);
-      }
-    } else {
-      // Fall back to just the leaf if the P12 didn’t contain the chain
-      chain.add(leaf);
-    }
+    if (chainArr != null) for (java.security.cert.Certificate c : chainArr) chain.add((X509Certificate) c);
+    else chain.add(leaf);
     return new Keys(pk, leaf, chain);
   }
 
@@ -680,24 +666,20 @@ public class SignerServer {
   static boolean verifyHmac(String sharedBase64, String method, String path, byte[] body, String ts, String nonceB64, String providedB64) throws Exception {
     long now = Instant.now().getEpochSecond();
     long t = Long.parseLong(ts);
-    if (Math.abs(now - t) > 300) return false; // 5 min skew
-
+    if (Math.abs(now - t) > 300) return false;
     synchronized (RECENT_NONCES) {
       if (RECENT_NONCES.contains(nonceB64)) return false;
       RECENT_NONCES.add(nonceB64);
       if (RECENT_NONCES.size() > 1000) RECENT_NONCES.iterator().remove();
     }
-
     byte[] secret = Base64.decode(sharedBase64);
     Mac mac = Mac.getInstance("HmacSHA256");
     mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-
     mac.update(method.getBytes(StandardCharsets.UTF_8)); mac.update((byte) 0);
     mac.update(path.getBytes(StandardCharsets.UTF_8));   mac.update((byte) 0);
     mac.update(ts.getBytes(StandardCharsets.UTF_8));     mac.update((byte) 0);
     mac.update(Base64.decode(nonceB64));                 mac.update((byte) 0);
     mac.update(body);
-
     byte[] expected = mac.doFinal();
     byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
     return MessageDigest.isEqual(expected, provided);
@@ -707,71 +689,66 @@ public class SignerServer {
   static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, List<X509Certificate> chain) throws Exception {
     byte[] toSign = IOUtils.toByteArray(content);
     ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(pk);
-
     CMSSignedDataGenerator gen = new CMSSignedDataGenerator();
     gen.addSignerInfoGenerator(
       new JcaSignerInfoGeneratorBuilder(new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
         .build(signer, chain.get(0)) // leaf
     );
-    gen.addCertificates(new JcaCertStore(chain)); // include ICA so validators can build the path
-
+    gen.addCertificates(new JcaCertStore(chain)); // include chain
     CMSTypedData msg = new CMSProcessableByteArray(toSign);
     CMSSignedData cms = gen.generate(msg, false); // detached
+
+    // Optionally add RFC 3161 signature-time-stamp unsigned attribute (B-T-ish)
+    if (!TSA_URL.isBlank() && TS_ON_SIGNATURE) {
+      cms = addSignatureTimeStampAttribute(cms);
+    }
     return cms.getEncoded();
   }
 
   // Optional: make it a certification signature (DocMDP). P=1/2/3.
   static void setMDPPermission(PDDocument doc, PDSignature signature, int accessPermissions) {
     COSDictionary sigDict = signature.getCOSObject();
-
     COSDictionary transformParams = new COSDictionary();
     transformParams.setItem(COSName.TYPE, COSName.getPDFName("TransformParams"));
     transformParams.setName(COSName.V, "1.2");
     transformParams.setInt(COSName.P, accessPermissions);
-
     COSDictionary refDict = new COSDictionary();
     refDict.setItem(COSName.TYPE, COSName.getPDFName("SigRef"));
     refDict.setItem(COSName.TRANSFORM_METHOD, COSName.DOCMDP);
     refDict.setItem(COSName.D, transformParams);
-
     COSArray refArray = new COSArray();
     refArray.add(refDict);
     sigDict.setItem(COSName.REFERENCE, refArray);
-
     COSDictionary catalog = doc.getDocumentCatalog().getCOSObject();
     COSDictionary perms = (COSDictionary) catalog.getDictionaryObject(COSName.PERMS);
     if (perms == null) { perms = new COSDictionary(); catalog.setItem(COSName.PERMS, perms); }
     perms.setItem(COSName.DOCMDP, sigDict);
   }
 
-  // Resolve desired signing mode from env
   static int resolveDocMDP() {
     String mode = Optional.ofNullable(System.getenv("DMJ_SIGN_MODE")).orElse("approval").toLowerCase(Locale.ROOT);
     return switch (mode) {
       case "certify-p1" -> 1;
       case "certify-p2" -> 2;
       case "certify-p3" -> 3;
-      default -> 0; // approval (no DocMDP)
+      default -> 0;
     };
   }
 
-  // Invisible approval/certification signature using external signing
+  // Invisible approval/certification signature using external signing (PAdES subFilter)
   static byte[] signPdf(byte[] original, PrivateKey pk, List<X509Certificate> chain) throws Exception {
     String sigName = Optional.ofNullable(System.getenv("DMJ_SIG_NAME")).orElse("dmj.one");
     String sigLoc = Optional.ofNullable(System.getenv("DMJ_SIG_LOCATION")).orElse("IN");
     String sigReason = Optional.ofNullable(System.getenv("DMJ_SIG_REASON")).orElse("Contents securely verified by dmj.one against any tampering.");
     String contact = Optional.ofNullable(System.getenv("DMJ_CONTACT_EMAIL")).orElse("contact@dmj.one");
-     
+
     try (PDDocument doc = Loader.loadPDF(original);
          ByteArrayOutputStream baos = new ByteArrayOutputStream(original.length + 65536)) {
 
       PDSignature sig = new PDSignature();
       sig.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
-      sig.setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED); // Adobe-compatible detached CMS
-      // OPTION 1: Prefer ETSI.CAdES.detached (PAdES); legacy ADBE is still widely accepted but not future-proof
-      // sig.setSubFilter(COSName.getPDFName("ETSI.CAdES.detached"));
-      // OPTION 2: PAdES-friendly detached CMS (see ETSI PAdES / PDFBox external signing) - Future Updates
-      // sig.setSubFilter(PDSignature.SUBFILTER_ETSI_CADES_DETACHED);
+      // ← switch to ETSI.CAdES.detached (PAdES)
+      sig.setSubFilter(PDSignature.SUBFILTER_ETSI_CADES_DETACHED);
       sig.setName(sigName);
       sig.setLocation(sigLoc);
       sig.setReason(sigReason);
@@ -782,10 +759,10 @@ public class SignerServer {
       if (mdp != 0) setMDPPermission(doc, sig, mdp);
 
       SignatureOptions opts = new SignatureOptions();
-      opts.setPreferredSignatureSize(65536);
+      // generous space to allow signature-time-stamp attribute if enabled
+      opts.setPreferredSignatureSize(131072);
 
-      // Official external signing flow: addSignature → saveIncrementalForExternalSigning → getContent/setSignature
-      doc.addSignature(sig, opts); // invisible (no visual template)
+      doc.addSignature(sig, opts); // invisible
       ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
       byte[] cms = buildDetachedCMS(ext.getContent(), pk, chain);
       ext.setSignature(cms);
@@ -795,6 +772,7 @@ public class SignerServer {
   }
 
   static String toHex(byte[] b){ StringBuilder sb=new StringBuilder(b.length*2); for(byte x:b) sb.append(String.format("%02x",x)); return sb.toString(); }
+  static String toHexUpper(byte[] b){ StringBuilder sb=new StringBuilder(b.length*2); for(byte x:b) sb.append(String.format("%02X",x)); return sb.toString(); }
   static String jcaDigestNameFromOid(String oid){
     return switch (oid) {
       case "1.3.14.3.2.26" -> "SHA-1";
@@ -838,7 +816,6 @@ public class SignerServer {
           CMSSignedData sd = new CMSSignedData(new CMSProcessableByteArray(signedContent), cms);
 
           for (SignerInformation si : sd.getSignerInfos().getSigners()) {
-            // Extract message-digest attr & recompute for diagnostics
             byte[] mdAttrBytes = null;
             AttributeTable at = si.getSignedAttributes();
             if (at != null) {
@@ -852,24 +829,14 @@ public class SignerServer {
             byte[] calc = MessageDigest.getInstance(jcaName).digest(signedContent);
             debug.put("sig"+sigIndex+".recalc.messageDigest.hex", toHex(calc));
 
-            // Verify signer
             Collection<X509CertificateHolder> matches = sd.getCertificates().getMatches(si.getSID());
             if (matches.isEmpty()) continue;
             X509CertificateHolder signerHolder = matches.iterator().next();
             boolean ok = si.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(signerHolder));
             anyValid |= ok;
 
-            // SPKI match = "issuedByUs"
-            // String signerSpki = Base64.toBase64String(signerHolder.getSubjectPublicKeyInfo().getEncoded());
-            // String ourSpki = Base64.toBase64String(SubjectPublicKeyInfo.getInstance(ourCert.getPublicKey().getEncoded()).getEncoded());
-            // if (ok && signerSpki.equals(ourSpki)) issuedByUs = true;
-            // issuerDn = signerHolder.getSubject().toString();
-            // "issuedByUs": prefer robust check -> leaf issuer == our ICA subject.
             if (ok) {
               try {
-                // STRICT: the issuer certificate in the CMS store must have the same SPKI as our ICA cert.
-                // DN alone is NOT sufficient (can be re-used). Compare SPKIs to avoid false positives.
-                // Ref: BouncyCastle CMSSignedData / certificate stores.
                 if (ICA_CERT != null) {
                   var store = sd.getCertificates();
                   X509CertificateHolder issuerHolder = null;
@@ -883,7 +850,7 @@ public class SignerServer {
                     if (java.util.Arrays.equals(a, b)) issuedByUs = true;
                   }
                 }
-              } catch (Exception ex) { /* ignore, keep issuedByUs=false */ }
+              } catch (Exception ex) { /* ignore */ }
             }
             issuerDn = signerHolder.getIssuer().toString();
           }
@@ -905,32 +872,27 @@ public class SignerServer {
     return out;
   }
 
-  // static final Path PKI_PUB = Paths.get(
-  //   Optional.ofNullable(System.getenv("DMJ_PKI_PUB")).orElse("/opt/dmj/pki/pub")
-  // );
   static final String PKI_BASE = Optional.ofNullable(System.getenv("DMJ_PKI_BASE"))
-                                         .orElse("https://pki.dmj.one"); // host where AIA/CRL/Trust‑kit are served
-  
+                                         .orElse("https://pki.dmj.one");
+
   static void addZipFile(ZipOutputStream zos, Path src, String name) throws IOException {
     if (!Files.exists(src)) return;
     zos.putNextEntry(new ZipEntry(name));
     Files.copy(src, zos);
     zos.closeEntry();
   }
-  
+
   static Path writeBundleZip(byte[] signedPdf, String baseName) throws IOException {
     Files.createDirectories(PKI_PUB.resolve("dl"));
     String fname = baseName + ".zip";
     Path out = PKI_PUB.resolve("dl").resolve(fname);
-  
+
     try (ZipOutputStream zos = new ZipOutputStream(
          Files.newOutputStream(out, java.nio.file.StandardOpenOption.CREATE,
                                     java.nio.file.StandardOpenOption.TRUNCATE_EXISTING))) {
-      // 1) signed PDF
       zos.putNextEntry(new ZipEntry("signed.pdf"));
       zos.write(signedPdf);
       zos.closeEntry();
-      // 2) Trust kit files
       addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.cer"), "trust-kit/dmj-one-root-ca-r1.cer");
       addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.crt"), "trust-kit/dmj-one-root-ca-r1.crt");
       addZipFile(zos, PKI_PUB.resolve("dmj-one-issuing-ca-r1.crt"), "trust-kit/dmj-one-issuing-ca-r1.crt");
@@ -941,21 +903,19 @@ public class SignerServer {
     return out;
   }
 
-  // --- Preprocess PDF: add document info + optional header version, then return bytes (no signing here)
+  // --- PDF metadata pre-sign (unchanged) ---
   static byte[] applyDocInfoPreSign(byte[] in) {
-    // Read optional values from environment. Leave blank to keep originals.
     String title    = Optional.ofNullable(System.getenv("DMJ_PDF_TITLE")).orElse("").trim();
     String author   = Optional.ofNullable(System.getenv("DMJ_PDF_AUTHOR")).orElse("").trim();
     String subject  = Optional.ofNullable(System.getenv("DMJ_PDF_SUBJECT")).orElse("").trim();
     String keywords = Optional.ofNullable(System.getenv("DMJ_PDF_KEYWORDS")).orElse("").trim();
     String creator  = Optional.ofNullable(System.getenv("DMJ_PDF_CREATOR")).orElse("").trim();
     String producer = Optional.ofNullable(System.getenv("DMJ_PDF_PRODUCER")).orElse("").trim();
-    String verStr   = Optional.ofNullable(System.getenv("DMJ_PDF_VERSION")).orElse("").trim(); // e.g. "1.7"
-    String created  = Optional.ofNullable(System.getenv("DMJ_PDF_CREATED_ON")).orElse("").trim();   // ISO-8601 or epoch seconds; blank = keep / set if missing
-    String modified = Optional.ofNullable(System.getenv("DMJ_PDF_MODIFIED_ON")).orElse("").trim();  // ISO-8601 or epoch seconds; blank = "now"
+    String verStr   = Optional.ofNullable(System.getenv("DMJ_PDF_VERSION")).orElse("").trim();
+    String created  = Optional.ofNullable(System.getenv("DMJ_PDF_CREATED_ON")).orElse("").trim();
+    String modified = Optional.ofNullable(System.getenv("DMJ_PDF_MODIFIED_ON")).orElse("").trim();
     boolean setDatesByDefault = !"0".equals(Optional.ofNullable(System.getenv("DMJ_PDF_SET_DATES")).orElse("1"));
 
-    // If literally nothing to change, return original bytes as-is.
     if (title.isEmpty() && author.isEmpty() && subject.isEmpty() && keywords.isEmpty()
         && creator.isEmpty() && producer.isEmpty() && verStr.isEmpty()
         && !setDatesByDefault && created.isEmpty() && modified.isEmpty()) {
@@ -966,7 +926,6 @@ public class SignerServer {
          ByteArrayOutputStream out = new ByteArrayOutputStream(in.length + 8192)) {
 
       PDDocumentInformation info = doc.getDocumentInformation();
-
       if (!title.isEmpty())    info.setTitle(title);
       if (!author.isEmpty())   info.setAuthor(author);
       if (!subject.isEmpty())  info.setSubject(subject);
@@ -974,7 +933,6 @@ public class SignerServer {
       if (!creator.isEmpty())  info.setCreator(creator);
       if (!producer.isEmpty()) info.setProducer(producer);
 
-      // Dates
       Calendar now = Calendar.getInstance();
       if (setDatesByDefault) {
         if (info.getCreationDate() == null) info.setCreationDate(now);
@@ -983,24 +941,17 @@ public class SignerServer {
       Calendar c;
       if (!(c = parseCal(created)).equals(NULL_CAL))  info.setCreationDate(c);
       if (!(c = parseCal(modified)).equals(NULL_CAL)) info.setModificationDate(c);
-
-      // Optional header PDF version (e.g., 1.7)
-      if (!verStr.isEmpty()) {
-        try { doc.setVersion(Float.parseFloat(verStr)); } catch (Exception ignore) { /* ignore bad value */ }
-      }
+      if (!verStr.isEmpty()) { try { doc.setVersion(Float.parseFloat(verStr)); } catch (Exception ignore) {} }
 
       doc.setDocumentInformation(info);
-      doc.save(out);                      // full rewrite with new Info (still unsigned)
+      doc.save(out);
       return out.toByteArray();
     } catch (Exception e) {
-      // Fail-open: never block signing just because metadata writing failed.
       return in;
     }
   }
 
   private static final Calendar NULL_CAL = new Calendar.Builder().setInstant(0L).build();
-
-  /** Accepts ISO-8601 (e.g., 2025-10-12T10:30:00Z), or epoch seconds; returns sentinel if cannot parse. */
   static Calendar parseCal(String txt) {
     if (txt == null || txt.isBlank()) return NULL_CAL;
     try {
@@ -1014,6 +965,205 @@ public class SignerServer {
     return NULL_CAL;
   }
 
+  // === TSA + DSS helpers =====================================================
+
+  /** Map digest JCA name to OID used by RFC 3161 messageImprint */
+  static String tsaDigestOid(String jca) {
+    return switch (jca.toUpperCase(Locale.ROOT)) {
+      case "SHA-1" -> "1.3.14.3.2.26";
+      case "SHA-224" -> "2.16.840.1.101.3.4.2.4";
+      case "SHA-256" -> "2.16.840.1.101.3.4.2.1";
+      case "SHA-384" -> "2.16.840.1.101.3.4.2.2";
+      case "SHA-512" -> "2.16.840.1.101.3.4.2.3";
+      default -> "2.16.840.1.101.3.4.2.1";
+    };
+  }
+
+  /** Basic RFC 3161 client (HTTP POST application/timestamp-query) */
+  static TimeStampToken requestTSToken(byte[] dataToHash, String jcaDigest) throws Exception {
+    String oid = tsaDigestOid(jcaDigest);
+    byte[] imprint = MessageDigest.getInstance(jcaDigest).digest(dataToHash);
+
+    TimeStampRequestGenerator gen = new TimeStampRequestGenerator();
+    gen.setCertReq(true);
+    if (!TSA_POLICY_OID.isBlank()) gen.setReqPolicy(new ASN1ObjectIdentifier(TSA_POLICY_OID));
+    TimeStampRequest req = gen.generate(new ASN1ObjectIdentifier(oid), imprint, new BigInteger(64, new SecureRandom()));
+    byte[] body = req.getEncoded();
+
+    HttpURLConnection conn = (HttpURLConnection) new URL(TSA_URL).openConnection();
+    conn.setConnectTimeout(TSA_TIMEOUT_MS);
+    conn.setReadTimeout(TSA_TIMEOUT_MS);
+    conn.setDoOutput(true);
+    conn.setRequestMethod("POST");
+    conn.setRequestProperty("Content-Type", "application/timestamp-query");
+    conn.setRequestProperty("Accept", "application/timestamp-reply");
+    if (!TSA_USER.isBlank() || !TSA_PASS.isBlank()) {
+      String basic = java.util.Base64.getEncoder().encodeToString((TSA_USER + ":" + TSA_PASS).getBytes(StandardCharsets.UTF_8));
+      conn.setRequestProperty("Authorization", "Basic " + basic);
+    }
+    try (OutputStream os = conn.getOutputStream()) { os.write(body); }
+    int code = conn.getResponseCode();
+    if (code != 200) throw new IOException("TSA HTTP " + code);
+    byte[] resp;
+    try (InputStream is = conn.getInputStream()) { resp = is.readAllBytes(); }
+    TimeStampResponse tsr = new TimeStampResponse(resp);
+    tsr.validate(req);
+    if (tsr.getTimeStampToken() == null) throw new IOException("TSA response without token, status=" + tsr.getStatus());
+    return tsr.getTimeStampToken();
+  }
+
+  /** Add signature-time-stamp (id-aa-signatureTimeStampToken) to first signer. */
+  static CMSSignedData addSignatureTimeStampAttribute(CMSSignedData cms) throws Exception {
+    Collection<SignerInformation> signers = cms.getSignerInfos().getSigners();
+    if (signers.isEmpty()) return cms;
+    SignerInformation si = signers.iterator().next();
+
+    // Hash the raw signature value per RFC 3161 guidance for signature-time-stamp
+    byte[] sigValue = si.getSignature();
+    TimeStampToken token = requestTSToken(sigValue, TSA_HASH);
+
+    Attribute tsAttr = new Attribute(PKCSObjectIdentifiers.id_aa_signatureTimeStampToken,
+      new DERSet(ASN1Primitive.fromByteArray(token.getEncoded())));
+
+    AttributeTable unsigned = si.getUnsignedAttributes();
+    Map<org.bouncycastle.asn1.ASN1ObjectIdentifier, Attribute> map = new LinkedHashMap<>();
+    if (unsigned != null) map.putAll(unsigned.toHashtable());
+    map.put(PKCSObjectIdentifiers.id_aa_signatureTimeStampToken, tsAttr);
+
+    SignerInformation newSi = SignerInformation.replaceUnsignedAttributes(si, new AttributeTable(map));
+    SignerInformationStore newStore = new SignerInformationStore(Collections.singleton(newSi));
+    return CMSSignedData.replaceSigners(cms, newStore);
+  }
+
+  /** Create (or reuse) DSS and add Certs/CRLs (+ optional OCSP), and a VRI entry for the latest signature. */
+  static byte[] addDSS_LTV(byte[] pdf, List<X509Certificate> chain) throws Exception {
+    try (PDDocument doc = Loader.loadPDF(pdf);
+         ByteArrayOutputStream out = new ByteArrayOutputStream(pdf.length + 65536)) {
+
+      // Find last signature dictionary
+      PDSignature lastSig = null;
+      for (PDSignature s : doc.getSignatureDictionaries()) lastSig = s;
+      if (lastSig == null) return pdf;
+
+      byte[] cms = lastSig.getContents(pdf);
+      byte[] sigHash = MessageDigest.getInstance("SHA-1").digest(cms); // ETSI PAdES: VRI key = SHA-1 of signature value (hex, uppercase)
+      String sigHashHex = toHexUpper(sigHash);
+
+      // Prepare DSS containers
+      COSDictionary catalog = doc.getDocumentCatalog().getCOSObject();
+      catalog.setNeedToBeUpdated(true);
+      COSDictionary dss = getOrCreateDict(catalog, "DSS");
+      COSDictionary vriBase = getOrCreateDict(dss, "VRI");
+      COSArray certsArr = getOrCreateArray(dss, "Certs");
+      COSArray crlsArr = getOrCreateArray(dss, "CRLs");
+      COSArray ocspsArr = getOrCreateArray(dss, "OCSPs"); // may remain empty
+
+      // Write chain into Certs
+      List<COSStream> chainStreams = new ArrayList<>();
+      for (X509Certificate xc : chain) {
+        COSStream s = doc.getDocument().createCOSStream();
+        try (OutputStream os = s.createOutputStream(COSName.FLATE_DECODE)) { os.write(xc.getEncoded()); }
+        chainStreams.add(s);
+        certsArr.add(s);
+      }
+
+      // Add CRL if available (publishes at $ICA_DIR/ica.crl and $PKI_PUB/ica.crl)
+      Path crlPath = Files.exists(ICA_DIR.resolve("ica.crl")) ? ICA_DIR.resolve("ica.crl") : PKI_PUB.resolve("ica.crl");
+      List<COSStream> crlStreams = new ArrayList<>();
+      if (Files.exists(crlPath)) {
+        byte[] crlBytes = Files.readAllBytes(crlPath);
+        COSStream cs = doc.getDocument().createCOSStream();
+        try (OutputStream os = cs.createOutputStream(COSName.FLATE_DECODE)) { os.write(crlBytes); }
+        crlsArr.add(cs);
+        crlStreams.add(cs);
+      }
+
+      // (Optional) OCSP – if you expose an OCSP URL, you can query and embed here.
+      // For B-LT CRL alone is sufficient per PAdES profile; keeping OCSP optional. (See PDFBox AddValidationInformation.) :contentReference[oaicite:3]{index=3}
+
+      // Build VRI for this signature
+      COSDictionary vri = new COSDictionary();
+      COSArray vriCerts = new COSArray(); chainStreams.forEach(vriCerts::add);
+      vri.setItem(COSName.CERT, vriCerts);
+      if (!crlStreams.isEmpty()) {
+        COSArray vriCrls = new COSArray(); crlStreams.forEach(vriCrls::add);
+        vri.setItem(COSName.CRL, vriCrls);
+      }
+      vri.setDate(COSName.TU, Calendar.getInstance());
+      vriBase.setItem(COSName.getPDFName(sigHashHex), vri);
+
+      // Mark Extensions per PAdES (ADBE extension level 5) – as in PDFBox example.
+      addPadesExtensions(doc);
+
+      // Save incremental
+      doc.saveIncremental(out);
+      return out.toByteArray();
+    }
+  }
+
+  static COSDictionary getOrCreateDict(COSDictionary parent, String name) {
+    COSBase el = parent.getDictionaryObject(name);
+    if (el instanceof COSDictionary d) { d.setNeedToBeUpdated(true); return d; }
+    COSDictionary d = new COSDictionary(); d.setDirect(false);
+    parent.setItem(COSName.getPDFName(name), d);
+    return d;
+  }
+  static COSArray getOrCreateArray(COSDictionary parent, String name) {
+    COSBase el = parent.getDictionaryObject(name);
+    if (el instanceof COSArray a) { a.setNeedToBeUpdated(true); return a; }
+    COSArray a = new COSArray(); parent.setItem(COSName.getPDFName(name), a); return a;
+  }
+  static void addPadesExtensions(PDDocument doc) {
+    COSDictionary dssExtensions = new COSDictionary(); dssExtensions.setDirect(true);
+    doc.getDocumentCatalog().getCOSObject().setItem(COSName.EXTENSIONS, dssExtensions);
+    COSDictionary adbeExtension = new COSDictionary(); adbeExtension.setDirect(true);
+    dssExtensions.setItem(COSName.ADBE, adbeExtension);
+    adbeExtension.setName(COSName.BASE_VERSION, "1.7");
+    adbeExtension.setInt(COSName.EXTENSION_LEVEL, 5);
+    doc.getDocumentCatalog().setVersion("1.7");
+  }
+
+  /** Append an ETSI.RFC3161 DocTimeStamp covering the whole document (for B‑LTA). */
+  static byte[] addDocumentTimeStamp(byte[] pdf) throws Exception {
+    if (TSA_URL.isBlank()) return pdf;
+    try (PDDocument doc = Loader.loadPDF(pdf);
+         ByteArrayOutputStream baos = new ByteArrayOutputStream(pdf.length + 65536)) {
+
+      PDSignature ts = new PDSignature();
+      ts.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+      ts.setSubFilter(PDSignature.SUBFILTER_ETSI_RFC3161);
+      ts.setName("Time Stamp");
+      ts.setSignDate(Calendar.getInstance());
+
+      SignatureOptions opts = new SignatureOptions();
+      opts.setPreferredSignatureSize(65536);
+
+      doc.addSignature(ts, opts);
+      ExternalSigningSupport ext = doc.saveIncrementalForExternalSigning(baos);
+      // Hash the exact byte ranges provided by PDFBox and ask TSA for a token over it.
+      byte[] contentBytes = IOUtils.toByteArray(ext.getContent());
+      TimeStampToken token = requestTSToken(contentBytes, TSA_HASH);
+      ext.setSignature(token.getEncoded());
+
+      return baos.toByteArray();
+    }
+  }
+
+  /** LTV/LTA post-process: add DSS (B‑LT) and optional Document Time‑Stamp (B‑LTA). */
+  static byte[] postProcessLTV_LTA(byte[] pdf, List<X509Certificate> chain) {
+    byte[] out = pdf;
+    try {
+      out = addDSS_LTV(out, chain); // B‑LT
+      if (ADD_DOC_TIMESTAMP && !TSA_URL.isBlank()) {
+        out = addDocumentTimeStamp(out); // B‑LTA
+      }
+    } catch (Exception e) {
+      log.warn("LTV/LTA post-processing failed: {}", String.valueOf(e));
+    }
+    return out;
+  }
+
+  // === HTTP API =============================================================
 
   public static void main(String[] args) throws Exception {
     String issuer = Optional.ofNullable(System.getenv("DMJ_ISSUER")).orElse("dmj.one");
@@ -1026,13 +1176,8 @@ public class SignerServer {
     Javalin app = Javalin.create(cfg -> {
       cfg.http.defaultContentType = "application/json";
       cfg.showJavalinBanner = false;
-      // Optional request logging in dev (toggle via env)
       boolean httpLog = !"0".equals(Optional.ofNullable(System.getenv("DMJ_HTTP_LOG")).orElse("1"));
-      if (httpLog) {
-        try {
-          cfg.bundledPlugins.enableDevLogging(); // emits per-request access logs
-        } catch (Throwable t) { /* ignore if plugin not available */ }
-      }
+      if (httpLog) { try { cfg.bundledPlugins.enableDevLogging(); } catch (Throwable t) { /* ignore */ } }
     });
 
     app.get("/", ctx -> ctx.result("ok"));
@@ -1048,7 +1193,7 @@ public class SignerServer {
       } catch (Exception e) {
         ctx.status(200).json(Map.of("hasSignature", false,"isValid", false,"issuedByUs", false,"coversDocument", false,"issuer","", "subFilter","", "error","exception: " + e.getClass().getSimpleName()));
       }
-    });    
+    });
 
     app.post("/bundle", ctx -> {
       String hmac = ctx.header(HMAC_HEADER), ts = ctx.header(HMAC_TS), nonce = ctx.header(HMAC_NONCE);
@@ -1057,25 +1202,26 @@ public class SignerServer {
       if (f==null){ ctx.status(400).json(Map.of("error","file missing")); return; }
       byte[] original = IOUtils.toByteArray(f.content());
 
-      // verify HMAC like /sign
       boolean ok;
       try { ok = verifyHmac(Optional.ofNullable(System.getenv("SIGNING_GATEWAY_HMAC_KEY")).orElse(""),
                             "POST", "/bundle", original, ts, nonce, hmac);
       } catch(Exception e){ ok=false; }
       if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
 
-      // sign and write bundle
-      // byte[] signed = signPdf(original, keys.priv, keys.chain);
-      byte[] prepared = applyDocInfoPreSign(original);             // ← NEW
-      byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← unchanged signing
-      String base = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
-      Path zipPath = writeBundleZip(signed, base);
-      String rel = "/dl/" + zipPath.getFileName().toString();
-      String url = PKI_BASE + rel;
-
-      ctx.json(Map.of("download", url));
+      try {
+        byte[] prepared = applyDocInfoPreSign(original);
+        byte[] signed = signPdf(prepared, keys.priv, keys.chain);
+        signed = postProcessLTV_LTA(signed, keys.chain);
+        String base = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
+        Path zipPath = writeBundleZip(signed, base);
+        String rel = "/dl/" + zipPath.getFileName().toString();
+        String url = PKI_BASE + rel;
+        ctx.json(Map.of("download", url));
+      } catch (Exception e) {
+        e.printStackTrace();
+        ctx.status(500).json(Map.of("error","bundle failed", "detail", String.valueOf(e)));
+      }
     });
-
 
     app.post("/sign", ctx -> {
       if (shared.isBlank()) { ctx.status(500).json(Map.of("error","server not configured")); return; }
@@ -1085,30 +1231,29 @@ public class SignerServer {
       if (f==null){ ctx.status(400).json(Map.of("error","file missing")); return; }
       byte[] data = IOUtils.toByteArray(f.content());
       boolean ok = false;
-      try { ok = verifyHmac(shared, "POST", "/sign", data, ts, nonce, hmac); } catch(Exception e){ ok=false; }      
-      if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }      
+      try { ok = verifyHmac(shared, "POST", "/sign", data, ts, nonce, hmac); } catch(Exception e){ ok=false; }
+      if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
 
       try {
-        // byte[] prepared = applyDocInfoPreSign(data);                 // ← NEW, metadata rewrite
-        // byte[] signed = signPdf(prepared, keys.priv, keys.chain);  // ← pass chain here        
-        // Issue a one-off document certificate (ephemeral keypair + ICA‑issued leaf)
         log.info("sign: issuing one-off doc cert, size={} bytes", data.length);
         String cn = "dmj.one Trusted File " + java.util.UUID.randomUUID().toString().substring(0,8).toUpperCase();
         DocMaterial dm = issueDocCert(cn);
+
         byte[] prepared = applyDocInfoPreSign(data);
         byte[] signed = signPdf(prepared, dm.priv, dm.chain);
+        signed = postProcessLTV_LTA(signed, dm.chain);
 
         ctx.contentType("application/pdf");
         ctx.header("X-Signed-By", issuer);
         ctx.header("X-Cert-Serial", dm.serialHex);
         ctx.result(new ByteArrayInputStream(signed));
       } catch (Exception e){
-        e.printStackTrace(); // visible in journald
+        e.printStackTrace();
         ctx.status(500).json(Map.of("error","sign failed", "detail", String.valueOf(e)));
-       }
+      }
     });
 
-    // HMAC‑gated: revoke by serial (updates CRL and restarts OCSP)
+    // HMAC‑gated: revoke by serial (updates CRL and publishes)
     app.post("/revoke", ctx -> {
       String hmac = ctx.header(HMAC_HEADER), ts = ctx.header(HMAC_TS), nonce = ctx.header(HMAC_NONCE);
       if (hmac==null || ts==null || nonce==null) { ctx.status(401).json(Map.of("error","missing auth")); return; }
@@ -1273,6 +1418,12 @@ keyUsage = critical, digitalSignature
 extendedKeyUsage = OCSPSigning
 authorityInfoAccess = OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
+[ tsa ]
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, timeStamping
+authorityInfoAccess = OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
+crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ crl_ext ]
 authorityKeyIdentifier = keyid:always
 EOF
@@ -1315,6 +1466,39 @@ if [ ! -f "${OCSP_DIR}/ocsp.crt" ] || [ "$DMJ_REISSUE_OCSP" = "1" ]; then
   openssl ca -batch -config "${ICA_DIR}/openssl.cnf" -extensions ocsp \
     -in "${OCSP_DIR}/ocsp.csr" -out "${OCSP_DIR}/ocsp.crt" -days 825 -md sha256 -notext
 fi
+
+# TSA certificate (EKU=timeStamping)
+if [ ! -f "${TSA_DIR}/tsa.crt" ] || [ "${DMJ_REISSUE_TSA:-0}" = "1" ]; then
+  say "[+] Issuing TSA certificate ..."
+  openssl genrsa -out "${TSA_DIR}/tsa.key" 4096
+  openssl req -new -sha256 \
+    -subj "/C=${COUNTRY}/O=${ORG_NAME}/CN=${TSA_CN}" \
+    -key "${TSA_DIR}/tsa.key" -out "${TSA_DIR}/tsa.csr"
+  openssl ca -batch -config "${ICA_DIR}/openssl.cnf" -extensions tsa \
+    -in "${TSA_DIR}/tsa.csr" -out "${TSA_DIR}/tsa.crt" -days 825 -md sha256 -notext
+  sudo chmod 0600 "${TSA_DIR}/tsa.key"
+fi
+
+# OpenSSL TS responder config (used by tiny TSA HTTP wrapper)
+sudo tee "${TSA_DIR}/ts.cnf" >/dev/null <<EOF
+[ tsa ]
+default_tsa = tsa_config1
+[ tsa_config1 ]
+dir = ${TSA_DIR}
+serial = \$dir/tsa-serial
+signer_cert = \$dir/tsa.crt
+certs = ${ICA_DIR}/ica.crt
+signer_key = \$dir/tsa.key
+default_policy = ${DMJ_TSA_POLICY_OID:-1.3.6.1.4.1.55555.1.1}
+other_policies = 1.3.6.1.4.1.55555.1.2
+digests = sha256, sha384, sha512
+accuracy = secs:1, millisecs:1, microsecs:1
+ordering = yes
+tsa_name = yes
+ess_cert_id_chain = yes
+EOF
+[ -f "${TSA_DIR}/tsa-serial" ] || echo 01 | sudo tee "${TSA_DIR}/tsa-serial" >/dev/null
+
 
 
 # Signer (leaf) + PKCS#12 used by the Java service
@@ -1572,11 +1756,6 @@ sudo install -m 0644 "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
 sudo install -m 0644 "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
 sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
 
-# sudo nginx -t && sudo systemctl reload nginx
-# Ensure runtime ownership **before** any service starts (OCSP must read index/serial)
-# sudo chown -R "$DMJ_USER:$DMJ_USER" "/opt/dmj/pki/ica" "/opt/dmj/pki/ocsp" "/opt/dmj/signer-vm" "/var/log/dmj" "/opt/dmj/pki/pub/dl"
-# sudo chmod 600 "/opt/dmj/pki/ica/ica.key" "/opt/dmj/pki/ocsp/ocsp.key" 2>/dev/null || true
-
 sudo tee /usr/local/bin/dmj-refresh-crl >/dev/null <<REFRESHCRL
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1587,57 +1766,50 @@ install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"   # ensure AIA/CDP pat
 REFRESHCRL
 sudo chmod +x /usr/local/bin/dmj-refresh-crl
 
+# Minimal Node.js HTTP TSA (RFC 3161 over HTTP POST)
+sudo tee /usr/local/bin/dmj-tsa.js >/dev/null <<'TSASRV'
+#!/usr/bin/env node
+"use strict";
+const http = require('http'), { spawn } = require('child_process');
+const PORT = parseInt(process.env.DMJ_TSA_PORT || "9090", 10);
+const TS_CONF = process.env.DMJ_TSA_CONF || "/opt/dmj/pki/tsa/ts.cnf";
+const BASIC_USER = process.env.DMJ_TSA_BASIC_USER || "";
+const BASIC_PASS = process.env.DMJ_TSA_BASIC_PASS || "";
+function unauthorized(res){ res.writeHead(401, {'www-authenticate':'Basic realm="dmj-tsa"'}); res.end(); }
+function ok(res, body){ res.writeHead(200, {'content-type':'application/timestamp-reply','cache-control':'no-store'}); res.end(body); }
+function bad(res, code, msg){ res.writeHead(code||500, {'content-type':'text/plain'}); res.end(msg||'error'); }
+const server = http.createServer((req,res)=>{
+  if(req.method==='GET' && req.url==='/healthz'){ res.writeHead(200,{'content-type':'text/plain'}); return res.end('ok'); }
+  if(req.method!=='POST'){ return bad(res,405,'method not allowed'); }
+  if((req.headers['content-type']||'').indexOf('application/timestamp-query')!==0){ return bad(res,415,'content-type'); }
+  if(BASIC_USER){
+    const hdr = req.headers['authorization']||'';
+    const okAuth = hdr.startsWith('Basic ') && (()=>{
+      try { const [u,p] = Buffer.from(hdr.slice(6),'base64').toString('utf8').split(':'); return u===BASIC_USER && p===BASIC_PASS; }
+      catch(_){ return false; }
+    })();
+    if(!okAuth) return unauthorized(res);
+  }
+  const bufs=[]; req.on('data',c=>bufs.push(c)).on('end',()=>{
+    const q = Buffer.concat(bufs);
+    const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-queryfile','-']);
+    const outs=[]; let err='';
+    openssl.stdout.on('data',d=>outs.push(d));
+    openssl.stderr.on('data',d=>err+=d);
+    openssl.on('close', rc=>{
+      if(rc===0) return ok(res, Buffer.concat(outs));
+      bad(res,500,'tsa failure'); 
+    });
+    openssl.stdin.end(q);
+  });
+});
+server.listen(PORT,'127.0.0.1',()=>console.log(`dmj-tsa listening on :${PORT}`));
+TSASRV
+sudo chmod 0755 /usr/local/bin/dmj-tsa.js
 
 say "[+] Building Java signer..."
 ( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
 fix_perms
-
-# # Systemd service
-# say "[+] Creating dmj-signer Service..."
-# sudo tee /etc/systemd/system/dmj-signer.service >/dev/null <<SERVICE
-# [Unit]
-# Description=DMJ Signer Microservice
-# After=network.target
-
-# [Service]
-# User=root
-# Environment=DMJ_PDF_TITLE=
-# Environment=DMJ_PDF_AUTHOR="Divya Mohan | dmj.one and its stakeholders."
-# Environment=DMJ_PDF_SUBJECT="Verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-# Environment=DMJ_PDF_KEYWORDS=
-# Environment=DMJ_PDF_CREATOR="dmj.one Trust Services"
-# Environment=DMJ_PDF_PRODUCER="dmj.one Signer"
-# Environment=DMJ_PDF_VERSION=1.7            # optional; header like %PDF-1.7
-# Environment=DMJ_PDF_SET_DATES=1            # 1=set dates by default, 0=don’t touch
-# Environment=DMJ_PDF_CREATED_ON=            # ISO-8601 or epoch secs; blank uses existing/now
-# Environment=DMJ_PDF_MODIFIED_ON=           # ISO-8601 or epoch secs; blank -> now
-# Environment=SIGNING_GATEWAY_HMAC_KEY=${SIGNING_GATEWAY_HMAC_KEY}
-# Environment=DMJ_ISSUER=${DMJ_ROOT_DOMAIN}
-# Environment=DMJ_PKI_PUB=${PKI_PUB}
-# Environment=DMJ_PKI_BASE=${AIA_SCHEME}://${PKI_DOMAIN}
-# Environment=DMJ_SIGNER_WORK_DIR=${SIGNER_DIR}
-# Environment=DMJ_P12_ALIAS=${PKCS12_ALIAS}
-# Environment=DMJ_HMAC_HEADER=${WORKER_HMAC_HEADER}
-# Environment=DMJ_HMAC_TS_HEADER=${WORKER_HMAC_TS_HEADER}
-# Environment=DMJ_HMAC_NONCE_HEADER=${WORKER_HMAC_NONCE_HEADER}
-# Environment=DMJ_SIGNER_PORT_FILE=/etc/dmj/signer.port
-# Environment=DMJ_SIG_NAME="${DMJ_ROOT_DOMAIN}"
-# Environment=DMJ_SIG_LOCATION="${COUNTRY}"
-# Environment=DMJ_CONTACT_EMAIL="${SUPPORT_EMAIL}"
-# Environment=DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-# ExecStart=/usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar
-# Restart=on-failure
-# WorkingDirectory=${SIGNER_DIR}
-
-# [Install]
-# WantedBy=multi-user.target
-# SERVICE
-
-# sudo systemctl daemon-reload
-# sudo systemctl enable --now dmj-signer.service
-# # Restart Signer
-# sudo systemctl restart dmj-signer.service
-# sudo systemctl status dmj-signer --no-pager
 
 ### --- Single “stack” entrypoint and unit (Signer + OCSP under dmjsvc) -------
 say "[+] Writing environment file for the stack..."
@@ -1673,34 +1845,28 @@ DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
 DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
 DMJ_LOG_VERBOSE=0
 DMJ_HTTP_LOG=0
+
+# --- PAdES / TSA / LTV-LTA ---------------------------------------------------
+# RFC 3161 TSA endpoint used for:
+#  • Signature-time-stamp (unsigned attr id-aa-signatureTimeStampToken) → B‑T
+#  • DocTimeStamp (ETSI.RFC3161) after DSS → B‑LTA
+# Leave DMJ_TSA_URL empty to disable all timestamping.
+DMJ_TSA_URL=
+DMJ_TSA_USER=
+DMJ_TSA_PASS=
+DMJ_TSA_POLICY_OID=1.3.6.1.4.1.55555.1.1   # default private OID, change if you have a policy
+DMJ_TSA_HASH=SHA-256
+DMJ_TSA_TIMEOUT_MS=10000
+DMJ_TS_ON_SIGNATURE=1
+DMJ_ADD_DOC_TIMESTAMP=1
+
+# Optional explicit OCSP URL for DSS/VRI (B‑LT). Defaults to local ocsp.*.
+DMJ_OCSP_URL=${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
+
 ENV
 sudo chmod 0640 "$DMJ_ENV_FILE"
 
 say "[+] Creating dmj-stack supervisor..."
-# sudo tee /usr/local/bin/dmj-stack >/dev/null <<STACK
-# #!/usr/bin/env bash
-# set -euo pipefail
-# umask 077
-
-# mkdir -p "$LOG_DIR"
-# trap 'trap - TERM INT; kill 0' TERM INT
-
-# # OCSP (port 9080)
-# /usr/bin/openssl ocsp \
-#   -index ${ICA_DIR}/index.txt \
-#   -CA ${ICA_DIR}/ica.crt \
-#   -rsigner ${OCSP_DIR}/ocsp.crt \
-#   -rkey ${OCSP_DIR}/ocsp.key \
-#   -port 9080 -text -nmin 5 -no_nonce \
-#   -out "${LOG_DIR}/ocsp.log" &
-# OCSP_PID=\$!
-
-# # Signer (Java)
-# /usr/bin/java -jar ${SIGNER_DIR}/target/dmj-signer-1.0.0.jar &
-# SIGNER_PID=\$!
-
-# wait -n "\$OCSP_PID" "\$SIGNER_PID"
-# STACK
 sudo tee /usr/local/bin/dmj-stack >/dev/null <<'STACK'
 #!/bin/bash
 set -euo pipefail
@@ -1717,6 +1883,12 @@ JAVA_BIN="${DMJ_JAVA_BIN:-/usr/bin/java}"
 # Verbose journald toggle (1=debug, 0=info)
 VERBOSE="${DMJ_LOG_VERBOSE:-1}"
 [[ "$VERBOSE" = "1" ]] && set -x || true
+
+# TSA env for the tiny HTTP service
+export DMJ_TSA_PORT="${DMJ_TSA_PORT:-9090}"
+export DMJ_TSA_CONF="${DMJ_TSA_CONF:-/opt/dmj/pki/tsa/ts.cnf}"
+export DMJ_TSA_BASIC_USER="${DMJ_TSA_BASIC_USER:-}"
+export DMJ_TSA_BASIC_PASS="${DMJ_TSA_BASIC_PASS:-}"
 
 
 # Small in-memory ring log (journald still has the full stream)
@@ -1769,6 +1941,9 @@ run_forever ocsp "$OPENSSL_BIN" ocsp \
   -rsigner "${OCSP_DIR}/ocsp.crt" \
   -rkey    "${OCSP_DIR}/ocsp.key" \
   -port 9080 -text -nmin 5 -no_nonce &
+
+# TSA (RFC 3161 over HTTP via Node -> openssl ts -reply)
+run_forever tsa /usr/bin/node /usr/local/bin/dmj-tsa.js &
 
 # Signer (Java) with configurable log level and HTTP access logging toggle
 JAVA_LOG_LEVEL=$([[ "$VERBOSE" = "1" ]] && echo "debug" || echo "info")
@@ -1890,41 +2065,13 @@ sudo nginx -t && sudo systemctl reload nginx
 say "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 
 
-# # --- OCSP responder (OpenSSL) behind NGINX ocsp.${DMJ_ROOT_DOMAIN} ----------
-# say "[+] Creating OSCP Responder nginx..."
-# sudo tee /etc/systemd/system/dmj-ocsp.service >/dev/null <<OCSP
-# [Unit]
-# Description=dmj.one OCSP Responder
-# After=network.target
-
-# [Service]
-# ExecStart=/usr/bin/openssl ocsp \
-#   -index ${ICA_DIR}/index.txt \
-#   -CA     ${ICA_DIR}/ica.crt \
-#   -rsigner ${OCSP_DIR}/ocsp.crt \
-#   -rkey    ${OCSP_DIR}/ocsp.key \
-#   -port 9080 \
-#   -text -nmin 5 -no_nonce \
-#   -out /var/log/dmj/ocsp.log
-# Restart=always
-# RestartSec=5s
-# WorkingDirectory=${OCSP_DIR}
-
-# [Install]
-# WantedBy=multi-user.target
-# OCSP
-# sudo systemctl daemon-reload
-# sudo systemctl enable --now dmj-ocsp.service
-# sudo systemctl restart dmj-ocsp.service
-# sudo systemctl status dmj-ocsp --no-pager
-
-
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
 # First, remove conflicting/legacy sites so our servers aren't ignored.
 say "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
 sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
 sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
 
 sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
 server {
@@ -1953,6 +2100,8 @@ server {
     types {
       application/pkix-cert crt cer;
       application/pkix-crl  crl;
+      application/timestamp-reply tsr;
+      application/timestamp-query tsq;
       application/zip       zip;
     }
   }
@@ -1992,6 +2141,8 @@ server {
     types {
       application/pkix-cert crt cer;
       application/pkix-crl  crl;
+      application/timestamp-reply tsr;
+      application/timestamp-query tsq;
       application/zip       zip;
     }
   }
@@ -2046,32 +2197,69 @@ server {
 }
 NGX
 
+# --- NGINX: TSA (HTTP RFC 3161) ---------------------------------------------
+sudo tee /etc/nginx/sites-available/dmj-tsa >/dev/null <<NGX
+server {
+  listen 80;
+  server_name ${TSA_DOMAIN};
+
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
+  error_log  syslog:server=unix:/dev/log warn;
+
+  client_max_body_size 512k;
+  client_body_timeout  30s;
+  proxy_read_timeout   30s;
+
+  location / {
+    # Only POST / (application/timestamp-query) and GET /healthz
+    if (\$request_method !~ ^(POST|GET)$) { return 405; }
+    if (\$request_method = GET ) { try_files \$uri =404; }
+    proxy_pass         http://127.0.0.1:9090;
+    proxy_http_version 1.1;
+    proxy_set_header   Host \$host;
+    proxy_set_header   Content-Length \$content_length;
+    proxy_set_header   Content-Type   \$http_content_type;
+    proxy_buffering    off;
+    add_header         X-Content-Type-Options "nosniff" always;
+  }
+}
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${TSA_DOMAIN};
+
+  ssl_certificate     /etc/letsencrypt/live/${TSA_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${TSA_DOMAIN}/privkey.pem;
+
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
+  error_log  syslog:server=unix:/dev/log warn;
+
+  client_max_body_size 512k;
+  client_body_timeout  30s;
+  proxy_read_timeout   30s;
+
+  location / {
+    if (\$request_method !~ ^(POST|GET)$) { return 405; }
+    if (\$request_method = GET ) { try_files \$uri =404; }
+    proxy_pass         http://127.0.0.1:9090;
+    proxy_http_version 1.1;
+    proxy_set_header   Host \$host;
+    proxy_set_header   Content-Length \$content_length;
+    proxy_set_header   Content-Type   \$http_content_type;
+    proxy_buffering    off;
+    add_header         X-Content-Type-Options "nosniff" always;
+  }
+}
+NGX
+
 sudo ln -sf /etc/nginx/sites-available/dmj-pki  /etc/nginx/sites-enabled/dmj-pki
 sudo ln -sf /etc/nginx/sites-available/dmj-ocsp /etc/nginx/sites-enabled/dmj-ocsp
+sudo ln -sf /etc/nginx/sites-available/dmj-tsa /etc/nginx/sites-enabled/dmj-tsa
 sudo nginx -t && sudo systemctl reload nginx
 sudo -u www-data test -r /opt/dmj/pki/pub/ica.crt && echo "WWW ZIP FAIL:nginx can read ica.crt" || echo "WWW ZIP FAIL: nginx cannot read ica.crt"
 
-# say "[+] Adding Cron Job..."
-# # Cron job schedule: Every day at 2:00 AM
-# CRON_SCHEDULE="0 2 * * *"
-# COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
-# CRON_JOB="$CRON_SCHEDULE $COMMAND"
-
-# # Safely get existing crontab or empty if none exists
-# existing_cron=$(crontab -l 2>/dev/null || true)
-
-# # Filter out any existing lines matching COMMAND
-# filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" || true)
-
-# # Add new cron job line
-# new_cron=$(printf "%s\n%s\n" "$filtered_cron" "$CRON_JOB")
-
-# # Install new crontab
-# printf "%s\n" "$new_cron" | crontab -
-
-# echo "Cron job added:"
-# echo "$CRON_JOB"
-
+say "[+] Adding Cron Job..."
+# Cron job schedule: Every day at 2:00 AM
 echo "[+] Adding Cron Job..."
 
 # Cron job schedules
@@ -2092,8 +2280,6 @@ filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" | grep -Fv "$CRON_JO
 # Add new cron job lines
 new_cron=$(printf "%s\n%s\n%s\n" "$filtered_cron" "$CRON_JOB" "$CRON_JOB2")
 
-# # Install new crontab
-# printf "%s\n" "$new_cron" | crontab -
 
 # Install/replace user crontab
 printf "%s\n" "$new_cron" | sudo crontab -u "$DMJ_USER" -
@@ -2103,40 +2289,6 @@ echo "$CRON_JOB"
 echo "$CRON_JOB2"
 
 # Write the fixer script
-# sudo tee /usr/local/bin/dmj-fix-perms >/dev/null <<'SH'
-# #!/usr/bin/env bash
-# set -euo pipefail
-# DMJ_USER="${DMJ_USER:-dmjsvc}"
-# WORKER_DIR="/opt/dmj/worker"; SIGNER_DIR="/opt/dmj/signer-vm"; PKI_DIR="/opt/dmj/pki"; LOG_DIR="/var/log/dmj"
-
-# chown -R "$DMJ_USER:$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" "$LOG_DIR" 2>/dev/null || true
-# find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type d -exec chmod 0750 {} + 2>/dev/null || true
-# find "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR" -type f -exec chmod 0640 {} + 2>/dev/null || true
-# chmod 0600 "$SIGNER_DIR"/keystore.p12 "$SIGNER_DIR"/keystore.pass "$SIGNER_DIR"/signer.key 2>/dev/null || true
-# chmod 0600 "$PKI_DIR"/ica/ica.key "$PKI_DIR"/ocsp/ocsp.key 2>/dev/null || true
-# [ -f "$SIGNER_DIR/target/dmj-signer-1.0.0.jar" ] && chmod 0644 "$SIGNER_DIR/target/dmj-signer-1.0.0.jar"
-# if command -v setfacl >/dev/null 2>&1; then
-#   for p in "$WORKER_DIR" "$SIGNER_DIR" "$PKI_DIR"; do
-#     setfacl -m "u:${DMJ_USER}:rwX" "$p" || true
-#     setfacl -d -m "u:${DMJ_USER}:rwX" "$p" || true
-#   done
-# fi
-# # Give the service user full ownership of ICA + OCSP + PUB (including CRLs)
-# sudo chown -R dmjsvc:dmjsvc /opt/dmj/pki/ica /opt/dmj/pki/ocsp /opt/dmj/pki/pub
-
-# # CA database files must be writable by dmjsvc
-# sudo chmod 640 /opt/dmj/pki/ica/index.txt* /opt/dmj/pki/ica/serial /opt/dmj/pki/ica/crlnumber
-
-# # The newcerts dir must be traversable & readable
-# sudo chmod 750 /opt/dmj/pki/ica /opt/dmj/pki/ica/newcerts
-
-# # IMPORTANT: nginx must be able to read PKI_PUB, so keep it world‑readable,
-# # while still letting dmjsvc write new CRLs there:
-# sudo chmod 755 /opt/dmj/pki/pub
-
-# # If index.txt.attr is missing, create it (OpenSSL reads it):
-# sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
-# SH
 sudo tee /usr/local/bin/dmj-fix-perms >/dev/null <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -3995,6 +4147,20 @@ if ! curl -fsS --max-time 5 "https://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; th
   if curl -fsS --max-time 5 "http://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; then PKI_PROTO="http"; fi
 fi
 
+TSA_PROTO="https"
+if ! curl -fsS --max-time 5 "https://${TSA_DOMAIN}/healthz" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "http://${TSA_DOMAIN}/healthz" >/dev/null 2>&1; then TSA_PROTO="http"; fi
+fi
+
+# Patch signer env with the detected TSA URL (keep AIA scheme for PKI)
+sudo sed -i "s|^DMJ_TSA_URL=.*|DMJ_TSA_URL=${TSA_PROTO}://${TSA_DOMAIN}/|" "${DMJ_ENV_FILE}"
+
+# Optional Basic Auth credentials for TSA (if you set them, signer will use them)
+if ! grep -q '^DMJ_TSA_USER=' "${DMJ_ENV_FILE}"; then
+  echo "DMJ_TSA_USER=" | sudo tee -a "${DMJ_ENV_FILE}" >/dev/null
+  echo "DMJ_TSA_PASS=" | sudo tee -a "${DMJ_ENV_FILE}" >/dev/null
+fi
+
 # wrangler configuration (use JSONC as per latest recommendation)
 as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
 {
@@ -4013,8 +4179,8 @@ as_dmj tee "${WORKER_DIR}/wrangler.jsonc" >/dev/null <<JSON
   "vars": {
     "ISSUER":        "${DMJ_ROOT_DOMAIN}",
     "SIGNER_API_BASE": "${SIGNER_PROTO}://${SIGNER_DOMAIN}",
-    "DB_PREFIX":     "${DB_PREFIX}",
-    "PKI_BASE":      "${SIGNER_PROTO}://${PKI_DOMAIN}",
+    "DB_PREFIX":     "${DB_PREFIX}",    
+    "PKI_BASE":      "${PKI_PROTO}://${PKI_DOMAIN}",
     "BUNDLE_TRUST_KIT": "1",            // 1 = return a zip bundle (PDF + Trust Kit)
     "ADMIN_PATH":    "${ADMIN_PATH}",   // randomized each run
     "WORKER_HMAC_HEADER": "${WORKER_HMAC_HEADER}",
