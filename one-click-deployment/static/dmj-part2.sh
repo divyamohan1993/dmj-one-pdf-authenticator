@@ -61,7 +61,7 @@ sudo mkdir -p "${TSA_DIR}"
 # dl/ must be writable by the non‑root service user for ad‑hoc bundles
 sudo chown "${DMJ_USER}:${DMJ_USER}" "${DL_DIR}"
 sudo chmod 755 "${PKI_PUB}" "${DL_DIR}"
-+sudo chown -R "${DMJ_USER}:${DMJ_USER}" "${TSA_DIR}"
+sudo chown -R "${DMJ_USER}:${DMJ_USER}" "${TSA_DIR}"
 
 find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete
 
