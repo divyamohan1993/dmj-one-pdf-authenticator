@@ -1,0 +1,53 @@
+# Git attributes for consistent line endings and language detection
+
+# Auto detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# Source code
+*.java text diff=java
+*.js text diff=javascript
+*.ts text diff=typescript
+*.json text
+*.xml text
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Documentation
+*.md text diff=markdown
+*.txt text
+*.adoc text
+*.tex text
+
+# Configuration files
+*.yml text
+*.yaml text
+*.toml text
+*.ini text
+*.conf text
+.editorconfig text
+.gitignore text
+.gitattributes text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.jar binary
+*.war binary
+*.ear binary
+*.class binary
+*.so binary
+*.dll binary
+*.dylib binary
+
+# Exclude files from export
+.github/ export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+.editorconfig export-ignore

@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    name: Build and Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: worker/package.json
+      
+      - name: Build Java Signer Service
+        run: |
+          cd signer-vm
+          mvn clean package -DskipTests
+          mv target/*.jar target/pdf-signer-${{ github.ref_name }}.jar
+      
+      - name: Build Worker
+        run: |
+          cd worker
+          npm ci
+          npx tsc
+      
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          # Extract changelog section for this version
+          VERSION="${{ github.ref_name }}"
+          echo "Generating release notes for $VERSION"
+          
+          cat > release_notes.md << 'EOF'
+          ## What's Changed
+          
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          
+          ## Installation
+          
+          ### Cloudflare Worker
+          1. Clone this repository
+          2. Navigate to `worker/` directory
+          3. Run `npm install`
+          4. Configure `wrangler.toml` with your settings
+          5. Deploy with `npm run deploy`
+          
+          ### Java Signer Service
+          1. Download `pdf-signer-${{ github.ref_name }}.jar` from assets below
+          2. Follow setup instructions in `signer-vm/` directory
+          3. Configure systemd service as described in documentation
+          
+          ## Attribution Required
+          
+          This software is licensed under the Attribution Assurance License.
+          **You must provide attribution** to the original author in any use.
+          See [LICENSE](https://github.com/${{ github.repository }}/blob/main/LICENSE) for details.
+          EOF
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            signer-vm/target/pdf-signer-${{ github.ref_name }}.jar
+            worker/wrangler.toml
+            LICENSE
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update CHANGELOG
+        run: |
+          echo "📝 Don't forget to update CHANGELOG.md for the next version!"

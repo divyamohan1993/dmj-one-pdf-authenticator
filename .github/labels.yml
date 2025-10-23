@@ -1,0 +1,201 @@
+# GitHub Labels Configuration
+# This file documents the recommended labels for issue and PR management
+# To apply these labels, use the GitHub UI or the GitHub CLI
+
+## Priority Labels
+- name: "priority: critical"
+  color: "b60205"
+  description: "Critical priority - requires immediate attention"
+
+- name: "priority: high"
+  color: "d93f0b"
+  description: "High priority - should be addressed soon"
+
+- name: "priority: medium"
+  color: "fbca04"
+  description: "Medium priority - normal queue"
+
+- name: "priority: low"
+  color: "0e8a16"
+  description: "Low priority - nice to have"
+
+## Type Labels
+- name: "type: bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "type: feature"
+  color: "a2eeef"
+  description: "New feature or request"
+
+- name: "type: enhancement"
+  color: "84b6eb"
+  description: "Improvement to existing functionality"
+
+- name: "type: documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "type: question"
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: "type: security"
+  color: "b60205"
+  description: "Security-related issue"
+
+- name: "type: performance"
+  color: "1d76db"
+  description: "Performance improvement"
+
+## Status Labels
+- name: "status: needs-triage"
+  color: "ededed"
+  description: "Needs initial review and categorization"
+
+- name: "status: in-progress"
+  color: "0e8a16"
+  description: "Currently being worked on"
+
+- name: "status: blocked"
+  color: "b60205"
+  description: "Blocked by another issue or external factor"
+
+- name: "status: needs-review"
+  color: "fbca04"
+  description: "Needs code review"
+
+- name: "status: needs-testing"
+  color: "d4c5f9"
+  description: "Needs testing before merge"
+
+- name: "status: stale"
+  color: "ededed"
+  description: "No recent activity"
+
+## Component Labels
+- name: "component: worker"
+  color: "c5def5"
+  description: "Cloudflare Worker component"
+
+- name: "component: signer"
+  color: "c5def5"
+  description: "Java signing service component"
+
+- name: "component: database"
+  color: "c5def5"
+  description: "D1 database or migrations"
+
+- name: "component: ci-cd"
+  color: "c5def5"
+  description: "CI/CD pipelines and workflows"
+
+- name: "component: deployment"
+  color: "c5def5"
+  description: "Deployment scripts and configurations"
+
+- name: "component: pki"
+  color: "c5def5"
+  description: "PKI and certificate management"
+
+## Dependency Labels
+- name: "dependencies"
+  color: "0366d6"
+  description: "Pull requests that update a dependency file"
+
+- name: "npm"
+  color: "cb3837"
+  description: "NPM dependency updates"
+
+- name: "maven"
+  color: "c71a36"
+  description: "Maven dependency updates"
+
+- name: "java"
+  color: "b07219"
+  description: "Java-related changes"
+
+- name: "typescript"
+  color: "3178c6"
+  description: "TypeScript-related changes"
+
+- name: "github-actions"
+  color: "2088ff"
+  description: "GitHub Actions workflow updates"
+
+## Community Labels
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention is needed"
+
+- name: "duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "invalid"
+  color: "e4e669"
+  description: "This doesn't seem right"
+
+- name: "wontfix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+## Special Labels
+- name: "breaking change"
+  color: "b60205"
+  description: "Introduces a breaking change"
+
+- name: "backwards compatible"
+  color: "0e8a16"
+  description: "Change is backwards compatible"
+
+- name: "needs-discussion"
+  color: "d876e3"
+  description: "Requires team discussion before proceeding"
+
+- name: "RFC"
+  color: "d4c5f9"
+  description: "Request for comments"
+
+---
+
+## How to Apply These Labels
+
+### Using GitHub CLI:
+```bash
+# Install GitHub CLI if not already installed
+# https://cli.github.com/
+
+# Create all labels (run from repository root)
+gh label create "priority: critical" --color b60205 --description "Critical priority - requires immediate attention"
+gh label create "priority: high" --color d93f0b --description "High priority - should be addressed soon"
+# ... (repeat for all labels)
+```
+
+### Using GitHub API:
+```bash
+# Using curl with GitHub API
+curl -X POST \
+  -H "Authorization: token YOUR_TOKEN" \
+  -H "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/repos/divyamohan1993/dmj-one-pdf-authenticator/labels \
+  -d '{"name":"priority: critical","color":"b60205","description":"Critical priority - requires immediate attention"}'
+```
+
+### Using GitHub Web UI:
+1. Go to repository → Issues → Labels
+2. Click "New label"
+3. Enter name, color, and description
+4. Click "Create label"
+
+## Label Usage Guidelines
+
+- Apply at least one **type** label to every issue/PR
+- Use **priority** labels for planning and triage
+- Add **component** labels to help with filtering
+- Use **status** labels to track progress
+- Keep labels up-to-date as work progresses
