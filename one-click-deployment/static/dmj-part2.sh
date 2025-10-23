@@ -1153,6 +1153,7 @@ public class SignerServer {
 JAVA
 fix_perms
 
+
 ### --- Build a branded two-tier PKI + OCSP + signer PKCS#12 -------------------
 say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
 sudo mkdir -p "${ROOT_DIR}/"{certs,newcerts,private} "${ICA_DIR}/"{certs,newcerts,private} "${OCSP_DIR}" "${PKI_PUB}"
