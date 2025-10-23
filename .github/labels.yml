@@ -1,6 +1,11 @@
 # GitHub Labels Configuration
+# 
+# NOTE: This is a DOCUMENTATION file for recommended labels.
+# GitHub does not automatically apply labels from this file.
+# To apply these labels, use the GitHub UI, GitHub CLI, or GitHub API.
+# See the "How to Apply These Labels" section at the end of this file.
+#
 # This file documents the recommended labels for issue and PR management
-# To apply these labels, use the GitHub UI or the GitHub CLI
 
 ## Priority Labels
 - name: "priority: critical"

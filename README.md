@@ -28,18 +28,26 @@
 
 ## Getting started
 
-See the `ops/` directory inside `signer‑vm` for a bootstrap script to set up the microservice on a fresh VM. Cloudflare secrets (e.g., admin password hash, HMAC key, TOTP master key) should be injected using `wrangler secret put`.
+🚀 **Quick Start:** See the [Quick Start Guide](QUICKSTART.md) for a 5-minute setup.
 
-For detailed deployment instructions, see the [one-click-deployment guide](one-click-deployment/readme.md).
+📖 **Full Guide:** See the [one-click-deployment guide](one-click-deployment/readme.md) for detailed deployment instructions.
+
+🛠️ **Development:** See the [Development Guide](DEVELOPMENT.md) for local development setup.
+
+For production deployment, see the `ops/` directory inside `signer‑vm` for a bootstrap script to set up the microservice on a fresh VM. Cloudflare secrets (e.g., admin password hash, HMAC key, TOTP master key) should be injected using `wrangler secret put`.
 
 ## Documentation
 
-- 📖 [Getting Started Guide](one-click-deployment/readme.md)
-- 🔧 [Configuration Reference](worker/wrangler.toml)
-- 🏗️ [Architecture Overview](ARCHITECTURE.md)
-- 🤝 [Contributing Guidelines](CONTRIBUTING.md)
-- 🔒 [Security Policy](SECURITY.md)
-- 💬 [Support](SUPPORT.md)
+- 🚀 [Quick Start Guide](QUICKSTART.md) - Get started in 5 minutes
+- 🛠️ [Development Guide](DEVELOPMENT.md) - Local development setup
+- 📖 [Deployment Guide](one-click-deployment/readme.md) - Production deployment
+- 🔧 [Configuration Reference](worker/wrangler.toml) - Worker configuration
+- 🏗️ [Architecture Overview](ARCHITECTURE.md) - System design and components
+- 🗺️ [Roadmap](ROADMAP.md) - Future plans and features
+- 🤝 [Contributing Guidelines](.github/CONTRIBUTING.md) - How to contribute
+- 🏛️ [Governance](.github/GOVERNANCE.md) - Project governance
+- 🔒 [Security Policy](.github/SECURITY.md) - Security and vulnerability reporting
+- 💬 [Support](.github/SUPPORT.md) - Getting help
 
 ## Community & Support
 
