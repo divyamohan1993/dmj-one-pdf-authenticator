@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "dmj-one PDF Authenticator"
+abstract: "A serverless zero-knowledge document signing and verification system built with Cloudflare Workers, D1, and a companion Java microservice."
+authors:
+  - family-names: "Mohan"
+    given-names: "Divya"
+    email: "contact@dmj.one"
+    affiliation: "dmj.one"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/divyamohan1993/dmj-one-pdf-authenticator"
+url: "https://github.com/divyamohan1993/dmj-one-pdf-authenticator"
+keywords:
+  - pdf
+  - digital-signature
+  - authentication
+  - cloudflare-workers
+  - serverless
+  - zero-knowledge
+  - document-verification
+  - pades
+  - cryptography
+license: "Attribution Assurance License"
+license-url: "https://github.com/divyamohan1993/dmj-one-pdf-authenticator/blob/main/LICENSE"
+version: 1.0.0
+date-released: 2025-01-01

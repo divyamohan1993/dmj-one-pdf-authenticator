@@ -1,6 +1,14 @@
-# dmj-one-pdf-authenticator
+# dmj-one PDF Authenticator
 
-This repository contains a serverless zero‑knowledge document signing and verification system built with Cloudflare Workers, D1, and a companion Java microservice.
+[![License: AAL](https://img.shields.io/badge/License-Attribution_Assurance-blue.svg)](LICENSE)
+[![CI/CD Pipeline](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/actions/workflows/ci.yml/badge.svg)](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/actions/workflows/codeql-analysis.yml)
+[![GitHub release](https://img.shields.io/github/v/release/divyamohan1993/dmj-one-pdf-authenticator)](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/releases)
+[![GitHub stars](https://img.shields.io/github/stars/divyamohan1993/dmj-one-pdf-authenticator?style=social)](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/stargazers)
+
+> **A serverless zero-knowledge document signing and verification system** built with Cloudflare Workers, D1, and a companion Java microservice.
+
+🔐 **Secure** • ⚡ **Serverless** • 🌐 **Scalable** • 🔍 **Zero-Knowledge**
 
 ## Features
 
@@ -20,8 +28,55 @@ This repository contains a serverless zero‑knowledge document signing and veri
 
 ## Getting started
 
-See the `ops/` directory inside `signer‑vm` for a bootstrap script to set up the microservice on a fresh VM. Cloudflare secrets (e.g., admin password hash, HMAC key, TOTP master key) should be injected using `wrangler secret put`.
+🚀 **Quick Start:** See the [Quick Start Guide](QUICKSTART.md) for a 5-minute setup.
 
-## License
+📖 **Full Guide:** See the [one-click-deployment guide](one-click-deployment/readme.md) for detailed deployment instructions.
 
-This project is licensed under the **MIT License**. See the `LICENSE` file for details.
+🛠️ **Development:** See the [Development Guide](DEVELOPMENT.md) for local development setup.
+
+For production deployment, see the `ops/` directory inside `signer‑vm` for a bootstrap script to set up the microservice on a fresh VM. Cloudflare secrets (e.g., admin password hash, HMAC key, TOTP master key) should be injected using `wrangler secret put`.
+
+## Documentation
+
+- 🚀 [Quick Start Guide](QUICKSTART.md) - Get started in 5 minutes
+- 🛠️ [Development Guide](DEVELOPMENT.md) - Local development setup
+- 📖 [Deployment Guide](one-click-deployment/readme.md) - Production deployment
+- 🔧 [Configuration Reference](worker/wrangler.toml) - Worker configuration
+- 🏗️ [Architecture Overview](ARCHITECTURE.md) - System design and components
+- 🗺️ [Roadmap](ROADMAP.md) - Future plans and features
+- 🤝 [Contributing Guidelines](.github/CONTRIBUTING.md) - How to contribute
+- 🏛️ [Governance](.github/GOVERNANCE.md) - Project governance
+- 🔒 [Security Policy](.github/SECURITY.md) - Security and vulnerability reporting
+- 💬 [Support](.github/SUPPORT.md) - Getting help
+
+## Community & Support
+
+- 💡 [Discussions](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/discussions) - Ask questions and share ideas
+- 🐛 [Issues](https://github.com/divyamohan1993/dmj-one-pdf-authenticator/issues) - Report bugs and request features
+- ⭐ Star this repository if you find it useful!
+
+## Attribution Required
+
+⚠️ **Important:** This project uses the **Attribution Assurance License (AAL)**.
+
+Any use of this software **requires mandatory attribution** to the original author. You must:
+- Display attribution in user-facing documentation or interfaces
+- Include attribution in the credits/about section of derivative works
+- Maintain attribution in source code
+
+See the [LICENSE](LICENSE) file for complete requirements.
+
+## Citation
+
+If you use this software in academic work, please cite it:
+
+```bibtex
+@software{dmj_one_pdf_authenticator,
+  author = {Mohan, Divya},
+  title = {dmj-one PDF Authenticator},
+  year = {2025},
+  url = {https://github.com/divyamohan1993/dmj-one-pdf-authenticator}
+}
+```
+
+Or use the [CITATION.cff](CITATION.cff) file.

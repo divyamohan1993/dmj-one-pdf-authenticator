@@ -1,2 +1,33 @@
 # Code owners for this project
+# These users will be automatically requested for review when someone opens a pull request
+
+# Default owners for everything in the repo
 * @divyamohan1993
+
+# GitHub configuration and workflows require careful review
+/.github/ @divyamohan1993
+/.github/workflows/ @divyamohan1993
+
+# Security-sensitive files and documentation
+/LICENSE @divyamohan1993
+/SECURITY.md @divyamohan1993
+/CODE_OF_CONDUCT.md @divyamohan1993
+
+# Core application components
+/worker/ @divyamohan1993
+/signer-vm/ @divyamohan1993
+
+# Cryptographic and PKI materials - requires extra scrutiny
+/signer-vm/pki/ @divyamohan1993
+
+# Infrastructure and operations scripts
+/signer-vm/ops/ @divyamohan1993
+
+# Deployment configurations
+/one-click-deployment/ @divyamohan1993
+
+# Documentation
+*.md @divyamohan1993
+/ARCHITECTURE.md @divyamohan1993
+/CHANGELOG.md @divyamohan1993
+
