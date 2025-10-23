@@ -110,6 +110,34 @@ A serverless SQLite database storing metadata only.
 
 ## Deployment Architecture
 
+### Automated Setup with autoconfig.sh
+
+The deployment process is fully automated through `autoconfig.sh`, which orchestrates a two-phase installation:
+
+```
+                    autoconfig.sh
+                         │
+        ┌────────────────┴────────────────┐
+        │                                 │
+        ↓                                 ↓
+   dmj-part1.sh                    dmj-part2.sh
+   (System Setup)               (Service Deployment)
+        │                                 │
+        │ - Install dependencies          │ - Generate PKI certs
+        │ - Setup Node.js, Java           │ - Build Java signer
+        │ - Configure nginx               │ - Deploy Worker
+        │ - Create service user           │ - Configure D1
+        │ - Setup Wrangler                │ - Generate secrets
+        │                                 │
+        └─────────────┬───────────────────┘
+                      │
+              Wrangler Auth Check
+                (Virtual WildHogs)
+                      │
+                      ↓
+            Full System Deployed
+```
+
 ### Production Setup
 
 ```

@@ -2,7 +2,55 @@
 
 Get dmj-one PDF Authenticator up and running in minutes!
 
-## 🚀 5-Minute Setup
+## 🚀 Automated One-Command Setup
+
+### Prerequisites
+- A fresh Ubuntu/Debian VM (GCP e2-micro or similar)
+- Cloudflare account (free tier works!)
+- A D1 database created in Cloudflare Dashboard
+
+### Step 1: Create D1 Database
+
+Before running the installer, create a D1 database in your Cloudflare account:
+
+```bash
+wrangler d1 create pdf-authenticator-db
+```
+
+Note the database ID from the output - you'll need it for the next step.
+
+### Step 2: Run Automated Deployment
+
+Run the single `autoconfig.sh` command with your D1 database ID:
+
+```bash
+sudo bash -lc 'curl -fsSL https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/autoconfig.sh?nocache=$(date +%s) | sudo bash -s -- YOUR-D1-DATABASE-ID'
+```
+
+Replace `YOUR-D1-DATABASE-ID` with your actual D1 database ID.
+
+**What happens automatically:**
+1. **Part 1** - Installs all dependencies (Node.js, Java, Maven, nginx, etc.)
+2. **Wrangler Authentication** - Guides you through OAuth login if needed
+3. **Part 2** - Builds everything, generates all secrets, deploys the Worker
+
+### Step 3: Complete Wrangler OAuth (if needed)
+
+If Wrangler isn't already authenticated, the script will:
+1. Display an OAuth URL
+2. Wait for you to open it in your browser
+3. Guide you through completing the authentication
+
+### Step 4: Access Your Portal
+
+After deployment completes:
+1. Visit your Worker URL at `https://documents.dmj.one/admin`
+2. Save the one-time admin key displayed
+3. Start signing and verifying PDFs!
+
+## 🎯 Alternative: Manual Setup for Development
+
+For local development or manual deployment, see the detailed steps below:
 
 ### Prerequisites
 - Node.js 20+ and npm
@@ -10,7 +58,7 @@ Get dmj-one PDF Authenticator up and running in minutes!
 - Maven 3.9+
 - Cloudflare account (free tier works!)
 
-### Step 1: Clone and Install
+### Manual Installation Steps
 
 ```bash
 git clone https://github.com/divyamohan1993/dmj-one-pdf-authenticator.git
@@ -21,71 +69,9 @@ cd worker && npm install
 
 # Build Java signer
 cd ../signer-vm && mvn clean package
+
+# Deploy manually following the Development Guide
 ```
-
-### Step 2: Generate Secrets
-
-```bash
-# HMAC key
-echo "HMAC_KEY=$(openssl rand -hex 32)"
-
-# Admin password hash (replace 'mypassword' with your password)
-node -e "const crypto = require('crypto'); \
-  const password = 'mypassword'; \
-  const salt = crypto.randomBytes(16).toString('hex'); \
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha256').toString('hex'); \
-  console.log('ADMIN_PASSWORD_HASH=' + salt + ':' + hash);"
-
-# TOTP master key
-node -e "console.log('TOTP_MASTER_KEY=' + require('crypto').randomBytes(20).toString('base32'))"
-```
-
-### Step 3: Configure Cloudflare
-
-```bash
-cd worker
-
-# Create D1 database
-wrangler d1 create pdf-authenticator-db
-
-# Update wrangler.toml with database ID
-
-# Set secrets
-wrangler secret put ADMIN_PASSWORD_HASH
-wrangler secret put HMAC_KEY
-wrangler secret put TOTP_MASTER_KEY
-wrangler secret put SIGNER_URL  # Your VM's public URL
-
-# Run migrations
-wrangler d1 migrations apply pdf-authenticator-db
-```
-
-### Step 4: Deploy Java Signer
-
-```bash
-cd signer-vm
-
-# Generate PKI certificates (see pki/ directory)
-cd pki && ./generate-certs.sh
-
-# Start service
-java -jar target/pdf-signer-1.0.0.jar
-```
-
-### Step 5: Deploy Worker
-
-```bash
-cd worker
-npm run deploy
-```
-
-### Step 6: Test It!
-
-Visit your Worker URL and:
-1. Navigate to `/admin` and sign in
-2. Upload a PDF to sign
-3. Download signed PDF
-4. Navigate to `/verify` and upload to verify
 
 ## 🎯 What's Next?
 
@@ -97,38 +83,40 @@ Visit your Worker URL and:
 ## ⚡ Quick Commands
 
 ```bash
-# Local development
-cd worker && npm run dev
-
-# Build Java signer
-cd signer-vm && mvn clean package
-
-# Deploy Worker
-cd worker && npm run deploy
-
-# Check logs
+# View deployment logs
 wrangler tail
 
-# Run tests
-cd signer-vm && mvn test
+# Check signer service status
+systemctl status dmj-signer
+
+# View nginx configuration
+cat /etc/nginx/sites-available/dmj-signer
+
+# Test signer health
+curl http://signer.dmj.one/healthz
 ```
 
 ## 🐛 Troubleshooting
 
-### Worker won't deploy
-- Check Cloudflare account permissions
-- Verify D1 database is created
-- Ensure wrangler.toml is correct
+### Deployment fails
+- Ensure D1 database ID is correct
+- Verify DNS: `signer.dmj.one` points to your VM
+- Check Wrangler authentication: `dmj-wrangler whoami`
+
+### Wrangler authentication issues
+- The script handles OAuth automatically
+- Follow the displayed OAuth URL if prompted
+- Ensure you're logged in as the correct Cloudflare account
 
 ### Java service fails
 - Verify Java 21 is installed: `java -version`
-- Check port availability
-- Review certificate generation
+- Check service status: `systemctl status dmj-signer`
+- Review logs: `journalctl -u dmj-signer -f`
 
 ### Signature fails
 - Verify HMAC key matches on both sides
-- Check signer service URL is reachable
-- Review logs with `wrangler tail`
+- Check signer service is reachable
+- Review Worker logs with `wrangler tail`
 
 ## 📚 More Resources
 
