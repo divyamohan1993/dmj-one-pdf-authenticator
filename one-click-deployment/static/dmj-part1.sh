@@ -86,6 +86,9 @@ sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/n
 sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
 sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
 
+echo "[+] Waiting 2 seconds..."
+sleep 2
+
 if [ "$GEN_STUBS" -eq 1 ]; then
   echo "[+] Create minimal stub HTTP blocks for Let's Encrypt if they don't already exist"
   for DOMAIN in ocsp.dmj.one pki.dmj.one signer.dmj.one tsa.dmj.one; do
