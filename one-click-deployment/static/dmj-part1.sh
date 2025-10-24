@@ -77,11 +77,17 @@ sudo chown -R "$DMJ_USER:$DMJ_USER" "$DMJ_HOME"
 sudo chmod 700 "$DMJ_HOME"
 sudo chmod -R go-rwx "$DMJ_HOME"
 
+echo "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
+sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
+
 echo "[i] Generating ocsp, signer, tsa and pki domain's LetsEncrypt Certificate"
-sudo certbot --nginx -d ocsp.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-sudo certbot --nginx -d pki.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-sudo certbot --nginx -d signer.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-sudo certbot --nginx -d tsa.dmj.one --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+sudo certbot --nginx -d ocsp.dmj.one    --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+sudo certbot --nginx -d pki.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+sudo certbot --nginx -d signer.dmj.one  --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+sudo certbot --nginx -d tsa.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
 
 # Ensure legacy ~/.wrangler points at XDG .wrangler
 if [ ! -e "$DMJ_LEGACY_WR_DIR" ]; then
