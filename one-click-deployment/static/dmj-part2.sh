@@ -1271,14 +1271,51 @@ public class SignerServer {
       if (!ok) { ctx.status(401).json(Map.of("error","bad auth")); return; }
 
       try {
+        // Issue a one-off document cert (same behavior as /sign) so each PDF has its own serial
+        log.info("bundle: issuing one-off doc cert, size={} bytes", original.length);
+        String cn = "dmj.one Trusted File " + java.util.UUID.randomUUID().toString().substring(0,8).toUpperCase();
+        DocMaterial dm = issueDocCert(cn);
+
         byte[] prepared = applyDocInfoPreSign(original);
-        byte[] signed = signPdf(prepared, keys.priv, keys.chain);
-        signed = postProcessLTV_LTA(signed, keys.chain);
-        String base = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
-        Path zipPath = writeBundleZip(signed, base);
-        String rel = "/dl/" + zipPath.getFileName().toString();
-        String url = PKI_BASE + rel;
-        ctx.json(Map.of("download", url));
+        byte[] signed   = signPdf(prepared, dm.priv, dm.chain);
+        signed          = postProcessLTV_LTA(signed, dm.chain);
+
+        // ---- STRICT POST-SIGN VERIFICATION (same checks as /verify) ----
+        Map<String,Object> v = verifyPdf(signed, dm.chain.get(0));
+        boolean okEmbedded =
+            Boolean.TRUE.equals(v.get("hasSignature")) &&
+            Boolean.TRUE.equals(v.get("isValid")) &&
+            Boolean.TRUE.equals(v.get("coversDocument")) &&
+            Boolean.TRUE.equals(v.get("issuedByUs"));
+        if (!okEmbedded) {
+          ctx.status(500).json(Map.of(
+              "error",   "post-sign verification failed",
+              "details", v
+          ));
+          return;
+        }
+        String issuerDn  = String.valueOf(v.getOrDefault("issuer",""));
+        String subFilter = String.valueOf(v.getOrDefault("subFilter",""));
+
+        String shaHex   = toHexUpper(java.security.MessageDigest.getInstance("SHA-256").digest(signed));
+        String base     = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
+        Path zipPath    = writeBundleZip(signed, base);
+        String rel      = "/dl/" + zipPath.getFileName().toString();
+        String url      = PKI_BASE + rel;
+
+        ctx.header("X-Cert-Serial", dm.serialHex);
+        // Include verification facts so the Worker can double-check before redirecting end-user
+        ctx.json(Map.of(
+            "download",       url,
+            "sha256",         shaHex,
+            "serial",         dm.serialHex,
+            "hasSignature",   v.get("hasSignature"),
+            "isValid",        v.get("isValid"),
+            "coversDocument", v.get("coversDocument"),
+            "issuedByUs",     v.get("issuedByUs"),
+            "issuer",         issuerDn,
+            "subFilter",      subFilter
+        ));
       } catch (Exception e) {
         e.printStackTrace();
         ctx.status(500).json(Map.of("error","bundle failed", "detail", String.valueOf(e)));
@@ -3892,7 +3929,7 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
     const isPDF = f => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name||'')); // NEW
 
     // Reusable signer — used by auto-flow AND the button
-    async function signNow(){ // CHANGED (extracted from old btn handler)
+    async function signNow(){ 
       if(!file) return;
       prog.classList.remove('d-none');
       btn.disabled = true;
@@ -3901,17 +3938,19 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
         fd.set('file', file, file.name);
         const m = (meta.value||'').trim(); if(m) fd.set('meta', m); // uses whatever is in "Optional metadata" right now
         
-        const res = await fetch(AP+'/sign', { method:'POST', body:fd });
+        const res = await fetch(AP+'/sign', { method:'POST', body:fd, headers:{'Accept':'application/json'} });
         if(!res.ok){ const t = await res.text(); throw new Error(t||'sign error'); }
-
-        const disp  = res.headers.get('content-disposition') || '';
-        const match = /filename="?([^"]+)"?/i.exec(disp);
-        const name  = match ? match[1] : ('signed-'+(file.name||'document')+(res.headers.get('content-type')?.includes('zip')?'.zip':''));
-        const blob  = await res.blob();
-        const url   = URL.createObjectURL(blob);
-        const a     = Object.assign(document.createElement('a'), { href:url, download:name });
+        const r = await res.json();
+        if(!r.download){ throw new Error('no download url'); }
+        if(!(r.hasSignature && r.isValid && r.coversDocument && r.issuedByUs)){
+          throw new Error('verification failed');
+        }
+        // Send the browser straight to pki/pub/dl/<bundle>.zip (no CORS needed)
+        const a = document.createElement('a');
+        a.href = r.download;
+        a.rel = 'noopener';
+        a.target = '_blank';
         document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
         toast('Signed & downloaded','success');
         loadRows(); // refresh issued list
       }catch(e){
@@ -4037,14 +4076,14 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
       // const sha = await sha256(buf);
       const buf = await file.arrayBuffer();          // original (unsigned)
 
-      // HMAC gating to signer
-      const { ts, nonce, sig } = await hmac(env, buf, "POST", "/sign");
+      // HMAC gating to signer (now targeting /bundle)
+      const { ts, nonce, sig } = await hmac(env, buf, "POST", "/bundle");
 
       const HH = env.WORKER_HMAC_HEADER || "x-worker-hmac";
       const HT = env.WORKER_HMAC_TS_HEADER || "x-worker-ts";
       const HN = env.WORKER_HMAC_NONCE_HEADER || "x-worker-nonce";
 
-      const res = await fetch(new URL("/sign", env.SIGNER_API_BASE).toString(), {
+      const res = await fetch(new URL("/bundle", env.SIGNER_API_BASE).toString(), {
         method:"POST",
         headers:{
           [HH]: sig,
@@ -4054,22 +4093,14 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
         body: (()=>{ const fd = new FormData(); fd.set("file", new Blob([buf], {type:"application/pdf"}), "in.pdf"); return fd; })()
       });
       if(!res.ok) return json({error:"signer error", detail: await res.text()}, 502);
-      const certSerial = res.headers.get("x-cert-serial") || "";
-      const signed = await res.arrayBuffer();
-      const sha = await sha256(signed);              // hash of the *signed* file
-
-      // Verify the just-signed file server-side BEFORE persisting or offering for download
-      const vf = new FormData();
-      vf.set("file", new Blob([signed], {type:"application/pdf"}), "signed.pdf");
-      const vres = await fetch(new URL("/verify", env.SIGNER_API_BASE).toString(), { method:"POST", body:vf });
-      if(!vres.ok){
-        return json({error:"verify failed (signer side)"}, 502);
-      }
-      const vinfo = await vres.json() as any;
-      const okEmbedded = vinfo && vinfo.hasSignature && vinfo.isValid && vinfo.issuedByUs && vinfo.coversDocument;
-      if(!okEmbedded){
-        // Do NOT store an unverifiable artifact
-        return json({error:"signer produced an unverifiable PDF", details:vinfo}, 502);
+      const r = await res.json() as any;
+      const downloadUrl = String(r.download||"");
+      const sha         = String(r.sha256||"");
+      const certSerial  = String(r.serial||"");
+      // ---- ENFORCE VERIFIED BEFORE DOWNLOAD ----
+      const okEmbedded = !!(r && r.hasSignature && r.isValid && r.coversDocument && r.issuedByUs);
+      if (!downloadUrl || !okEmbedded) {
+        return json({error:"signer produced unverifiable bundle"}, 502);
       }
 
       const meta = String(form.get("meta")||"").trim();
@@ -4079,90 +4110,28 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
         .prepare(`INSERT OR IGNORE INTO ${p}documents
                   (id,doc_sha256,meta_json,signed_at,revoked_at,cert_serial)
                   VALUES(?,?,?,?,NULL,?)`)
-        .bind(crypto.randomUUID(), sha, meta || "{}", now(), certSerial)
+        .bind(crypto.randomUUID(), sha || "", meta || "{}", now(), certSerial || "")
         .run();
-      // Upsert the verification result
+      // Upsert verification facts now (no blobs; just metadata)
       await env.DB
         .prepare(`INSERT OR REPLACE INTO ${p}doc_verifications
                   (doc_sha256,has_signature,is_valid,issued_by_us,covers_document,subfilter,issuer,verified_at)
                   VALUES(?,?,?,?,?,?,?,?)`)
-        .bind(sha, vinfo.hasSignature?1:0, vinfo.isValid?1:0, vinfo.issuedByUs?1:0, vinfo.coversDocument?1:0,
-              String(vinfo.subFilter||""), String(vinfo.issuer||""), now())
+        .bind(sha, r.hasSignature?1:0, r.isValid?1:0, r.issuedByUs?1:0, r.coversDocument?1:0,
+              String(r.subFilter||""), String(r.issuer||""), now())
         .run();
       await env.DB
         .prepare(`INSERT INTO ${p}audit
                   (id,at,action,doc_sha256,ip,ua,detail)
                   VALUES(?,?,?,?,?,?,?)`)
-        .bind(crypto.randomUUID(), now(), "sign", sha, "", "", "")
-        .run();
-      
-      const wantZip = (env.BUNDLE_TRUST_KIT || "0") === "1";
-      if (!wantZip) {
-        // Old behavior: return the signed PDF directly
-        return new Response(signed, {
-          headers: {
-            "content-type":"application/pdf",
-            "content-disposition":`attachment; filename="signed.pdf"`,
-            "x-doc-sha256": sha,
-            "x-issuer": env.ISSUER,
-            "x-doc-verified":"true"
-          }
-        });
-      }
+        .bind(crypto.randomUUID(), now(), "sign", sha || "", "", "", "")
+        .run();      
 
-      // New behavior: return one ZIP that contains (1) signed.pdf and (2) Trust Kit ZIP + README-FIRST.txt
-      const kitUrl = new URL("/dmj-one-trust-kit.zip", env.PKI_BASE).toString();
-      // Try to fetch the Trust Kit; if it fails (TLS/DNS not ready), gracefully fall back to direct PDF.
-      let kit: Uint8Array | null = null;
-      try {
-        const kitRes = await fetch(kitUrl);
-        if (kitRes.ok) {
-          kit = new Uint8Array(await kitRes.arrayBuffer());
-        }
-      } catch (_) { /* ignore bootstrap network/SSL errors */ }
-      if (!kit) {
-        return new Response(signed, {
-          headers: {
-            "content-type":"application/pdf",
-            "content-disposition":`attachment; filename="signed.pdf"`,
-            "x-doc-sha256": sha,
-            "x-issuer": env.ISSUER,
-            "x-doc-verified":"true",
-            "x-note": "trust-kit-unavailable"
-          }
-        });
-      }
-      const readmeFirst = new TextEncoder().encode(
-      `dmj.one - Digital Signature Root Certificate
-=====================================================
-1. Automatic Method
-    - Unzip and Open the dmj-one-trust-kit folder. 
-    - Double click "install-dmj-certificates.bat" to automatically install all certificates.
-
-2. Manual Method
-    - Unzip and Open the dmj-one-trust-kit folder.
-    - Open the "dmj-one-trust-kit-README.html" and follow the steps for your device.
-            
-Install the dmj.one Root CA once. Then any dmj.one-signed PDF will verify as trusted.
-
-You can reivew the codes to verify for any discrepencies. Use ChatGPT to check its authenticty!
-
-Having problems installing? Mail us at contact@dmj.one 
-      `);
-
-      const zipBytes = await buildZip([
-        { name: "Your Document (signed).pdf", data: new Uint8Array(signed) },
-        { name: "Trust Kit/README-FIRST.txt", data: readmeFirst },
-        { name: "Trust Kit/dmj-one-trust-kit.zip", data: kit }
-      ]);
-
-      // Persist briefly and redirect so download managers see a GET
-      const filename = `dmj-one-signed-bundle-${sha.slice(0,8)}.zip`;
-      const id = await putDownload(env, zipBytes, "application/zip", filename);
-      return new Response(null, {
-        status: 303, // See Other: follow-up with a GET to the Location
-        headers: { "location": `/download/${id}/${encodeURIComponent(filename)}` }
-      });
+      // Hand the admin UI the direct URL under pki/pub/dl
+      return json({ download: downloadUrl, sha256: sha, serial: certSerial,
+                    hasSignature: !!r.hasSignature, isValid: !!r.isValid,
+                    coversDocument: !!r.coversDocument, issuedByUs: !!r.issuedByUs });
+     }
 
     }
 
