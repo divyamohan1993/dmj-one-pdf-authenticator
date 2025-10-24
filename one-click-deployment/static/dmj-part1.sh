@@ -103,18 +103,19 @@ server {
     }
 }
 EOF
-      echo "[i] Generating ocsp, signer, tsa and pki domain's LetsEncrypt Certificate"
-      sudo certbot --nginx -d ocsp.dmj.one    --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-      sudo certbot --nginx -d pki.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-      sudo certbot --nginx -d signer.dmj.one  --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-      sudo certbot --nginx -d tsa.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-
       sudo ln -sf "${CONF}" "${ENABLED}"
     fi
   done
 
   # test nginx config and reload to apply stubs
   sudo nginx -t && sudo systemctl reload nginx
+
+  echo "[i] Generating ocsp, signer, tsa and pki domain's LetsEncrypt Certificate"
+  sudo certbot --nginx -d ocsp.dmj.one    --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+  sudo certbot --nginx -d pki.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+  sudo certbot --nginx -d signer.dmj.one  --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+  sudo certbot --nginx -d tsa.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+
 fi
 
 # Ensure legacy ~/.wrangler points at XDG .wrangler
