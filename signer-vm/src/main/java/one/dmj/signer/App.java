@@ -2,6 +2,7 @@ package one.dmj.signer;
 
 import io.javalin.Javalin;
 import io.javalin.http.UploadedFile;
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.*;
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -19,7 +20,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.net.ServerSocket;
 import java.security.*;
-import java.security.cert.*;
+import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.*;
 
@@ -44,9 +45,9 @@ public class App {
         try (InputStream in = new FileInputStream(P12_PATH)) { ks.load(in, P12_PASSWORD.toCharArray()); }
         String alias = Collections.list(ks.aliases()).get(0);
         privateKey = (PrivateKey) ks.getKey(alias, P12_PASSWORD.toCharArray());
-        Certificate[] chain = ks.getCertificateChain(alias);
+        java.security.cert.Certificate[] chain = ks.getCertificateChain(alias);
         certChain = new ArrayList<>();
-        for (Certificate c : chain) certChain.add((X509Certificate) c);
+        for (java.security.cert.Certificate c : chain) certChain.add((X509Certificate) c);
         signerCert = (X509Certificate) chain[0];
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         SPKI_B64URL = b64url(md.digest(signerCert.getPublicKey().getEncoded()));
@@ -55,7 +56,6 @@ public class App {
         final int MAX_PDF = 20 * 1024 * 1024;
         var app = Javalin.create(conf -> {
             conf.http.defaultContentType = "application/json";
-            conf.jetty.sessionHandler(() -> null);
         }).start(BIND_HOST, PORT);
         app.get("/healthz", ctx -> ctx.result("ok"));
         app.get("/spki", ctx -> ctx.json(Map.of("spkiSha256", SPKI_B64URL)));
@@ -107,7 +107,7 @@ public class App {
 
     static Map<String, Object> verifyPdf(byte[] input) {
         Map<String, Object> out = new LinkedHashMap<>();
-        try (PDDocument doc = PDDocument.load(input)) {
+        try (PDDocument doc = Loader.loadPDF(input)) {
             List<PDSignature> sigs = doc.getSignatureDictionaries();
             boolean valid = false;
             String reason = "";
@@ -147,10 +147,10 @@ public class App {
     }
 
     static byte[] signPdfDetached(byte[] inputPdf, String filter, String subFilter, String name, String reason) throws Exception {
-        try (PDDocument doc = PDDocument.load(inputPdf)) {
+        try (PDDocument doc = Loader.loadPDF(inputPdf)) {
             PDSignature sig = new PDSignature();
-            sig.setFilter(filter);
-            sig.setSubFilter(subFilter);
+            sig.setFilter(org.apache.pdfbox.cos.COSName.getPDFName(filter));
+            sig.setSubFilter(org.apache.pdfbox.cos.COSName.getPDFName(subFilter));
             sig.setName(name);
             sig.setReason(reason);
             sig.setSignDate(Calendar.getInstance());
@@ -165,7 +165,7 @@ public class App {
                     ).build(sha256Signer, signerCert);
                     gen.addSignerInfoGenerator(signerInfo);
                     gen.addCertificates(certStore);
-                    CMSProcessable msg = new CMSProcessableByteArray(toBeSigned);
+                    org.bouncycastle.cms.CMSTypedData msg = new CMSProcessableByteArray(toBeSigned);
                     CMSSignedData cms = gen.generate(msg, false);
                     return cms.getEncoded();
                 } catch (Exception ex) {
