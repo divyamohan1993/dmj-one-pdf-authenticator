@@ -461,6 +461,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.IOUtils;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSStream;
@@ -1026,11 +1027,13 @@ public class SignerServer {
       new DERSet(ASN1Primitive.fromByteArray(token.getEncoded())));
 
     AttributeTable unsigned = si.getUnsignedAttributes();
-    Map<org.bouncycastle.asn1.ASN1ObjectIdentifier, Attribute> map = new LinkedHashMap<>();
-    if (unsigned != null) map.putAll(unsigned.toHashtable());
-    map.put(PKCSObjectIdentifiers.id_aa_signatureTimeStampToken, tsAttr);
+    java.util.Hashtable<ASN1ObjectIdentifier, Attribute> ht =
+        (unsigned != null) ? unsigned.toHashtable() : new java.util.Hashtable<>();
+    ht.put(PKCSObjectIdentifiers.id_aa_signatureTimeStampToken, tsAttr);
 
-    SignerInformation newSi = SignerInformation.replaceUnsignedAttributes(si, new AttributeTable(map));
+    SignerInformation newSi =
+        SignerInformation.replaceUnsignedAttributes(si, new AttributeTable(ht));
+
     SignerInformationStore newStore = new SignerInformationStore(Collections.singleton(newSi));
     return CMSSignedData.replaceSigners(cms, newStore);
   }
@@ -1131,7 +1134,7 @@ public class SignerServer {
 
       PDSignature ts = new PDSignature();
       ts.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
-      ts.setSubFilter(PDSignature.SUBFILTER_ETSI_RFC3161);
+      ts.setSubFilter(COSName.getPDFName("ETSI.RFC3161"));
       ts.setName("Time Stamp");
       ts.setSignDate(Calendar.getInstance());
 
