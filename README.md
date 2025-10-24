@@ -79,7 +79,7 @@ Any use of this software **requires mandatory attribution** to the original auth
 - Include attribution in the credits/about section of derivative works
 - Maintain attribution in source code
 
-See the [LICENSE](LICENSE) file for complete requirements.
+See the [LICENSE](.github/LICENSE) file for complete requirements.
 
 ## Citation
 

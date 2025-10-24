@@ -64,7 +64,7 @@ The automated deployment approach streamlines production deployment while the em
 
 - **📖 Read the [Full Documentation](README.md)**
 - **🏗️ Understand the [Architecture](ARCHITECTURE.md)**
-- **🛠️ See [Development Guide](DEVELOPMENT.md)** for local development
+- **🛠️ See [Development Guide](.github/DEVELOPMENT.md)** for local development
 - **🤝 Check [Contributing Guidelines](.github/CONTRIBUTING.md)**
 
 ## ⚡ Quick Commands
@@ -109,8 +109,7 @@ curl http://signer.dmj.one/healthz
 
 - [Full Setup Guide](one-click-deployment/readme.md)
 - [Architecture Overview](ARCHITECTURE.md)
-- [API Documentation](docs/API.md)
-- [Security Policy](SECURITY.md)
+- [Security Policy](.github/SECURITY.md)
 
 ## 💬 Need Help?
 
@@ -122,7 +121,7 @@ curl http://signer.dmj.one/healthz
 
 This project uses the **Attribution Assurance License**. 
 
-⚠️ **You must provide attribution** when using this software. See [LICENSE](LICENSE) for details.
+⚠️ **You must provide attribution** when using this software. See [LICENSE](.github/LICENSE) for details.
 
 ---
 
