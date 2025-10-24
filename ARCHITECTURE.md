@@ -4,7 +4,7 @@ This document provides a high-level overview of the dmj-one PDF Authenticator sy
 
 ## System Components
 
-### 1. Cloudflare Worker (`worker/`)
+### 1. Cloudflare Worker (Embedded in `one-click-deployment/static/dmj-part2.sh`)
 
 The serverless frontend and API layer running on Cloudflare's edge network.
 
@@ -23,7 +23,9 @@ The serverless frontend and API layer running on Cloudflare's edge network.
 - D1 (SQLite) database
 - Scheduled events (cron)
 
-### 2. Java Signing Service (`signer-vm/`)
+**Deployment:** Worker code and migrations are embedded within the `dmj-part2.sh` deployment script for automated setup.
+
+### 2. Java Signing Service (Embedded in `one-click-deployment/static/dmj-part2.sh`)
 
 A microservice responsible for the cryptographic operations.
 
@@ -40,6 +42,8 @@ A microservice responsible for the cryptographic operations.
 - Bouncy Castle 1.78.1
 - Javalin 6.7.0 web framework
 - Maven build system
+
+**Deployment:** Java signer code (Maven project) is embedded within the `dmj-part2.sh` deployment script for automated build and deployment.
 
 ### 3. Database (Cloudflare D1)
 
@@ -232,7 +236,13 @@ The deployment process is fully automated through `autoconfig.sh`, which orchest
 
 ---
 
-For implementation details, see the source code in:
-- `worker/src/` - Worker implementation
-- `signer-vm/src/` - Java service implementation
-- `worker/migrations/` - Database schema
+## Repository Structure
+
+The repository uses an **automated deployment architecture** where all code is embedded within deployment scripts:
+
+- **`one-click-deployment/static/dmj-part2.sh`** - Contains the embedded Worker and Java signer source code
+- **`one-click-deployment/static/templates/`** - HTML templates for admin and verification portals
+- **`one-click-deployment/static/autoconfig.sh`** - Main orchestrator for deployment
+- **`one-click-deployment/static/dmj-part1.sh`** - System setup and dependencies
+
+This approach allows for single-command deployment while maintaining separation of concerns within the scripts.
