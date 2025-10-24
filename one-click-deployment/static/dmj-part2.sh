@@ -20,6 +20,7 @@ LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
 
 DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+DMJ_VERBOSE_LOGS="${DMJ_VERBOSE_LOGS:-0}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
@@ -1848,8 +1849,8 @@ DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
 DMJ_SIG_LOCATION=${COUNTRY}
 DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
 DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-DMJ_LOG_VERBOSE=${DMJ_VERBOSE}
-DMJ_HTTP_LOG=${DMJ_VERBOSE}
+DMJ_LOG_VERBOSE=${DMJ_VERBOSE_LOGS}
+DMJ_HTTP_LOG=${DMJ_VERBOSE_LOGS}
 
 # --- PAdES / TSA / LTV-LTA ---------------------------------------------------
 # RFC 3161 TSA endpoint used for:
