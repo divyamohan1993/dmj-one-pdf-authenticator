@@ -30,11 +30,11 @@
 
 🚀 **Quick Start:** See the [Quick Start Guide](QUICKSTART.md) for a 5-minute setup.
 
-📖 **Full Guide:** See the [one-click-deployment guide](one-click-deployment/readme.md) for detailed deployment instructions.
+📖 **One-Click Deployment:** See the [one-click-deployment guide](one-click-deployment/readme.md) for automated deployment with a single command using `autoconfig.sh`.
 
 🛠️ **Development:** See the [Development Guide](DEVELOPMENT.md) for local development setup.
 
-For production deployment, see the `ops/` directory inside `signer‑vm` for a bootstrap script to set up the microservice on a fresh VM. Cloudflare secrets (e.g., admin password hash, HMAC key, TOTP master key) should be injected using `wrangler secret put`.
+The new automated deployment system uses `autoconfig.sh` which orchestrates the entire setup process, automatically executing both `dmj-part1.sh` (system setup) and `dmj-part2.sh` (service deployment) after Wrangler authentication is confirmed. All secrets are generated automatically and securely stored.
 
 ## Documentation
 
