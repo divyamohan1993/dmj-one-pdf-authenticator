@@ -89,6 +89,7 @@ DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by defaul
 DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
 DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
 DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-0}"       # 1 = rotate signer freely - dont - invalidates files
+DMJ_REISSUE_TSA="${DMJ_REISSUE_TSA:-0}"
 DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
 
 # Require D1 id (single shared DB)
@@ -115,6 +116,7 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_OCSP=1
     DMJ_REISSUE_LEAF=1
     DMJ_REGEN_TRUST_KIT=1
+    DMJ_REISSUE_TSA=1
     DMJ_VERBOSE=1
 
     echo "Hard reset confirmed. Proceeding with full PKI reissuance..."
@@ -1846,15 +1848,15 @@ DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
 DMJ_SIG_LOCATION=${COUNTRY}
 DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
 DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-DMJ_LOG_VERBOSE=0
-DMJ_HTTP_LOG=0
+DMJ_LOG_VERBOSE=${DMJ_VERBOSE}
+DMJ_HTTP_LOG=${DMJ_VERBOSE}
 
 # --- PAdES / TSA / LTV-LTA ---------------------------------------------------
 # RFC 3161 TSA endpoint used for:
 #  • Signature-time-stamp (unsigned attr id-aa-signatureTimeStampToken) → B‑T
 #  • DocTimeStamp (ETSI.RFC3161) after DSS → B‑LTA
 # Leave DMJ_TSA_URL empty to disable all timestamping.
-DMJ_TSA_URL=
+DMJ_TSA_URL=tsa.dmj.one
 DMJ_TSA_USER=
 DMJ_TSA_PASS=
 DMJ_TSA_POLICY_OID=1.3.6.1.4.1.55555.1.1   # default private OID, change if you have a policy
