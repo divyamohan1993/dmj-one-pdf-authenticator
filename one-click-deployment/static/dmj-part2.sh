@@ -1011,11 +1011,17 @@ public class SignerServer {
 
     HttpURLConnection conn = (HttpURLConnection) new URL(TSA_URL).openConnection();
     conn.setConnectTimeout(TSA_TIMEOUT_MS);
-    conn.setReadTimeout(TSA_TIMEOUT_MS);
+    // Ensure the TSA response is not compressed; BouncyCastle expects raw DER.
+    // Some proxies may gzip otherwise.
+    conn.setRequestProperty("Accept-Encoding", "identity");
     conn.setDoOutput(true);
     conn.setRequestMethod("POST");
     conn.setRequestProperty("Content-Type", "application/timestamp-query");
     conn.setRequestProperty("Accept", "application/timestamp-reply");
+    // (optional sanity) strict CT check – helps diagnostics if a proxy answers with HTML
+    String ct = conn.getHeaderField("Content-Type");
+    if (ct != null && !ct.toLowerCase().startsWith("application/timestamp-reply")) throw new IOException("bad TSA content-type: "+ct);
+     
     if (!TSA_USER.isBlank() || !TSA_PASS.isBlank()) {
       String basic = java.util.Base64.getEncoder().encodeToString((TSA_USER + ":" + TSA_PASS).getBytes(StandardCharsets.UTF_8));
       conn.setRequestProperty("Authorization", "Basic " + basic);
@@ -1797,12 +1803,17 @@ const TS_CONF = process.env.DMJ_TSA_CONF || "/opt/dmj/pki/tsa/ts.cnf";
 const BASIC_USER = process.env.DMJ_TSA_BASIC_USER || "";
 const BASIC_PASS = process.env.DMJ_TSA_BASIC_PASS || "";
 function unauthorized(res){ res.writeHead(401, {'www-authenticate':'Basic realm="dmj-tsa"'}); res.end(); }
-function ok(res, body){ res.writeHead(200, {'content-type':'application/timestamp-reply','cache-control':'no-store'}); res.end(body); }
+function ok(res, body){
+  // Explicit content-length and exact content-type to avoid proxy meddling
+  res.writeHead(200, {'content-type':'application/timestamp-reply','cache-control':'no-store','content-length': String(body.length)});
+  res.end(body);
+}
 function bad(res, code, msg){ res.writeHead(code||500, {'content-type':'text/plain'}); res.end(msg||'error'); }
 const server = http.createServer((req,res)=>{
   if(req.method==='GET' && req.url==='/healthz'){ res.writeHead(200,{'content-type':'text/plain'}); return res.end('ok'); }
   if(req.method!=='POST'){ return bad(res,405,'method not allowed'); }
-  if((req.headers['content-type']||'').indexOf('application/timestamp-query')!==0){ return bad(res,415,'content-type'); }
+  const ctype = (req.headers['content-type']||'').toLowerCase();
+  if(ctype.indexOf('application/timestamp-query')!==0){ return bad(res,415,'content-type'); }  
   if(BASIC_USER){
     const hdr = req.headers['authorization']||'';
     const okAuth = hdr.startsWith('Basic ') && (()=>{
@@ -1813,13 +1824,16 @@ const server = http.createServer((req,res)=>{
   }
   const bufs=[]; req.on('data',c=>bufs.push(c)).on('end',()=>{
     const q = Buffer.concat(bufs);
-    const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-queryfile','-']);
+    // const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-queryfile','-']);
+    // Read TSQ from STDIN explicitly; produce DER TimeStampResp on STDOUT
+    const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-in','-']);
     const outs=[]; let err='';
     openssl.stdout.on('data',d=>outs.push(d));
     openssl.stderr.on('data',d=>err+=d);
     openssl.on('close', rc=>{
-      if(rc===0) return ok(res, Buffer.concat(outs));
-      bad(res,500,'tsa failure'); 
+      if(rc===0){ const body = Buffer.concat(outs); return ok(res, body); }
+      console.error('[tsa] openssl ts -reply failed rc=%s stderr=%s', rc, err);
+      bad(res,500,'tsa failure');
     });
     openssl.stdin.end(q);
   });
@@ -2224,6 +2238,7 @@ sudo tee /etc/nginx/sites-available/dmj-tsa >/dev/null <<NGX
 server {
   listen 80;
   server_name tsa.dmj.one;
+  gzip off;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
   error_log  syslog:server=unix:/dev/log warn;
@@ -2249,7 +2264,11 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type   \$http_content_type;
+    # Make sure Basic auth reaches the Node TSA and no proxy-layer gzip is applied
+    proxy_set_header   Authorization \$http_authorization;
     proxy_buffering    off;
+    proxy_request_buffering off;
+    proxy_set_header   Accept-Encoding "";
     add_header         X-Content-Type-Options "nosniff" always;
   }
 }
@@ -2257,6 +2276,7 @@ server {
   listen 443 ssl;
   http2 on;
   server_name tsa.dmj.one;
+  gzip off;
 
   ssl_certificate     /etc/letsencrypt/live/tsa.dmj.one/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/tsa.dmj.one/privkey.pem;
@@ -2285,7 +2305,11 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type   \$http_content_type;
+    # Make sure Basic auth reaches the Node TSA and no proxy-layer gzip is applied
+    proxy_set_header   Authorization \$http_authorization;
     proxy_buffering    off;
+    proxy_request_buffering off;
+    proxy_set_header   Accept-Encoding "";
     add_header         X-Content-Type-Options "nosniff" always;
   }
 }
