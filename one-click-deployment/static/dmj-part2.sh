@@ -46,7 +46,7 @@ SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (
 # --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
 PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
 OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
-TSA_DOMAIN="${TSA_DOMAIN:-tsa.${DMJ_ROOT_DOMAIN}}"
+TSA_DOMAIN="${TSA_DOMAIN:-127.0.0.1:9090}"
 
 OPT_DIR="/opt/dmj"
 PKI_DIR="/opt/dmj/pki"
@@ -704,7 +704,12 @@ public class SignerServer {
 
     // Optionally add RFC 3161 signature-time-stamp unsigned attribute (B-T-ish)
     if (!TSA_URL.isBlank() && TS_ON_SIGNATURE) {
-      cms = addSignatureTimeStampAttribute(cms);
+      try {
+        cms = addSignatureTimeStampAttribute(cms);
+      } catch (Exception ex) {
+        // Do not fail the whole sign if TSA/Policy OID is misconfigured
+        log.warn("TSA signature-time-stamp failed; continuing without it: {}", String.valueOf(ex));
+      }
     }
     return cms.getEncoded();
   }
@@ -983,14 +988,24 @@ public class SignerServer {
     };
   }
 
+  /** sanitize an OID possibly polluted by inline comments/whitespace in env files */
+  static String cleanOid(String s) {
+    if (s == null) return "";
+    String t = s.trim();
+    int hash = t.indexOf('#');              // strip trailing "# comment" if present
+    if (hash >= 0) t = t.substring(0, hash);
+    return t.replaceAll("\\s+", "");        // remove any stray spaces/tabs
+  }
+
   /** Basic RFC 3161 client (HTTP POST application/timestamp-query) */
   static TimeStampToken requestTSToken(byte[] dataToHash, String jcaDigest) throws Exception {
     String oid = tsaDigestOid(jcaDigest);
     byte[] imprint = MessageDigest.getInstance(jcaDigest).digest(dataToHash);
 
     TimeStampRequestGenerator gen = new TimeStampRequestGenerator();
-    gen.setCertReq(true);
-    if (!TSA_POLICY_OID.isBlank()) gen.setReqPolicy(new ASN1ObjectIdentifier(TSA_POLICY_OID));
+    gen.setCertReq(true);    
+    String pol = cleanOid(TSA_POLICY_OID);
+    if (!pol.isBlank()) gen.setReqPolicy(new ASN1ObjectIdentifier(pol));
     TimeStampRequest req = gen.generate(new ASN1ObjectIdentifier(oid), imprint, new BigInteger(64, new SecureRandom()));
     byte[] body = req.getEncoded();
 
@@ -1857,10 +1872,11 @@ DMJ_HTTP_LOG=${DMJ_VERBOSE_LOGS}
 #  • Signature-time-stamp (unsigned attr id-aa-signatureTimeStampToken) → B‑T
 #  • DocTimeStamp (ETSI.RFC3161) after DSS → B‑LTA
 # Leave DMJ_TSA_URL empty to disable all timestamping.
-DMJ_TSA_URL=tsa.dmj.one
+DMJ_TSA_URL=${TSA_DOMAIN}
 DMJ_TSA_USER=test
 DMJ_TSA_PASS=test123
-DMJ_TSA_POLICY_OID=1.3.6.1.4.1.55555.1.1   # default private OID, change if you have a policy
+# default private OID, change if you have a policy
+DMJ_TSA_POLICY_OID=1.3.6.1.4.1.55555.1.1
 DMJ_TSA_HASH=SHA-256
 DMJ_TSA_TIMEOUT_MS=10000
 DMJ_TS_ON_SIGNATURE=1
@@ -2207,7 +2223,7 @@ NGX
 sudo tee /etc/nginx/sites-available/dmj-tsa >/dev/null <<NGX
 server {
   listen 80;
-  server_name ${TSA_DOMAIN};
+  server_name tsa.dmj.one;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
   error_log  syslog:server=unix:/dev/log warn;
@@ -2216,8 +2232,13 @@ server {
   client_body_timeout  30s;
   proxy_read_timeout   30s;
 
+  # Exact-match health endpoint; must return 200 so bootstrap detection works.
+  # NGINX 'location =' is an exact URI match, and 'return 200' is the
+  # simplest way to serve a successful health response.
+  # refs: nginx 'location' and 'return' directives.
   location = /healthz {
-    try_files \$uri =404;
+      return 200 "ok\n";
+      add_header Content-Type text/plain;
   }
 
   location / {
@@ -2235,10 +2256,10 @@ server {
 server {
   listen 443 ssl;
   http2 on;
-  server_name ${TSA_DOMAIN};
+  server_name tsa.dmj.one;
 
-  ssl_certificate     /etc/letsencrypt/live/${TSA_DOMAIN}/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/${TSA_DOMAIN}/privkey.pem;
+  ssl_certificate     /etc/letsencrypt/live/tsa.dmj.one/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/tsa.dmj.one/privkey.pem;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
   error_log  syslog:server=unix:/dev/log warn;
@@ -2247,8 +2268,13 @@ server {
   client_body_timeout  30s;
   proxy_read_timeout   30s;
 
+  # Exact-match health endpoint; must return 200 so bootstrap detection works.
+  # NGINX 'location =' is an exact URI match, and 'return 200' is the
+  # simplest way to serve a successful health response.
+  # refs: nginx 'location' and 'return' directives.
   location = /healthz {
-    try_files \$uri =404;
+      return 200 "ok\n";
+      add_header Content-Type text/plain;
   }
 
   location / {
@@ -4160,13 +4186,18 @@ if ! curl -fsS --max-time 5 "https://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; th
   if curl -fsS --max-time 5 "http://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; then PKI_PROTO="http"; fi
 fi
 
-TSA_PROTO="https"
-if ! curl -fsS --max-time 5 "https://${TSA_DOMAIN}/healthz" >/dev/null 2>&1; then
-  if curl -fsS --max-time 5 "http://${TSA_DOMAIN}/healthz" >/dev/null 2>&1; then TSA_PROTO="http"; fi
+# Prefer the local TSA daemon to eliminate DNS/TLS dependencies.
+# Fall back to the public vhost only if loopback is not available.
+if curl -fsS --max-time 2 "http://127.0.0.1:9090/healthz" >/dev/null; then
+  NEW_TSA_URL="http://127.0.0.1:9090/"
+else
+  TSA_PROTO="https"
+  if ! curl -fsS --max-time 5 "https://${TSA_DOMAIN}/healthz" >/dev/null; then
+    TSA_PROTO="http"
+  fi
+  NEW_TSA_URL="${TSA_PROTO}://${TSA_DOMAIN}/"
 fi
-
-# Patch signer env with the detected TSA URL (keep AIA scheme for PKI)
-sudo sed -i "s|^DMJ_TSA_URL=.*|DMJ_TSA_URL=${TSA_PROTO}://${TSA_DOMAIN}/|" "${DMJ_ENV_FILE}"
+sudo sed -i "s|^DMJ_TSA_URL=.*|DMJ_TSA_URL=${NEW_TSA_URL}|" "${DMJ_ENV_FILE}"
 
 # Optional Basic Auth credentials for TSA (if you set them, signer will use them)
 if ! grep -q '^DMJ_TSA_USER=' "${DMJ_ENV_FILE}"; then
