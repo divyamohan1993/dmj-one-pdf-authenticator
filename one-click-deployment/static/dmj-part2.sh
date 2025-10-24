@@ -3,6 +3,12 @@
 set -euo pipefail
 umask 077
 
+
+
+DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-DEV}" # DEV / PROD
+
+
+
 ### --- Config / Inputs -------------------------------------------------------
 DMJ_USER="dmjsvc"
 LOG_DIR="/var/log/dmj"
@@ -92,6 +98,11 @@ DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
 DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-0}"       # 1 = rotate signer freely - dont - invalidates files
 DMJ_REISSUE_TSA="${DMJ_REISSUE_TSA:-0}"
 DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
+I_UNDERSTAND_THE_RISK="${I_UNDERSTAND_THE_RISK:-NO}"
+
+if [[ "${DEPLOYMENT_MODE}" == "DEV" ]]; then
+    I_UNDERSTAND_THE_RISK=YES    
+fi
 
 # Require D1 id (single shared DB)
 CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
@@ -110,8 +121,8 @@ DMJ_FORCE_ADMIN_RELOGIN="${DMJ_FORCE_ADMIN_RELOGIN:-1}"
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this
-if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then    
+DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this in PROD. DEV can freely rotate.
+if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" && "${DEPLOYMENT_MODE:-}" == "DEV" && "${I_UNDERSTAND_THE_RISK:-}" == "YES" ]]; then
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
     DMJ_REISSUE_OCSP=1
@@ -518,6 +529,8 @@ public class SignerServer {
   static final String TSA_URL = Optional.ofNullable(System.getenv("DMJ_TSA_URL")).orElse("");
   static final String TSA_USER = Optional.ofNullable(System.getenv("DMJ_TSA_USER")).orElse("");
   static final String TSA_PASS = Optional.ofNullable(System.getenv("DMJ_TSA_PASS")).orElse("");
+  static final String TSA_CRED_FILE = Optional.ofNullable(System.getenv("DMJ_TSA_CRED_FILE")).orElse("");
+
   static final String TSA_POLICY_OID = Optional.ofNullable(System.getenv("DMJ_TSA_POLICY_OID")).orElse("");
   static final String TSA_HASH = Optional.ofNullable(System.getenv("DMJ_TSA_HASH")).orElse("SHA-256"); // SHA-256/384/512
   static final int TSA_TIMEOUT_MS = Integer.parseInt(Optional.ofNullable(System.getenv("DMJ_TSA_TIMEOUT_MS")).orElse("10000"));
@@ -526,6 +539,18 @@ public class SignerServer {
   static final String OCSP_URL_ENV = Optional.ofNullable(System.getenv("DMJ_OCSP_URL")).orElse(""); // optional; CRL is used anyway
 
   static { Security.addProvider(new BouncyCastleProvider()); }
+
+  static class BasicPair { final String user; final String pass; BasicPair(String u,String p){user=u;pass=p;} }
+  static BasicPair currentTsaCreds() {
+    if (!TSA_CRED_FILE.isBlank()) {
+      try {
+        String s = Files.readString(Path.of(TSA_CRED_FILE)).trim();
+        int i = s.indexOf(':');
+        if (i > 0) return new BasicPair(s.substring(0,i), s.substring(i+1));
+      } catch (Exception ignore) {}
+    }
+    return new BasicPair(TSA_USER, TSA_PASS);
+  }
 
   // load ICA cert once for issuedByUs checks
   static X509Certificate readX509(Path p) throws Exception {
@@ -1011,24 +1036,34 @@ public class SignerServer {
 
     HttpURLConnection conn = (HttpURLConnection) new URL(TSA_URL).openConnection();
     conn.setConnectTimeout(TSA_TIMEOUT_MS);
-    // Ensure the TSA response is not compressed; BouncyCastle expects raw DER.
-    // Some proxies may gzip otherwise.
-    conn.setRequestProperty("Accept-Encoding", "identity");
+    conn.setReadTimeout(TSA_TIMEOUT_MS);
+    conn.setUseCaches(false);
     conn.setDoOutput(true);
     conn.setRequestMethod("POST");
     conn.setRequestProperty("Content-Type", "application/timestamp-query");
     conn.setRequestProperty("Accept", "application/timestamp-reply");
-    // (optional sanity) strict CT check – helps diagnostics if a proxy answers with HTML
-    String ct = conn.getHeaderField("Content-Type");
-    if (ct != null && !ct.toLowerCase().startsWith("application/timestamp-reply")) throw new IOException("bad TSA content-type: "+ct);
-     
-    if (!TSA_USER.isBlank() || !TSA_PASS.isBlank()) {
-      String basic = java.util.Base64.getEncoder().encodeToString((TSA_USER + ":" + TSA_PASS).getBytes(StandardCharsets.UTF_8));
+    // Ensure the TSA response is not compressed; BouncyCastle expects raw DER.
+    conn.setRequestProperty("Accept-Encoding", "identity");
+    // Send a fixed-length body to avoid chunked transfer oddities in some proxies
+    conn.setFixedLengthStreamingMode(body.length);
+
+    BasicPair pair = currentTsaCreds();
+    if (!pair.user.isBlank() || !pair.pass.isBlank()) {
+      String basic = java.util.Base64.getEncoder()
+        .encodeToString((pair.user + ":" + pair.pass).getBytes(StandardCharsets.UTF_8));
       conn.setRequestProperty("Authorization", "Basic " + basic);
     }
+
+    // Write request (this implicitly connects)
     try (OutputStream os = conn.getOutputStream()) { os.write(body); }
+
+    // Now it's connected — check status and content-type
     int code = conn.getResponseCode();
     if (code != 200) throw new IOException("TSA HTTP " + code);
+    String ct = conn.getContentType();
+    if (ct == null || !ct.toLowerCase(Locale.ROOT).startsWith("application/timestamp-reply")) {
+      throw new IOException("bad TSA content-type: " + ct);
+    }
     byte[] resp;
     try (InputStream is = conn.getInputStream()) { resp = is.readAllBytes(); }
     TimeStampResponse tsr = new TimeStampResponse(resp);
@@ -1783,6 +1818,37 @@ sudo install -m 0644 "${ROOT_DIR}/root.crt" "${PKI_PUB}/root.crt"
 sudo install -m 0644 "${ICA_DIR}/ica.crl"   "${PKI_PUB}/ica.crl"
 sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/root.crl"
 
+sudo tee /usr/local/bin/dmj-rotate-tsa-creds >/dev/null <<'ROTATETSACREDS'
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+FILE="${DMJ_TSA_CRED_FILE:-/run/dmj/tsa.creds}"
+DIR="$(dirname "$FILE")"; mkdir -p "$DIR"
+old="${FILE}.old"
+
+# Generate new pair
+u="$(tr -dc 'a-z0-9' </dev/urandom | head -c 12)"
+p="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 28)"
+tmp="${FILE}.$$.$RANDOM"
+printf '%s:%s\n' "$u" "$p" > "$tmp"
+chmod 600 "$tmp"
+
+# Keep the previous creds for a short grace window
+if [ -s "$FILE" ]; then
+  cp -f "$FILE" "$old"
+  chmod 600 "$old"
+fi
+
+# Atomic replace
+mv -f "$tmp" "$FILE"
+
+# Expire stale old credentials (>15 min)
+find "$DIR" -maxdepth 1 -name "$(basename "$FILE").old" -mmin +15 -delete 2>/dev/null || true
+
+echo "[dmj-rotate-tsa-creds] rotated at $(date -Is)"
+ROTATETSACREDS
+sudo chmod +x /usr/local/bin/dmj-rotate-tsa-creds
+
 sudo tee /usr/local/bin/dmj-refresh-crl >/dev/null <<REFRESHCRL
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1797,11 +1863,13 @@ sudo chmod +x /usr/local/bin/dmj-refresh-crl
 sudo tee /usr/local/bin/dmj-tsa.js >/dev/null <<'TSASRV'
 #!/usr/bin/env node
 "use strict";
-const http = require('http'), { spawn } = require('child_process');
+const http = require('http'), { spawn } = require('child_process'), fs = require('fs');
 const PORT = parseInt(process.env.DMJ_TSA_PORT || "9090", 10);
 const TS_CONF = process.env.DMJ_TSA_CONF || "/opt/dmj/pki/tsa/ts.cnf";
 const BASIC_USER = process.env.DMJ_TSA_BASIC_USER || "";
 const BASIC_PASS = process.env.DMJ_TSA_BASIC_PASS || "";
+const CRED_FILE  = process.env.DMJ_TSA_CRED_FILE || "/run/dmj/tsa.creds";
+const OLD_FILE   = CRED_FILE + ".old";  // optional grace window
 function unauthorized(res){ res.writeHead(401, {'www-authenticate':'Basic realm="dmj-tsa"'}); res.end(); }
 function ok(res, body){
   // Explicit content-length and exact content-type to avoid proxy meddling
@@ -1809,24 +1877,36 @@ function ok(res, body){
   res.end(body);
 }
 function bad(res, code, msg){ res.writeHead(code||500, {'content-type':'text/plain'}); res.end(msg||'error'); }
+function pairFrom(path){
+  try { const s = fs.readFileSync(path, 'utf8').trim(); const i = s.indexOf(':'); if (i > 0) return [s.slice(0,i), s.slice(i+1)]; }
+  catch(_) {}
+  return null;
+}
+function checkAuth(hdr){
+  if (!hdr || !hdr.startsWith('Basic ')) return false;
+  try {
+    const [u,p] = Buffer.from(hdr.slice(6),'base64').toString('utf8').split(':');
+    const cur = pairFrom(CRED_FILE) || [BASIC_USER, BASIC_PASS];
+    if (u===cur[0] && p===cur[1]) return true;
+    const old = pairFrom(OLD_FILE);
+    return !!(old && u===old[0] && p===old[1]);
+  } catch { return false; }
+}
+
 const server = http.createServer((req,res)=>{
   if(req.method==='GET' && req.url==='/healthz'){ res.writeHead(200,{'content-type':'text/plain'}); return res.end('ok'); }
   if(req.method!=='POST'){ return bad(res,405,'method not allowed'); }
   const ctype = (req.headers['content-type']||'').toLowerCase();
   if(ctype.indexOf('application/timestamp-query')!==0){ return bad(res,415,'content-type'); }  
-  if(BASIC_USER){
-    const hdr = req.headers['authorization']||'';
-    const okAuth = hdr.startsWith('Basic ') && (()=>{
-      try { const [u,p] = Buffer.from(hdr.slice(6),'base64').toString('utf8').split(':'); return u===BASIC_USER && p===BASIC_PASS; }
-      catch(_){ return false; }
-    })();
-    if(!okAuth) return unauthorized(res);
+  // Require Basic auth if either env or file creds exist
+  if (BASIC_USER || BASIC_PASS || fs.existsSync(CRED_FILE)) {
+    if (!checkAuth(req.headers['authorization']||'')) return unauthorized(res);
   }
   const bufs=[]; req.on('data',c=>bufs.push(c)).on('end',()=>{
     const q = Buffer.concat(bufs);
     // const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-queryfile','-']);
-    // Read TSQ from STDIN explicitly; produce DER TimeStampResp on STDOUT
-    const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-in','-']);
+    // Read TSQ from STDIN and emit a DER TimeStampResp on STDOUT
+    const openssl = spawn('openssl', ['ts','-reply','-config', TS_CONF, '-queryfile', '-']);
     const outs=[]; let err='';
     openssl.stdout.on('data',d=>outs.push(d));
     openssl.stderr.on('data',d=>err+=d);
@@ -1887,8 +1967,12 @@ DMJ_HTTP_LOG=${DMJ_VERBOSE_LOGS}
 #  • DocTimeStamp (ETSI.RFC3161) after DSS → B‑LTA
 # Leave DMJ_TSA_URL empty to disable all timestamping.
 DMJ_TSA_URL=https://${TSA_DOMAIN}
-DMJ_TSA_USER=test
-DMJ_TSA_PASS=test123
+
+# Do not hardcode user/pass; the signer & TSA read /run/dmj/tsa.creds
+DMJ_TSA_USER=
+DMJ_TSA_PASS=
+DMJ_TSA_CRED_FILE=/run/dmj/tsa.creds
+
 # default private OID, change if you have a policy
 DMJ_TSA_POLICY_OID=1.3.6.1.4.1.55555.1.1
 DMJ_TSA_HASH=SHA-256
@@ -1923,9 +2007,20 @@ VERBOSE="${DMJ_LOG_VERBOSE:-1}"
 # TSA env for the tiny HTTP service
 export DMJ_TSA_PORT="${DMJ_TSA_PORT:-9090}"
 export DMJ_TSA_CONF="${DMJ_TSA_CONF:-/opt/dmj/pki/tsa/ts.cnf}"
-export DMJ_TSA_BASIC_USER="${DMJ_TSA_BASIC_USER:-test}"
-export DMJ_TSA_BASIC_PASS="${DMJ_TSA_BASIC_PASS:-test123}"
+export DMJ_TSA_CRED_FILE="${DMJ_TSA_CRED_FILE:-/run/dmj/tsa.creds}"
+# No built‑in defaults; the TSA and signer read DMJ_TSA_CRED_FILE.
+export DMJ_TSA_BASIC_USER="${DMJ_TSA_BASIC_USER:-}"
+export DMJ_TSA_BASIC_PASS="${DMJ_TSA_BASIC_PASS:-}"
 
+# One‑time seed of runtime Basic‑Auth creds (ephemeral)
+if [ ! -s "$DMJ_TSA_CRED_FILE" ]; then
+  u="$(tr -dc 'a-z0-9' </dev/urandom | head -c 12)"
+  p="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 28)"
+  tmp="${DMJ_TSA_CRED_FILE}.tmp"
+  printf '%s:%s\n' "$u" "$p" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$DMJ_TSA_CRED_FILE"   # atomic replace
+fi
 
 # Small in-memory ring log (journald still has the full stream)
 LOG_RING="${LOG_RING:-/run/dmj/stack.log}"
@@ -2321,36 +2416,6 @@ sudo ln -sf /etc/nginx/sites-available/dmj-tsa /etc/nginx/sites-enabled/dmj-tsa
 sudo nginx -t && sudo systemctl reload nginx
 sudo -u www-data test -r /opt/dmj/pki/pub/ica.crt && echo "WWW ZIP FAIL:nginx can read ica.crt" || echo "WWW ZIP FAIL: nginx cannot read ica.crt"
 
-say "[+] Adding Cron Job..."
-# Cron job schedule: Every day at 2:00 AM
-echo "[+] Adding Cron Job..."
-
-# Cron job schedules
-CRON_SCHEDULE="0 2 * * *"
-COMMAND="find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
-CRON_JOB="$CRON_SCHEDULE $COMMAND"
-
-CRON_JOB2="0 */6 * * * /usr/local/bin/dmj-refresh-crl"
-
-# # Safely get existing crontab or empty if none exists
-# existing_cron=$(crontab -l 2>/dev/null || true)
-# Install into dmjsvc's user crontab so tasks run under the locked user
-existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
-
-# Filter out any existing lines matching the commands
-filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" | grep -Fv "$CRON_JOB2" || true)
-
-# Add new cron job lines
-new_cron=$(printf "%s\n%s\n%s\n" "$filtered_cron" "$CRON_JOB" "$CRON_JOB2")
-
-
-# Install/replace user crontab
-printf "%s\n" "$new_cron" | sudo crontab -u "$DMJ_USER" -
-
-echo "Cron jobs added:"
-echo "$CRON_JOB"
-echo "$CRON_JOB2"
-
 # Write the fixer script
 sudo tee /usr/local/bin/dmj-fix-perms >/dev/null <<'SH'
 #!/usr/bin/env bash
@@ -2415,11 +2480,63 @@ exit 0
 SH
 sudo chmod 0755 /usr/local/bin/dmj-fix-perms
 
-# Add to dmjsvc’s crontab (you already use per-user cron)
-CRON_JOB3="*/15 * * * * /usr/local/bin/dmj-fix-perms"
-existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
-printf "%s\n%s\n" "$(echo "$existing_cron" | grep -Fv '/usr/local/bin/dmj-fix-perms' || true)" "$CRON_JOB3" | sudo crontab -u "$DMJ_USER" -
 
+
+say "[+] Adding Cron Job..."
+# Cron job schedule: Every day at 2:00 AM
+echo "[+] Adding Cron Job..."
+
+# Cron job schedules
+
+# # Safely get existing crontab or empty if none exists
+# existing_cron=$(crontab -l 2>/dev/null || true)
+# Install into dmjsvc's user crontab so tasks run under the locked user
+# existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
+
+# # Filter out any existing lines matching the commands
+# filtered_cron=$(echo "$existing_cron" | grep -Fv "$COMMAND" | grep -Fv "$CRON_JOB2" || true)
+
+# # Add new cron job lines
+# new_cron=$(printf "%s\n%s\n%s\n" "$filtered_cron" "$CRON_JOB" "$CRON_JOB2")
+
+
+# # Install/replace user crontab
+# printf "%s\n" "$new_cron" | sudo crontab -u "$DMJ_USER" -
+
+# echo "Cron jobs added:"
+# echo "$CRON_JOB"
+# echo "$CRON_JOB2"
+
+# # Add to dmjsvc’s crontab (you already use per-user cron)
+# CRON_JOB="0 2 * * * find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete"
+# CRON_JOB2="0 */6 * * * /usr/local/bin/dmj-refresh-crl"
+# CRON_JOB3="*/15 * * * * /usr/local/bin/dmj-fix-perms"
+# CRON_JOB4="0 */6 * * * /usr/local/bin/dmj-rotate-tsa-creds"
+# existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
+# printf "%s\n%s\n" "$(echo "$existing_cron" | grep -Fv '/usr/local/bin/dmj-fix-perms' || true)" "$CRON_JOB3" | sudo crontab -u "$DMJ_USER" -
+
+# existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
+# printf "%s\n%s\n" "$(echo "$existing_cron" | grep -Fv '/usr/local/bin/dmj-rotate-tsa-creds' || true)" "$CRON_JOB4" | sudo crontab -u "$DMJ_USER" -
+
+# Define cron jobs
+CRON_JOB1="0 2 * * * find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete" # delete dl folder every 2 days
+CRON_JOB2="0 */6 * * * /usr/local/bin/dmj-refresh-crl" # 6 hours
+CRON_JOB3="*/15 * * * * /usr/local/bin/dmj-fix-perms" # 15 minutes
+CRON_JOB4="0 */6 * * * /usr/local/bin/dmj-rotate-tsa-creds" # 6 hours
+
+# Load existing crontab (if any)
+existing_cron=$(sudo crontab -u "$DMJ_USER" -l 2>/dev/null || true)
+
+# Remove any old versions of these jobs to avoid duplicates
+clean_cron=$(echo "$existing_cron" | grep -Fv '/usr/local/bin/dmj-fix-perms' \
+                                 | grep -Fv '/usr/local/bin/dmj-rotate-tsa-creds' \
+                                 | grep -Fv '/usr/local/bin/dmj-refresh-crl' \
+                                 | grep -Fv '/opt/dmj/pki/pub/dl' || true)
+
+# Add all four jobs back in one pass
+printf "%s\n%s\n%s\n%s\n%s\n" "$clean_cron" \
+  "$CRON_JOB1" "$CRON_JOB2" "$CRON_JOB3" "$CRON_JOB4" \
+  | sudo crontab -u "$DMJ_USER" -
 
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
