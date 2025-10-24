@@ -20,6 +20,7 @@ LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
 
 DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
+DMJ_VERBOSE_LOGS="${DMJ_VERBOSE_LOGS:-0}"
 
 # Load installation id / DB_PREFIX
 # shellcheck disable=SC1090
@@ -89,6 +90,7 @@ DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by defaul
 DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
 DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
 DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-0}"       # 1 = rotate signer freely - dont - invalidates files
+DMJ_REISSUE_TSA="${DMJ_REISSUE_TSA:-0}"
 DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
 
 # Require D1 id (single shared DB)
@@ -115,6 +117,7 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" ]]; then
     DMJ_REISSUE_OCSP=1
     DMJ_REISSUE_LEAF=1
     DMJ_REGEN_TRUST_KIT=1
+    DMJ_REISSUE_TSA=1
     DMJ_VERBOSE=1
 
     echo "Hard reset confirmed. Proceeding with full PKI reissuance..."
@@ -1846,17 +1849,17 @@ DMJ_SIG_NAME=${DMJ_ROOT_DOMAIN}
 DMJ_SIG_LOCATION=${COUNTRY}
 DMJ_CONTACT_EMAIL=${SUPPORT_EMAIL}
 DMJ_SIG_REASON="Contents securely verified by ${DMJ_ROOT_DOMAIN} against any tampering."
-DMJ_LOG_VERBOSE=0
-DMJ_HTTP_LOG=0
+DMJ_LOG_VERBOSE=${DMJ_VERBOSE_LOGS}
+DMJ_HTTP_LOG=${DMJ_VERBOSE_LOGS}
 
 # --- PAdES / TSA / LTV-LTA ---------------------------------------------------
 # RFC 3161 TSA endpoint used for:
 #  • Signature-time-stamp (unsigned attr id-aa-signatureTimeStampToken) → B‑T
 #  • DocTimeStamp (ETSI.RFC3161) after DSS → B‑LTA
 # Leave DMJ_TSA_URL empty to disable all timestamping.
-DMJ_TSA_URL=
-DMJ_TSA_USER=
-DMJ_TSA_PASS=
+DMJ_TSA_URL=tsa.dmj.one
+DMJ_TSA_USER=test
+DMJ_TSA_PASS=test123
 DMJ_TSA_POLICY_OID=1.3.6.1.4.1.55555.1.1   # default private OID, change if you have a policy
 DMJ_TSA_HASH=SHA-256
 DMJ_TSA_TIMEOUT_MS=10000
@@ -1890,8 +1893,8 @@ VERBOSE="${DMJ_LOG_VERBOSE:-1}"
 # TSA env for the tiny HTTP service
 export DMJ_TSA_PORT="${DMJ_TSA_PORT:-9090}"
 export DMJ_TSA_CONF="${DMJ_TSA_CONF:-/opt/dmj/pki/tsa/ts.cnf}"
-export DMJ_TSA_BASIC_USER="${DMJ_TSA_BASIC_USER:-}"
-export DMJ_TSA_BASIC_PASS="${DMJ_TSA_BASIC_PASS:-}"
+export DMJ_TSA_BASIC_USER="${DMJ_TSA_BASIC_USER:-test}"
+export DMJ_TSA_BASIC_PASS="${DMJ_TSA_BASIC_PASS:-test123}"
 
 
 # Small in-memory ring log (journald still has the full stream)
@@ -2213,10 +2216,13 @@ server {
   client_body_timeout  30s;
   proxy_read_timeout   30s;
 
+  location = /healthz {
+    try_files \$uri =404;
+  }
+
   location / {
-    # Only POST / (application/timestamp-query) and GET /healthz
-    if (\$request_method !~ ^(POST|GET)$) { return 405; }
-    if (\$request_method = GET ) { try_files \$uri =404; }
+    limit_except POST GET { return 405; }
+
     proxy_pass         http://127.0.0.1:9090;
     proxy_http_version 1.1;
     proxy_set_header   Host \$host;
@@ -2241,9 +2247,13 @@ server {
   client_body_timeout  30s;
   proxy_read_timeout   30s;
 
+  location = /healthz {
+    try_files \$uri =404;
+  }
+
   location / {
-    if (\$request_method !~ ^(POST|GET)$) { return 405; }
-    if (\$request_method = GET ) { try_files \$uri =404; }
+    limit_except POST GET { return 405; }
+
     proxy_pass         http://127.0.0.1:9090;
     proxy_http_version 1.1;
     proxy_set_header   Host \$host;
