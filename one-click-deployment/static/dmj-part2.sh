@@ -46,7 +46,7 @@ SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (
 # --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
 PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
 OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
-TSA_DOMAIN="${TSA_DOMAIN:-127.0.0.1:9090}"
+TSA_DOMAIN="${TSA_DOMAIN:-tsa.dmj.one}"
 
 OPT_DIR="/opt/dmj"
 PKI_DIR="/opt/dmj/pki"
@@ -1872,7 +1872,7 @@ DMJ_HTTP_LOG=${DMJ_VERBOSE_LOGS}
 #  • Signature-time-stamp (unsigned attr id-aa-signatureTimeStampToken) → B‑T
 #  • DocTimeStamp (ETSI.RFC3161) after DSS → B‑LTA
 # Leave DMJ_TSA_URL empty to disable all timestamping.
-DMJ_TSA_URL=${TSA_DOMAIN}
+DMJ_TSA_URL=https://${TSA_DOMAIN}
 DMJ_TSA_USER=test
 DMJ_TSA_PASS=test123
 # default private OID, change if you have a policy
