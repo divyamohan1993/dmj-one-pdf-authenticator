@@ -375,8 +375,7 @@ Process Manager | systemd | Service lifecycle management
 
 ```
 /opt/dmj/
-├── worker/           # Cloudflare Worker code
-├── signer-vm/        # Java signer source & JAR
+├── signer/           # Java signer source & JAR (extracted during deployment)
 └── pki/              # PKI certificates and keys
     ├── root/         # Root CA
     ├── ica/          # Issuing CA
@@ -388,6 +387,8 @@ Process Manager | systemd | Service lifecycle management
 /var/log/dmj/         # Application logs
 /etc/dmj/             # Configuration files
 ```
+
+**Note:** Worker code is embedded in the deployment scripts and deployed directly to Cloudflare. The Java signer is extracted and built during deployment from the embedded source in `dmj-part2.sh`.
 
 ### Environment Variables
 

@@ -36,9 +36,9 @@ All Worker (TypeScript) and Java signer (Maven) code is embedded within `dmj-par
 
 ## Getting Started
 
-🚀 **Quick Start:** See the [Quick Start Guide](../QUICKSTART.md) for a 5-minute setup.
+🚀 **Quick Start:** See the [Quick Start Guide](QUICKSTART.md) for a 5-minute setup.
 
-📖 **One-Click Deployment:** See the [one-click-deployment guide](../one-click-deployment/readme.md) for automated deployment with a single command using `autoconfig.sh`.
+📖 **One-Click Deployment:** See the [one-click-deployment guide](one-click-deployment/readme.md) for automated deployment with a single command using `autoconfig.sh`.
 
 The automated deployment system uses `autoconfig.sh` which orchestrates the entire setup process, automatically executing both `dmj-part1.sh` (system setup) and `dmj-part2.sh` (service deployment) after Wrangler authentication is confirmed. All secrets are generated automatically and securely stored.
 
@@ -54,15 +54,15 @@ Replace `YOUR-D1-DATABASE-ID` with your Cloudflare D1 database ID.
 
 ## Documentation
 
-- 🚀 [Quick Start Guide](../QUICKSTART.md) - Get started in 5 minutes
-- 📖 [Deployment Guide](../one-click-deployment/readme.md) - Automated one-click deployment
-- 🏗️ [Architecture Overview](../ARCHITECTURE.md) - System design and components
-- 🗺️ [Roadmap](../ROADMAP.md) - Future plans and features
-- 🛠️ [Development Guide](DEVELOPMENT.md) - Local development setup
-- 🤝 [Contributing Guidelines](CONTRIBUTING.md) - How to contribute
-- 🏛️ [Governance](GOVERNANCE.md) - Project governance
-- 🔒 [Security Policy](SECURITY.md) - Security and vulnerability reporting
-- 💬 [Support](SUPPORT.md) - Getting help
+- 🚀 [Quick Start Guide](QUICKSTART.md) - Get started in 5 minutes
+- 📖 [Deployment Guide](one-click-deployment/readme.md) - Automated one-click deployment
+- 🏗️ [Architecture Overview](ARCHITECTURE.md) - System design and components
+- 🗺️ [Roadmap](ROADMAP.md) - Future plans and features
+- 🛠️ [Development Guide](.github/DEVELOPMENT.md) - Local development setup
+- 🤝 [Contributing Guidelines](.github/CONTRIBUTING.md) - How to contribute
+- 🏛️ [Governance](.github/GOVERNANCE.md) - Project governance
+- 🔒 [Security Policy](.github/SECURITY.md) - Security and vulnerability reporting
+- 💬 [Support](.github/SUPPORT.md) - Getting help
 
 ## Community & Support
 
@@ -94,4 +94,4 @@ If you use this software in academic work, please cite it:
 }
 ```
 
-Or use the [CITATION.cff](CITATION.cff) file.
+Or use the [CITATION.cff](.github/CITATION.cff) file.

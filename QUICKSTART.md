@@ -48,30 +48,17 @@ After deployment completes:
 2. Save the one-time admin key displayed
 3. Start signing and verifying PDFs!
 
-## 🎯 Alternative: Manual Setup for Development
+## 🎯 Alternative: Local Development
 
-For local development or manual deployment, see the detailed steps below:
+For local development or customization, see the detailed steps in the [Development Guide](.github/DEVELOPMENT.md).
 
-### Prerequisites
-- Node.js 20+ and npm
-- Java 21
-- Maven 3.9+
-- Cloudflare account (free tier works!)
+The repository uses an automated deployment architecture where Worker and Java signer code are embedded within the deployment scripts (`one-click-deployment/static/dmj-part2.sh`). For development:
 
-### Manual Installation Steps
+1. Clone the repository
+2. Extract the embedded code from `dmj-part2.sh` if needed
+3. Follow the [Development Guide](.github/DEVELOPMENT.md) for local setup
 
-```bash
-git clone https://github.com/divyamohan1993/dmj-one-pdf-authenticator.git
-cd dmj-one-pdf-authenticator
-
-# Install Worker dependencies
-cd worker && npm install
-
-# Build Java signer
-cd ../signer-vm && mvn clean package
-
-# Deploy manually following the Development Guide
-```
+The automated deployment approach streamlines production deployment while the embedded code can still be extracted for development purposes.
 
 ## 🎯 What's Next?
 
