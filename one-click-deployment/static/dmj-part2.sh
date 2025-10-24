@@ -4130,9 +4130,7 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
       // Hand the admin UI the direct URL under pki/pub/dl
       return json({ download: downloadUrl, sha256: sha, serial: certSerial,
                     hasSignature: !!r.hasSignature, isValid: !!r.isValid,
-                    coversDocument: !!r.coversDocument, issuedByUs: !!r.issuedByUs });
-     }
-
+                    coversDocument: !!r.coversDocument, issuedByUs: !!r.issuedByUs });     
     }
 
     if (u.pathname === adminPath + "/revoke"){     
