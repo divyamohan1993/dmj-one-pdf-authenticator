@@ -83,6 +83,29 @@ sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/n
 sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
 sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
 
+echo "[+] Create minimal stub HTTP blocks for Let's Encrypt if they don't already exist"
+for DOMAIN in ocsp.dmj.one pki.dmj.one signer.dmj.one tsa.dmj.one; do
+  CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
+  ENABLED="/etc/nginx/sites-enabled/${DOMAIN}.conf"
+
+  if [ ! -f "${CONF}" ]; then
+    sudo tee "${CONF}" > /dev/null <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    root /var/www/html;
+    location / {
+        return 200 "ok\n";
+    }
+}
+EOF
+    sudo ln -sf "${CONF}" "${ENABLED}"
+  fi
+done
+
+# test nginx config and reload to apply stubs
+sudo nginx -t && sudo systemctl reload nginx
+
 echo "[i] Generating ocsp, signer, tsa and pki domain's LetsEncrypt Certificate"
 sudo certbot --nginx -d ocsp.dmj.one    --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
 sudo certbot --nginx -d pki.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
