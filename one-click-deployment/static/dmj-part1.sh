@@ -82,9 +82,16 @@ sudo chmod -R go-rwx "$DMJ_HOME"
 
 echo "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
 sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
+# Remove any old per-domain stubs (both exact and wildcard matches)
+sudo rm -f /etc/nginx/sites-enabled/pki* \
+            /etc/nginx/sites-enabled/ocsp* \
+            /etc/nginx/sites-enabled/signer* \
+            /etc/nginx/sites-enabled/tsa* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* \
+            /etc/nginx/sites-enabled/*ocsp* \
+            /etc/nginx/sites-enabled/*signer* \
+            /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true
+
 
 echo "[+] Waiting 2 seconds..."
 sleep 2
@@ -95,7 +102,8 @@ if [ "$GEN_STUBS" -eq 1 ]; then
     CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
     ENABLED="/etc/nginx/sites-enabled/${DOMAIN}.conf"
 
-    if [ ! -f "${CONF}" ]; then
+    # (Re)write the stub if missing or if it doesn't declare the expected server_name
+    if [ ! -f "${CONF}" ] || ! grep -qE "^[[:space:]]*server_name[[:space:]]+${DOMAIN};" "${CONF}" 2>/dev/null; then
       sudo tee "${CONF}" > /dev/null <<EOF
 server {
     listen 80;
@@ -106,8 +114,9 @@ server {
     }
 }
 EOF
-      sudo ln -sf "${CONF}" "${ENABLED}"
     fi
+    # Always ensure the site is enabled (symlink present)
+    sudo ln -sf "${CONF}" "${ENABLED}"
   done
 
   # test nginx config and reload to apply stubs
