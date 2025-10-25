@@ -3020,7 +3020,7 @@ async function ensureSchema(env: Env) {
   // }
 
   // --- schema drift fixups for existing deployments ---
-  try { await env.DB.prepare(`ALTER TABLE ${p}documents ADD COLUMN issuer_fp TEXT`).run(); } catch (_) { /* exists */ }
+  // try { await env.DB.prepare(`ALTER TABLE ${p}documents ADD COLUMN issuer_fp TEXT`).run(); } catch (_) { /* exists */ }
   await env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS ${p}documents_uniq_issuer_serial ON ${p}documents(issuer_fp, cert_serial)`).run();
   await env.DB.prepare(`CREATE INDEX IF NOT EXISTS ${p}documents_signed_at_idx ON ${p}documents(signed_at DESC)`).run();
   await env.DB.prepare(`CREATE INDEX IF NOT EXISTS ${p}documents_revoked_idx ON ${p}documents(revoked_at)`).run();
@@ -4643,7 +4643,6 @@ say "[+] Applying schema to remote D1..."
 # ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN cert_serial TEXT;" ) || true
 
 # Ensure new columns/indexes exist when upgrading older databases.
-( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN issuer_fp TEXT;" ) || true
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "CREATE UNIQUE INDEX IF NOT EXISTS ${DB_PREFIX}documents_uniq_issuer_serial ON ${DB_PREFIX}documents(issuer_fp, cert_serial);" ) || true
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_signed_at_idx ON ${DB_PREFIX}documents(signed_at DESC);" ) || true
 ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_revoked_idx ON ${DB_PREFIX}documents(revoked_at);" ) || true
