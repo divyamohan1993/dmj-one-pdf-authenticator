@@ -1766,8 +1766,8 @@ signer_cn="$(cn_of "${SIGNER_DIR}/signer.crt")"
 
 # 2) Regenerate CRL and publish both AIA paths
 "${OPENSSL}" ca -config "${ICA_DIR}/openssl.cnf" -gencrl -out "${ICA_DIR}/ica.crl" || true
-sudo install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
-sudo install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"
+install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
+install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"
 HEAL
 sudo chmod 0755 /usr/local/bin/dmj-pki-heal
 
