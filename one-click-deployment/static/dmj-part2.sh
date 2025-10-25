@@ -870,7 +870,9 @@ public class SignerServer {
       int sigIndex = 0;
       for (PDSignature s : doc.getSignatureDictionaries()) {
         any = true; sigIndex++;
-        subFilter = String.valueOf(s.getSubFilter());
+        // Use the SubFilter *name* for reliable comparison and branch for RFC 3161 DocTimeStamp
+        String sf = (s.getSubFilter() != null ? s.getSubFilter().getName() : "");
+        subFilter = sf;
 
         int[] br = s.getByteRange();
         if (br != null && br.length == 4) {
@@ -889,6 +891,25 @@ public class SignerServer {
                   toHex(Arrays.copyOf(signedContent, Math.min(32, signedContent.length))));
 
         try {
+
+          // --- Special case: /SubFilter /ETSI.RFC3161 (DocTimeStamp) -----------------------
+          // The CMS in /Contents is a TimeStampToken over the hash of the ByteRange bytes.
+          // Do NOT verify it as a detached CMS over the PDF bytes; compare messageImprint instead.
+          if ("ETSI.RFC3161".equals(sf)) {
+            TimeStampToken tst = new TimeStampToken(new CMSSignedData(cms));
+            String algOid = tst.getTimeStampInfo().getMessageImprintAlgOID().getId();
+            String jcaName = jcaDigestNameFromOid(algOid);
+            byte[] calc    = MessageDigest.getInstance(jcaName).digest(signedContent);
+            byte[] imprint = tst.getTimeStampInfo().getMessageImprintDigest();
+            boolean match  = MessageDigest.isEqual(calc, imprint);
+            debug.put("sig"+sigIndex+".tst.algOid", algOid);
+            debug.put("sig"+sigIndex+".tst.match", match);
+            // We intentionally do not set issuerDn/issuedByUs/anyValid from DocTimeStamp:
+            // the CAdES signature(s) determine those. Move on to next signature.
+            continue;
+          }
+          // -------------------------------------------------------------------------------
+
           CMSSignedData sd = new CMSSignedData(new CMSProcessableByteArray(signedContent), cms);
 
           for (SignerInformation si : sd.getSignerInfos().getSigners()) {
