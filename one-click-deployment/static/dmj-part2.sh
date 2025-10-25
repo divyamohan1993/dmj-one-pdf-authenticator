@@ -494,6 +494,8 @@ import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.CMSAttributes;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
+import org.bouncycastle.asn1.oiw.OIWObjectIdentifiers;
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.asn1.ess.ESSCertIDv2;
 import org.bouncycastle.asn1.ess.SigningCertificateV2;
 import org.bouncycastle.cms.DefaultSignedAttributeTableGenerator;
@@ -509,6 +511,11 @@ import org.bouncycastle.tsp.TimeStampRequestGenerator;
 import org.bouncycastle.tsp.TimeStampResponse;
 import org.bouncycastle.tsp.TimeStampToken;
 import org.bouncycastle.tsp.TSPException;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
+import org.bouncycastle.cert.ocsp.OCSPReqBuilder;
+import org.bouncycastle.cert.ocsp.OCSPReq;
+import org.bouncycastle.cert.ocsp.OCSPResp;
+import org.bouncycastle.cert.ocsp.CertificateID;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.IOUtils;
@@ -574,6 +581,7 @@ public class SignerServer {
   static final String TSA_HASH = Optional.ofNullable(System.getenv("DMJ_TSA_HASH")).orElse("SHA-256"); // SHA-256/384/512
   static final int TSA_TIMEOUT_MS = Integer.parseInt(Optional.ofNullable(System.getenv("DMJ_TSA_TIMEOUT_MS")).orElse("10000"));
   static final boolean TS_ON_SIGNATURE = !"0".equals(Optional.ofNullable(System.getenv("DMJ_TS_ON_SIGNATURE")).orElse("0"));
+  static final int OCSP_TIMEOUT_MS = Integer.parseInt(Optional.ofNullable(System.getenv("DMJ_OCSP_TIMEOUT_MS")).orElse("5000"));
   static final boolean ADD_DOC_TIMESTAMP = !"0".equals(Optional.ofNullable(System.getenv("DMJ_ADD_DOC_TIMESTAMP")).orElse("0")); // for B-LTA
   static final String OCSP_URL_ENV = Optional.ofNullable(System.getenv("DMJ_OCSP_URL")).orElse(""); // optional; CRL is used anyway
 
@@ -1196,6 +1204,50 @@ public class SignerServer {
     return CMSSignedData.replaceSigners(cms, newStore);
   }
 
+  /** Build and POST an OCSP request for {@code subject} issued by {@code issuer}; returns DER OCSPResponse bytes or null on skip/failure. */
+  static byte[] tryFetchOCSP(X509Certificate subject, X509Certificate issuer) {
+    if (OCSP_URL_ENV.isBlank()) return null;
+    try {
+      // Build CertificateID: issuer name+key hashed (SHA-1 for broad interoperability) + subject serial.
+      var dcp = new JcaDigestCalculatorProviderBuilder().setProvider("BC").build();
+      var digCalc = dcp.get(new AlgorithmIdentifier(OIWObjectIdentifiers.idSHA1));
+      var certId = new CertificateID(digCalc, new JcaX509CertificateHolder(issuer), subject.getSerialNumber());
+      OCSPReq req = new OCSPReqBuilder().addRequest(certId).build();
+      byte[] body = req.getEncoded();
+
+      HttpURLConnection conn = (HttpURLConnection) new URL(OCSP_URL_ENV).openConnection();
+      conn.setConnectTimeout(OCSP_TIMEOUT_MS);
+      conn.setReadTimeout(OCSP_TIMEOUT_MS);
+      conn.setUseCaches(false);
+      conn.setDoOutput(true);
+      conn.setRequestMethod("POST");
+      conn.setRequestProperty("Content-Type", "application/ocsp-request");
+      conn.setRequestProperty("Accept", "application/ocsp-response");
+      conn.setRequestProperty("Accept-Encoding", "identity");
+      conn.setFixedLengthStreamingMode(body.length);
+      try (OutputStream os = conn.getOutputStream()) { os.write(body); }
+
+      int code = conn.getResponseCode();
+      if (code != 200) throw new IOException("OCSP HTTP " + code);
+      String ct = conn.getContentType();
+      if (ct == null || !ct.toLowerCase(Locale.ROOT).startsWith("application/ocsp-response")) {
+        log.warn("OCSP content-type unexpected: {}", ct);
+      }
+      byte[] resp;
+      try (InputStream is = conn.getInputStream()) { resp = is.readAllBytes(); }
+      OCSPResp ocsp = new OCSPResp(resp);
+      if (ocsp.getStatus() != OCSPResp.SUCCESSFUL) {
+        throw new IOException("OCSP status " + ocsp.getStatus());
+      }
+      // (Optional) parse and sanity-check the response object; embedding the raw response is sufficient for DSS.
+      return resp;
+    } catch (Exception e) {
+      // Non-fatal: if OCSP is unreachable, we still produce a valid B‑LT using CRLs only.
+      log.warn("OCSP fetch failed for serial={} : {}", subject.getSerialNumber(), String.valueOf(e));
+      return null;
+    }
++  }
+
   /** Create (or reuse) DSS and add Certs/CRLs (+ optional OCSP), and a VRI entry for the latest signature. */
   static byte[] addDSS_LTV(byte[] pdf, List<X509Certificate> chain) throws Exception {
     try (PDDocument doc = Loader.loadPDF(pdf);
@@ -1218,6 +1270,7 @@ public class SignerServer {
       COSArray certsArr = getOrCreateArray(dss, "Certs");
       COSArray crlsArr = getOrCreateArray(dss, "CRLs");
       COSArray ocspsArr = getOrCreateArray(dss, "OCSPs"); // may remain empty
+      List<COSStream> ocspStreams = new ArrayList<>();
 
       // Write chain into Certs
       List<COSStream> chainStreams = new ArrayList<>();
@@ -1239,6 +1292,20 @@ public class SignerServer {
         crlStreams.add(cs);
       }
 
+      // Add OCSPs if reachable (prefer freshness; fall back to CRL-only if not).
+      // For each cert (except the trust anchor), query OCSP using its issuer.
+      for (int i = 0; i + 1 < chain.size(); i++) {
+        X509Certificate subject = chain.get(i);
+        X509Certificate issuer  = chain.get(i + 1);
+        byte[] ocsp = tryFetchOCSP(subject, issuer);
+        if (ocsp != null && ocsp.length > 0) {
+          COSStream os = doc.getDocument().createCOSStream();
+          try (OutputStream oo = os.createOutputStream(COSName.FLATE_DECODE)) { oo.write(ocsp); }
+          ocspsArr.add(os);
+          ocspStreams.add(os);
+        }
+      }
+
       // (Optional) OCSP – if you expose an OCSP URL, you can query and embed here.
       // For B-LT CRL alone is sufficient per PAdES profile; keeping OCSP optional. (See PDFBox AddValidationInformation.) :contentReference[oaicite:3]{index=3}
 
@@ -1249,6 +1316,10 @@ public class SignerServer {
       if (!crlStreams.isEmpty()) {
         COSArray vriCrls = new COSArray(); crlStreams.forEach(vriCrls::add);
         vri.setItem(COSName.CRL, vriCrls);
+      }
+      if (!ocspStreams.isEmpty()) {
+        COSArray vriOcsp = new COSArray(); ocspStreams.forEach(vriOcsp::add);
+        vri.setItem(COSName.getPDFName("OCSP"), vriOcsp);
       }
       vri.setDate(COSName.TU, Calendar.getInstance());
       vriBase.setItem(COSName.getPDFName(sigHashHex), vri);

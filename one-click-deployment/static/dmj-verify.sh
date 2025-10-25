@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+logfail() {
+  echo "[x] $*" >&2
+  echo "---- journalctl: dmj-signer.service (last 200 lines) ----" >&2
+  journalctl -u dmj-signer.service -n 200 --no-pager || true
+  exit 1
+}
+ok(){ echo "[✓] $*"; }
+
+# Discover signer port from the runtime file (falls back to 18080)
+PORT="$(cat /run/dmj/signer.port 2>/dev/null || echo 18080)"
+
+# 1) systemd service running
+systemctl is-active --quiet dmj-signer.service || logfail "dmj-signer.service is not active"
+
+# 2) Signer health (direct and via nginx if DNS/LE is ready)
+curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null || logfail "Signer health (loopback) failed"
+ok "Signer /healthz (loopback) OK"
+
+# Try the nginx vhost if resolvable; don't fail deployment on DNS/LE timing
+SIGNER_HOST="$(grep -E '^SIGNER_DOMAIN=' /etc/dmj/dmj-signer.env | cut -d= -f2- || true)"
+if [[ -n "$SIGNER_HOST" ]]; then
+  if curl -fsS --max-time 5 "https://${SIGNER_HOST}/healthz" >/dev/null; then
+    ok "Signer /healthz via nginx vhost OK"
+  else
+    echo "[!] Signer vhost health check skipped/failed (DNS/LE may still be provisioning)"
+  fi
+fi
+
+# 3) TSA health + RFC 3161 end-to-end
+curl -fsS "http://127.0.0.1:9090/healthz" | grep -q '^ok' || logfail "TSA /healthz failed"
+ok "TSA /healthz OK"
+
+TMPD="$(mktemp -d)"
+trap 'rm -rf "$TMPD"' EXIT
+echo "dmj one" > "$TMPD/in.dat"
+openssl ts -query -data "$TMPD/in.dat" -sha256 -cert -out "$TMPD/req.tsq"
+
+# POST to local TSA, ensure correct Content-Type and a parseable reply
+curl -fsS -D "$TMPD/h" \
+     -H 'Content-Type: application/timestamp-query' \
+     --data-binary @"$TMPD/req.tsq" \
+     "http://127.0.0.1:9090/" > "$TMPD/resp.tsr" \
+  || logfail "TSA POST failed"
+
+grep -qi '^content-type: *application/timestamp-reply' "$TMPD/h" \
+  || logfail "TSA wrong Content-Type (want application/timestamp-reply)"
+
+openssl ts -reply -in "$TMPD/resp.tsr" -text >/dev/null \
+  || logfail "TSA reply not parseable by openssl(1) ts -reply"
+ok "TSA end-to-end (query→reply) OK"
+
+# 4) OCSP sanity (check a cert the DB knows about: signer leaf vs issuer)
+# 'good' or 'unknown' both prove the responder is answering; we just need a 200 + parseable response.
+if ! openssl ocsp -issuer /opt/dmj/pki/ica/ica.crt \
+                  -cert   /opt/dmj/signer-vm/signer.crt \
+                  -url    http://127.0.0.1:9080 \
+                  -no_nonce -resp_text >/dev/null 2>&1; then
+  logfail "OCSP query failed"
+fi
+ok "OCSP responder reachable & responding"
+
+# 5) Signer /spki JSON
+curl -fsS "http://127.0.0.1:${PORT}/spki" | grep -q '"spki"' \
+  || logfail "Signer /spki did not return JSON"
+ok "Signer /spki OK"
+
+echo "----------------------------------------------------------------"
+echo "[✓] All internal endpoints validated successfully."
