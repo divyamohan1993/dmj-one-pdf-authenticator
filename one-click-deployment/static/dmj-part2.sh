@@ -135,7 +135,14 @@ if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" && "${DEPLOYMENT_MODE:-}" == "DEV" 
     DMJ_REISSUE_TSA=1
     DMJ_VERBOSE=1
 
-    echo "Hard reset confirmed. Proceeding with full PKI reissuance..."
+    sudo rm -rf "${ICA_DIR}/newcerts" "${ICA_DIR}/index.txt" "${ICA_DIR}/serial" "${ICA_DIR}/crlnumber"
+    sudo install -d -m 0750 "${ICA_DIR}/newcerts"
+    sudo install -m 0640 /dev/null "${ICA_DIR}/index.txt"
+    printf 'unique_subject = yes\n' | sudo tee "${ICA_DIR}/index.txt.attr" >/dev/null
+    printf '%s\n' "$(openssl rand -hex 20 | tr '[:lower:]' '[:upper:]')" | sudo tee "${ICA_DIR}/serial" >/dev/null
+    printf '%s\n' "$(openssl rand -hex 8  | tr '[:lower:]' '[:upper:]')" | sudo tee "${ICA_DIR}/crlnumber" >/dev/null
+    
+    echo "Hard reset confirmed. Everything Deleted. Proceeding with full PKI reissuance..."
 fi
 ################## DANGER ENDS ########################
 
@@ -1597,6 +1604,21 @@ if [ ! -f "${ROOT_DIR}/root.crt" ] || [ "$DMJ_REISSUE_ROOT" = "1" ]; then
   openssl ca -config "${ROOT_DIR}/openssl.cnf" -gencrl -out "${ROOT_DIR}/root.crl"
 fi
 
+# -- Pre-CRL heal: ensure at most one VALID entry per subject -------------
+if [ -s "${ICA_DIR}/index.txt" ]; then
+  # mark expired -> "E"
+  openssl ca -config "${ICA_DIR}/openssl.cnf" -updatedb >/dev/null 2>&1 || true
+  # revoke older VALID duplicates; keep the most recent notAfter per subject
+  awk -F '\t' '$1=="V"{print $6 "\t" $2 "\t" $4}' "${ICA_DIR}/index.txt" \
+  | sort -t $'\t' -k1,1 -k2,2r \
+  | awk -F '\t' '!seen[$1]++{next} {print $3}' \
+  | while read -r s; do
+      openssl ca -config "${ICA_DIR}/openssl.cnf" \
+        -revoke "${ICA_DIR}/newcerts/${s}.pem" -crl_reason superseded >/dev/null 2>&1 || true
+    done
+fi
+# -------------------------------------------------------------------------
+
 if [ ! -f "${ICA_DIR}/ica.crt" ] || [ "$DMJ_REISSUE_ICA" = "1" ]; then
   say "[+] Creating Issuing CA ..."
   openssl genrsa -out "${ICA_DIR}/ica.key" 4096
@@ -1703,6 +1725,16 @@ DB="${ICA_DIR}/index.txt"
 
 # 1) Mark expired entries and tidy DB
 "${OPENSSL}" ca -config "${ICA_DIR}/openssl.cnf" -updatedb >/dev/null 2>&1 || true
+
+# After your existing -updatedb call, add this generic deduper:
+awk -F '\t' '$1=="V"{print $6 "\t" $2 "\t" $4}' "$DB" \
+| sort -t $'\t' -k1,1 -k2,2r \
+| awk -F '\t' '!seen[$1]++{next} {print $3}' \
+| while read -r s; do
+    "${OPENSSL}" ca -config "${ICA_DIR}/openssl.cnf" \
+      -revoke "${ICA_DIR}/newcerts/${s}.pem" -crl_reason superseded >/dev/null 2>&1 || true
+  done
+
 
 revoke_older_by_cn() {
   local cn="$1"
