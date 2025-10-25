@@ -2101,15 +2101,20 @@ export DMJ_TSA_CRED_FILE="${DMJ_TSA_CRED_FILE:-/run/dmj/tsa.creds}"
 export DMJ_TSA_BASIC_USER="${DMJ_TSA_BASIC_USER:-}"
 export DMJ_TSA_BASIC_PASS="${DMJ_TSA_BASIC_PASS:-}"
 
-# One‑time seed of runtime Basic‑Auth creds (ephemeral)
+# One‑time seed of runtime Basic‑Auth creds (ephemeral) — no head(1), no SIGPIPE
 if [ ! -s "$DMJ_TSA_CRED_FILE" ]; then
-  u="$(tr -dc 'a-z0-9' </dev/urandom | head -c 12)"
-  p="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 28)"
+  # 12 lower‑alnum chars, safe: only one external cmd + shell substring
+  u="$(openssl rand -hex 12)"; u="${u:0:12}"
+
+  # 28 mixed alnum; last stage (tr) is the consumer, so no broken pipe
+  p="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9')"; p="${p:0:28}"
+
   tmp="${DMJ_TSA_CRED_FILE}.tmp"
   printf '%s:%s\n' "$u" "$p" > "$tmp"
   chmod 600 "$tmp"
-  mv -f "$tmp" "$DMJ_TSA_CRED_FILE"   # atomic replace
+  mv -f "$tmp" "$DMJ_TSA_CRED_FILE"
 fi
+
 
 # Small in-memory ring log (journald still has the full stream)
 LOG_RING="${LOG_RING:-/run/dmj/stack.log}"
