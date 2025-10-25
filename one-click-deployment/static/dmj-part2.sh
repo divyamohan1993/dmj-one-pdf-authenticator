@@ -2087,23 +2087,30 @@ const server = http.createServer((req,res)=>{
   }
   const bufs=[]; req.on('data',c=>bufs.push(c)).on('end',()=>{
     const q = Buffer.concat(bufs);
-    // Feed the TSQ via /dev/stdin.  The openssl-ts man page requires a filename
-    // for -queryfile; using "-" causes BIO_new_file(... "-") failures.
-    // Also ensure the response is written to stdout (default).
-    const openssl = spawn('openssl', [
-      'ts', '-reply',
-      '-config', TS_CONF,
-      '-queryfile', '/dev/stdin'
-    ]);
+    // OpenSSL 'ts -reply' requires a *file* for -queryfile and does not read '-'.
+    // With PrivateDevices=yes, /dev/stdin is not reliable either.
+    // Write the TSQ to a secure temp file under /run/dmj, pass that path, then unlink.
+    const tmp = `/run/dmj/tsa-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tsq`;
+    try {
+      fs.writeFileSync(tmp, q, { mode: 0o600 });
+    } catch (e) {
+      console.error('[tsa] failed to write TSQ temp file:', e);
+      return bad(res, 500, 'tsa failure');
+    }
+
+    const openssl = spawn('openssl', ['ts', '-reply', '-config', TS_CONF, '-queryfile', tmp]);     
     const outs=[]; let err='';
     openssl.stdout.on('data',d=>outs.push(d));
     openssl.stderr.on('data',d=>err+=d);
     openssl.on('close', rc=>{
-      if(rc===0){ const body = Buffer.concat(outs); return ok(res, body); }
+      try { fs.unlink(tmp, () => {}); } catch {}
+      if (rc === 0) {
+        const body = Buffer.concat(outs);
+        return ok(res, body);
+      }
       console.error('[tsa] openssl ts -reply failed rc=%s stderr=%s', rc, err);
       bad(res,500,'tsa failure');
-    });
-    openssl.stdin.end(q);
+    });    
   });
 });
 server.listen(PORT,'127.0.0.1',()=>console.log(`dmj-tsa listening on :${PORT}`));
