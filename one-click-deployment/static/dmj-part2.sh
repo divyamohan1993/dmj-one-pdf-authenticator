@@ -2026,8 +2026,11 @@ sudo chmod 0640 "$DMJ_ENV_FILE"
 say "[+] Creating dmj-stack supervisor..."
 sudo tee /usr/local/bin/dmj-stack >/dev/null <<'STACK'
 #!/bin/bash
+# Long-running supervisor: keep -u + pipefail, but do NOT use -e here.
 set -euo pipefail
 umask 077
+# Never let a closed writer/reader pipe kill the shell (status 141).
+trap '' PIPE
 mkdir -p /run/dmj
 
 # Resolve paths from env (with sensible defaults)
@@ -2070,13 +2073,37 @@ trim_ring() {
   mv -f "$tmp" "$LOG_RING" 2>/dev/null || true
 }
 
+# Map a signal number to a human name (e.g., 13 -> SIGPIPE)
+sig_name() {
+  local n="$1"
+  local name
+  name="$(kill -l "$n" 2>/dev/null || true)"
+  if [[ -n "$name" ]]; then
+    printf 'SIG%s' "${name}"
+  else
+    printf 'SIG%s' "${n}"
+  fi
+}
+
+# Produce a readable reason for a non-zero rc (exit vs signal)
+explain_rc() {
+  local rc="$1"
+  if (( rc >= 128 )); then
+    local s=$(( rc - 128 ))
+    printf 'terminated by %s (%d)' "$(sig_name "$s")" "$s"
+  else
+    printf 'exit %d' "$rc"
+  fi
+}
+
 # Stream child's output with timestamps; tolerate SIGPIPE from pipeline endings.
 # Capture the child's (leftmost) exit status via PIPESTATUS[0] and *return* it,
 # rather than letting set -e/-o pipefail kill the supervisor.
 prefix_stream() {
   local label="$1"; shift
   local cnt=0
-  local rc=0
+  # Run the logging pipeline without 'errexit' so a SIGPIPE (exit 141)
+  # from the left command cannot kill the whole supervisor.
   set +e
   stdbuf -oL -eL "$@" 2>&1 | while IFS= read -r line; do
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
@@ -2086,10 +2113,16 @@ prefix_stream() {
     cnt=$((cnt+1))
     if (( cnt % 200 == 0 )); then trim_ring; fi
   done
-  # status of the leftmost command in the last pipeline (the child process)
-  rc=${PIPESTATUS[0]:-0}
-  set -e
-  return "$rc"
+  # IMPORTANT: We want the exit status of the *leftmost* command in the
+  # pipeline (the actual child we ran), not the 'while' consumer.
+  # Bash exposes this via the PIPESTATUS array. 0 = leftmost, 1 = next, ...
+  # See: 'bash $PIPESTATUS' docs. 
+  # Return that to our caller so it can log the true failing component.
+  # (Do not run anything that could start a new pipeline before we read it.)
+  local -a ps=( "${PIPESTATUS[@]}" )
+  local child_rc=0
+  [[ ${#ps[@]} -ge 1 ]] && child_rc="${ps[0]}"
+  return "${child_rc}"
 }
 
 trap 'trap - TERM INT; kill 0' TERM INT
@@ -2098,14 +2131,27 @@ trap 'trap - TERM INT; kill 0' TERM INT
 run_forever() {
   local label="$1"; shift
   while true; do
-    # Pipe child stdout+stderr through our prefixer; never exit supervisor on non-zero
-    if ! prefix_stream "$label" "$@"; then
-      rc=$?
-    else
-      rc=0
-    fi
+    # Announce start to the journal with the exact command
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-    echo "[$ts][$label] process exited rc=${rc}; restarting in 1s..." | tee -a "$LOG_RING"
+    echo "[$ts][$label] starting: $*" | tee -a "$LOG_RING"
+
+    # Run the child but DO NOT let 'set -e' kill the supervisor on non-zero rc.
+    set +e
+    prefix_stream "$label" "$@"
+    rc=$?
+    set -e    
+    reason="$(explain_rc "$rc")"
+    echo "[$ts][$label] process exited: ${reason} (rc=${rc})" | tee -a "$LOG_RING"
+
+    # On failure, dump the last few lines for quick triage in the journal
+    if (( rc != 0 )); then
+      echo "[$ts][$label] recent output (tail)" | tee -a "$LOG_RING"
+      # Grep lines for this label only; don't fail if grep finds nothing
+      grep -aF "[$label] " "$LOG_RING" 2>/dev/null | tail -n 40 || true
+    fi
+
+    ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+    echo "[$ts][$label] restarting in 1s..." | tee -a "$LOG_RING"
     sleep 1
   done
 }
@@ -2131,7 +2177,7 @@ run_forever signer "$JAVA_BIN" \
   -Dorg.slf4j.simpleLogger.defaultLogLevel="${JAVA_LOG_LEVEL}" \
   -jar "${SIGNER_DIR}/target/dmj-signer-1.0.0.jar" &
 
-wait  # keep supervisor in the foreground
+wait || true  # never let a non-zero from a child kill the supervisor
 STACK
 sudo chmod 0755 /usr/local/bin/dmj-stack
 
@@ -2143,6 +2189,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+SyslogIdentifier=dmj-signer
 User=dmjsvc
 Group=dmjsvc
 Type=simple
@@ -2153,7 +2200,7 @@ ExecStart=/bin/bash /usr/local/bin/dmj-stack
 Restart=on-failure
 # log to journald; do not write local files
 StandardOutput=journal
-StandardError=inherit
+StandardError=journal
 # Avoid rate limiting the flood while debugging
 LogRateLimitIntervalSec=0
 LogRateLimitBurst=0
