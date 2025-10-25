@@ -2070,9 +2070,14 @@ trim_ring() {
   mv -f "$tmp" "$LOG_RING" 2>/dev/null || true
 }
 
+# Stream child's output with timestamps; tolerate SIGPIPE from pipeline endings.
+# Capture the child's (leftmost) exit status via PIPESTATUS[0] and *return* it,
+# rather than letting set -e/-o pipefail kill the supervisor.
 prefix_stream() {
   local label="$1"; shift
   local cnt=0
+  local rc=0
+  set +e
   stdbuf -oL -eL "$@" 2>&1 | while IFS= read -r line; do
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
     msg="[$ts][$label] $line"
@@ -2081,6 +2086,10 @@ prefix_stream() {
     cnt=$((cnt+1))
     if (( cnt % 200 == 0 )); then trim_ring; fi
   done
+  # status of the leftmost command in the last pipeline (the child process)
+  rc=${PIPESTATUS[0]:-0}
+  set -e
+  return "$rc"
 }
 
 trap 'trap - TERM INT; kill 0' TERM INT
@@ -2089,9 +2098,12 @@ trap 'trap - TERM INT; kill 0' TERM INT
 run_forever() {
   local label="$1"; shift
   while true; do
-    # Pipe child stdout+stderr through our prefixer; never exit the supervisor on child errors
-    prefix_stream "$label" "$@"
-    rc=$?
+    # Pipe child stdout+stderr through our prefixer; never exit supervisor on non-zero
+    if ! prefix_stream "$label" "$@"; then
+      rc=$?
+    else
+      rc=0
+    fi
     ts=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
     echo "[$ts][$label] process exited rc=${rc}; restarting in 1s..." | tee -a "$LOG_RING"
     sleep 1
