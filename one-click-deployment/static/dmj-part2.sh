@@ -1,6 +1,10 @@
 # dmj-part2.sh
 #!/usr/bin/env bash
-set -euo pipefail
+# Fail hard, and *propagate* ERR into functions/subshells/$(...)
+set -Eeuo pipefail
+set -o errtrace
+# (Bash ≥4.4) make "set -e" apply inside command substitutions too
+shopt -s inherit_errexit 2>/dev/null || true
 umask 077
 
 
@@ -146,6 +150,7 @@ sudo install -d -m 0755 -o "$DMJ_USER" -g "$DMJ_USER" "$WORKER_DIR" "$SIGNER_DIR
 
 # Keep a console FD before we redirect
 exec 3>&1
+
 if [ "$VERBOSE" -eq 1 ]; then
   echo "[i] Verbose logging enabled. Log: ${LOG_FILE}" >&3
   exec > >(tee -a "$LOG_FILE") 2>&1
@@ -158,8 +163,35 @@ fi
 # Helper to print minimal progress to console
 say(){ printf "%s\n" "$*" >&3; }
 
+# Single place to render a precise failure with file:line, command & stack
+_dmj_trace_fail() {
+  local rc=$? cmd=$BASH_COMMAND
+  # In an ERR trap, use BASH_SOURCE[1] and BASH_LINENO[0] for the point-of-failure
+  local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+  local line="${BASH_LINENO[0]:-0}"
+
+  say ""
+  say "[!] FAIL rc=${rc} at ${src}:${line}"
+  say "    cmd: ${cmd}"
+
+  # Compact stack (oldest at top, most recent last)
+  local i
+  for ((i=${#FUNCNAME[@]}-1; i>=1; i--)); do
+    say "    ↳ ${FUNCNAME[i]}() ${BASH_SOURCE[i+1]:-?}:${BASH_LINENO[i]:-?}"
+  done
+
+  # If you have a log file variable, point to it; otherwise drop this line
+  [ -n "${LOG_FILE:-}" ] && say "[i] Full log: ${LOG_FILE}"
+  exit "$rc"
+}
+
+trap '_dmj_trace_fail' ERR
+
+# Optional: log SIGPIPEs instead of dying silently (does not exit)
+trap 'say "[!] SIGPIPE at ${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}:${BASH_LINENO[0]:-$LINENO} running: ${BASH_COMMAND}"' PIPE
+
 # Error trap prints a friendly pointer to the log
-trap 'rc=$?; say ""; say "[!] Failed at line $LINENO: $BASH_COMMAND (exit $rc)"; say "[i] See full log: $LOG_FILE"; exit $rc' ERR
+# trap 'rc=$?; say ""; say "[!] Failed at line $LINENO: $BASH_COMMAND (exit $rc)"; say "[i] See full log: $LOG_FILE"; exit $rc' ERR
 
 # Run commands as the locked-down service user
 as_dmj() { sudo -u "$DMJ_USER" -H "$@"; }
@@ -2027,10 +2059,27 @@ say "[+] Creating dmj-stack supervisor..."
 sudo tee /usr/local/bin/dmj-stack >/dev/null <<'STACK'
 #!/bin/bash
 # Long-running supervisor: keep -u + pipefail, but do NOT use -e here.
-set -euo pipefail
+set -Eeuo pipefail
+set -o errtrace
+shopt -s inherit_errexit 2>/dev/null || true
 umask 077
-# Never let a closed writer/reader pipe kill the shell (status 141).
-trap '' PIPE
+
+# Log SIGPIPEs instead of exiting; do not fail the service
+trap 'echo "[dmj-stack] SIGPIPE at ${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}:${BASH_LINENO[0]:-$LINENO} cmd=${BASH_COMMAND}" >&2' PIPE
+
+# Print a precise error with stack on any other failure
+_errexit() {
+  local rc=$?; local cmd=$BASH_COMMAND
+  local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"; local line="${BASH_LINENO[0]:-0}"
+  echo "[dmj-stack] FAIL rc=${rc} at ${src}:${line} :: ${cmd}" >&2
+  local i; for ((i=${#FUNCNAME[@]}-1; i>=1; i--)); do
+    echo "    ↳ ${FUNCNAME[i]}() ${BASH_SOURCE[i+1]:-?}:${BASH_LINENO[i]:-?}" >&2
+  done
+  exit "$rc"
+}
+trap '_errexit' ERR
+
+
 mkdir -p /run/dmj
 
 # Resolve paths from env (with sensible defaults)
