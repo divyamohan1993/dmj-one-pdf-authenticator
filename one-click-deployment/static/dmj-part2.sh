@@ -2402,6 +2402,20 @@ ReadWritePaths=/var/log/dmj /var/lib/dmj /opt/dmj /run/dmj
 WantedBy=multi-user.target
 UNIT
 
+# --- Choose TSA URL *before* starting the service --------------------------
+# Prefer the local TSA daemon to avoid any proxy/CDN altering headers.
+if curl -fsS --max-time 2 "http://127.0.0.1:9090/healthz" >/dev/null; then
+  NEW_TSA_URL="http://127.0.0.1:9090/"
+else
+  TSA_PROTO="https"
+  if ! curl -fsS --max-time 5 "https://${TSA_DOMAIN}/healthz" >/dev/null; then
+    TSA_PROTO="http"
+  fi
+  NEW_TSA_URL="${TSA_PROTO}://${TSA_DOMAIN}/"
+fi
+sudo sed -i "s|^DMJ_TSA_URL=.*|DMJ_TSA_URL=${NEW_TSA_URL}|" "${DMJ_ENV_FILE}"
+
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now dmj-signer.service
 sudo systemctl restart dmj-signer
@@ -2628,6 +2642,7 @@ server {
     proxy_buffering    off;
     proxy_request_buffering off;
     proxy_set_header   Accept-Encoding "";
+    add_header Content-Type "application/timestamp-reply" always;
     add_header         X-Content-Type-Options "nosniff" always;
   }
 }
@@ -2669,6 +2684,7 @@ server {
     proxy_buffering    off;
     proxy_request_buffering off;
     proxy_set_header   Accept-Encoding "";
+    add_header Content-Type "application/timestamp-reply" always;
     add_header         X-Content-Type-Options "nosniff" always;
   }
 }
@@ -4534,19 +4550,6 @@ if ! curl -fsS --max-time 5 "https://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; th
   if curl -fsS --max-time 5 "http://${PKI_DOMAIN}/root.crt" >/dev/null 2>&1; then PKI_PROTO="http"; fi
 fi
 
-# Prefer the local TSA daemon to eliminate DNS/TLS dependencies.
-# Fall back to the public vhost only if loopback is not available.
-if curl -fsS --max-time 2 "http://127.0.0.1:9090/healthz" >/dev/null; then
-  NEW_TSA_URL="http://127.0.0.1:9090/"
-else
-  TSA_PROTO="https"
-  if ! curl -fsS --max-time 5 "https://${TSA_DOMAIN}/healthz" >/dev/null; then
-    TSA_PROTO="http"
-  fi
-  NEW_TSA_URL="${TSA_PROTO}://${TSA_DOMAIN}/"
-fi
-sudo sed -i "s|^DMJ_TSA_URL=.*|DMJ_TSA_URL=${NEW_TSA_URL}|" "${DMJ_ENV_FILE}"
-
 # Optional Basic Auth credentials for TSA (if you set them, signer will use them)
 if ! grep -q '^DMJ_TSA_USER=' "${DMJ_ENV_FILE}"; then
   echo "DMJ_TSA_USER=" | sudo tee -a "${DMJ_ENV_FILE}" >/dev/null
@@ -4695,6 +4698,20 @@ echo "------------------------------------------------------------------"
 say "[i] Admin Access: https://documents.dmj.one/${ADMIN_PATH}"
 say "[✓] Done."
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # --- Optional: systemd unit to tail Worker logs into journald ---------------
 sudo tee /etc/systemd/system/dmj-worker-tail.service >/dev/null <<UNIT
 [Unit]
@@ -4723,3 +4740,94 @@ if [ "\${DMJ_LOG_VERBOSE:-1}" = "1" ]; then
 else
   sudo systemctl disable --now dmj-worker-tail.service 2>/dev/null || true
 fi
+
+
+
+
+
+
+
+
+
+
+
+sleep 10
+
+# --- Post-deploy verification ------------------------------------------------
+sudo tee /usr/local/bin/dmj-verify.sh >/dev/null <<'VERIFY'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+logfail() {
+  echo "[x] $*" >&2
+  echo "---- journalctl: dmj-signer.service (last 200 lines) ----" >&2
+  journalctl -u dmj-signer.service -n 200 --no-pager || true
+  exit 1
+}
+ok(){ echo "[✓] $*"; }
+
+# Discover signer port from the runtime file (falls back to 18080)
+PORT="$(cat /run/dmj/signer.port 2>/dev/null || echo 18080)"
+
+# 1) systemd service running
+systemctl is-active --quiet dmj-signer.service || logfail "dmj-signer.service is not active"
+
+# 2) Signer health (direct and via nginx if DNS/LE is ready)
+curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null || logfail "Signer health (loopback) failed"
+ok "Signer /healthz (loopback) OK"
+
+# Try the nginx vhost if resolvable; don't fail deployment on DNS/LE timing
+SIGNER_HOST="$(grep -E '^SIGNER_DOMAIN=' /etc/dmj/dmj-signer.env | cut -d= -f2- || true)"
+if [[ -n "$SIGNER_HOST" ]]; then
+  if curl -fsS --max-time 5 "https://${SIGNER_HOST}/healthz" >/dev/null; then
+    ok "Signer /healthz via nginx vhost OK"
+  else
+    echo "[!] Signer vhost health check skipped/failed (DNS/LE may still be provisioning)"
+  fi
+fi
+
+# 3) TSA health + RFC 3161 end-to-end
+curl -fsS "http://127.0.0.1:9090/healthz" | grep -q '^ok' || logfail "TSA /healthz failed"
+ok "TSA /healthz OK"
+
+TMPD="$(mktemp -d)"
+trap 'rm -rf "$TMPD"' EXIT
+echo "dmj one" > "$TMPD/in.dat"
+openssl ts -query -data "$TMPD/in.dat" -sha256 -cert -out "$TMPD/req.tsq"
+
+# POST to local TSA, ensure correct Content-Type and a parseable reply
+curl -fsS -D "$TMPD/h" \
+     -H 'Content-Type: application/timestamp-query' \
+     --data-binary @"$TMPD/req.tsq" \
+     "http://127.0.0.1:9090/" > "$TMPD/resp.tsr" \
+  || logfail "TSA POST failed"
+
+grep -qi '^content-type: *application/timestamp-reply' "$TMPD/h" \
+  || logfail "TSA wrong Content-Type (want application/timestamp-reply)"
+
+openssl ts -reply -in "$TMPD/resp.tsr" -text >/dev/null \
+  || logfail "TSA reply not parseable by openssl(1) ts -reply"
+ok "TSA end-to-end (query→reply) OK"
+
+# 4) OCSP sanity (check a cert the DB knows about: signer leaf vs issuer)
+# 'good' or 'unknown' both prove the responder is answering; we just need a 200 + parseable response.
+if ! openssl ocsp -issuer /opt/dmj/pki/ica/ica.crt \
+                  -cert   /opt/dmj/signer-vm/signer.crt \
+                  -url    http://127.0.0.1:9080 \
+                  -no_nonce -resp_text >/dev/null 2>&1; then
+  logfail "OCSP query failed"
+fi
+ok "OCSP responder reachable & responding"
+
+# 5) Signer /spki JSON
+curl -fsS "http://127.0.0.1:${PORT}/spki" | grep -q '"spki"' \
+  || logfail "Signer /spki did not return JSON"
+ok "Signer /spki OK"
+
+echo "----------------------------------------------------------------"
+echo "[✓] All internal endpoints validated successfully."
+VERIFY
+sudo chmod +x /usr/local/bin/dmj-verify.sh
+
+echo "[+] Running post-deploy verification ..."
+/usr/local/bin/dmj-verify.sh || true
