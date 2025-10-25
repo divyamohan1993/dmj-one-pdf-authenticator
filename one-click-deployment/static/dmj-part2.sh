@@ -1665,6 +1665,7 @@ serial = \$dir/tsa-serial
 signer_cert = \$dir/tsa.crt
 certs = ${ICA_DIR}/ica.crt
 signer_key = \$dir/tsa.key
+signer_digest = sha256
 default_policy = ${DMJ_TSA_POLICY_OID:-1.3.6.1.4.1.55555.1.1}
 other_policies = 1.3.6.1.4.1.55555.1.2
 digests = sha256, sha384, sha512
@@ -2086,9 +2087,14 @@ const server = http.createServer((req,res)=>{
   }
   const bufs=[]; req.on('data',c=>bufs.push(c)).on('end',()=>{
     const q = Buffer.concat(bufs);
-    // const openssl = spawn('openssl', ['ts','-reply','-config',TS_CONF,'-queryfile','-']);
-    // Read TSQ from STDIN and emit a DER TimeStampResp on STDOUT
-    const openssl = spawn('openssl', ['ts','-reply','-config', TS_CONF, '-queryfile', '-']);
+    // Feed the TSQ via /dev/stdin.  The openssl-ts man page requires a filename
+    // for -queryfile; using "-" causes BIO_new_file(... "-") failures.
+    // Also ensure the response is written to stdout (default).
+    const openssl = spawn('openssl', [
+      'ts', '-reply',
+      '-config', TS_CONF,
+      '-queryfile', '/dev/stdin'
+    ]);
     const outs=[]; let err='';
     openssl.stdout.on('data',d=>outs.push(d));
     openssl.stderr.on('data',d=>err+=d);
