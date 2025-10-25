@@ -239,10 +239,7 @@ fix_perms() {
       sudo setfacl -m "u:${u}:rwX" "$p" || true
       sudo setfacl -d -m "u:${u}:rwX" "$p" || true    # default ACL (inherit on new files/dirs)
     done
-  fi
-
-  # If index.txt.attr is missing, create it (OpenSSL reads it):
-  sudo install -m 640 /dev/null /opt/dmj/pki/ica/index.txt.attr
+  fi  
 }
 
 # --- Use the Part 1 service-user Wrangler wrapper ----------------------------
@@ -839,6 +836,12 @@ public class SignerServer {
 
   static String toHex(byte[] b){ StringBuilder sb=new StringBuilder(b.length*2); for(byte x:b) sb.append(String.format("%02x",x)); return sb.toString(); }
   static String toHexUpper(byte[] b){ StringBuilder sb=new StringBuilder(b.length*2); for(byte x:b) sb.append(String.format("%02X",x)); return sb.toString(); }
+  static String sha256Hex(byte[] in) throws Exception {
+    byte[] d = MessageDigest.getInstance("SHA-256").digest(in);
+    StringBuilder sb = new StringBuilder(d.length * 2);
+    for (byte v : d) sb.append(String.format("%02X", v));
+    return sb.toString();
+  }
   static String jcaDigestNameFromOid(String oid){
     return switch (oid) {
       case "1.3.14.3.2.26" -> "SHA-1";
@@ -950,12 +953,14 @@ public class SignerServer {
 
   static Path writeBundleZip(byte[] signedPdf, String baseName) throws IOException {
     Files.createDirectories(PKI_PUB.resolve("dl"));
-    String fname = baseName + ".zip";
-    Path out = PKI_PUB.resolve("dl").resolve(fname);
-
-    try (ZipOutputStream zos = new ZipOutputStream(
-         Files.newOutputStream(out, java.nio.file.StandardOpenOption.CREATE,
-                                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING))) {
+    // Allocate a unique file atomically; on a rare collision, retry with a new name.
+    for (int attempt = 0; attempt < 5; attempt++) {
+      String fname = baseName + (attempt == 0 ? "" : "-" + attempt) + ".zip";
+      Path out = PKI_PUB.resolve("dl").resolve(fname);
+      try (OutputStream os = Files.newOutputStream(out,
+               java.nio.file.StandardOpenOption.CREATE_NEW,
+               java.nio.file.StandardOpenOption.WRITE);
+           ZipOutputStream zos = new ZipOutputStream(os)) {
       zos.putNextEntry(new ZipEntry("signed.pdf"));
       zos.write(signedPdf);
       zos.closeEntry();
@@ -965,8 +970,14 @@ public class SignerServer {
       addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.txt"), "trust-kit/README.txt");
       addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.html"), "trust-kit/README.html");
       addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-SHA256SUMS.txt"), "trust-kit/SHA256SUMS.txt");
+      
+      return out;
+      } catch (java.nio.file.FileAlreadyExistsException e) {
+        // race/collision: loop and try a fresh base name
+        baseName = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+      }
     }
-    return out;
+    throw new IOException("failed to allocate a unique bundle filename");
   }
 
   // --- PDF metadata pre-sign (unchanged) ---
@@ -1335,12 +1346,17 @@ public class SignerServer {
         String rel      = "/dl/" + zipPath.getFileName().toString();
         String url      = PKI_BASE + rel;
 
+        // issuer fingerprint (SHA-256 over DER certificate) for DB uniqueness (issuer_fp, cert_serial)
+        X509Certificate issuerCert = (dm.chain.size() >= 2) ? dm.chain.get(1) : ICA_CERT;
+        String issuerFp = (issuerCert != null) ? sha256Hex(issuerCert.getEncoded()) : "";
+
         ctx.header("X-Cert-Serial", dm.serialHex);
         // Include verification facts so the Worker can double-check before redirecting end-user
         ctx.json(Map.of(
             "download",       url,
             "sha256",         shaHex,
             "serial",         dm.serialHex,
+            "issuer_fp",      issuerFp,
             "hasSignature",   v.get("hasSignature"),
             "isValid",        v.get("isValid"),
             "coversDocument", v.get("coversDocument"),
@@ -1435,10 +1451,11 @@ say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
 sudo mkdir -p "${ROOT_DIR}/"{certs,newcerts,private} "${ICA_DIR}/"{certs,newcerts,private} "${OCSP_DIR}" "${PKI_PUB}"
 sudo touch "${ROOT_DIR}/index.txt" "${ICA_DIR}/index.txt"
 
-# Ensure duplicate subjects are allowed (typical for renewals/reissues)
-  sudo tee "${ICA_DIR}/index.txt.attr" >/dev/null <<'EOF'
-unique_subject = no
-EOF  
+# Enforce *single* valid cert per subject going forward.
+# Auto‑healing below will revoke older duplicates so this stays clean.
+sudo tee "${ICA_DIR}/index.txt.attr" >/dev/null <<'EOF'
+unique_subject = yes
+EOF
 
 # Use long, uppercase hex serials so we have room for millions of document certs.
 # OpenSSL reads this serial file as a hex integer and increments for each issuance.
@@ -1464,7 +1481,7 @@ serial            = \$dir/serial
 crlnumber         = \$dir/crlnumber
 default_md        = sha256
 policy            = policy_strict
-unique_subject    = no
+unique_subject    = yes
 x509_extensions   = v3_ca
 crl_extensions    = crl_ext
 default_days      = 3650
@@ -1513,7 +1530,7 @@ serial            = \$dir/serial
 crlnumber         = \$dir/crlnumber
 default_md        = sha256
 policy            = policy_loose
-unique_subject    = no
+unique_subject    = yes
 x509_extensions   = v3_intermediate_ca
 crl_extensions    = crl_ext
 default_days      = 1825
@@ -1668,6 +1685,63 @@ openssl x509 -in "${SIGNER_DIR}/signer.crt" -noout -text | \
 openssl verify -CAfile <(cat "${ICA_DIR}/ica.crt" "${ROOT_DIR}/root.crt") "${SIGNER_DIR}/signer.crt"
 
 say "[+] Publishing chain & CRL at ${AIA_SCHEME}://${PKI_DOMAIN}/ ..."
+
+# --- Install a self-heal tool for the ICA index + CRL ------------------------
+sudo tee /usr/local/bin/dmj-pki-heal >/dev/null <<'HEAL'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ICA_DIR="${DMJ_ICA_DIR:-/opt/dmj/pki/ica}"
+OCSP_DIR="${DMJ_OCSP_DIR:-/opt/dmj/pki/ocsp}"
+TSA_DIR="${TSA_DIR:-/opt/dmj/pki/tsa}"
+SIGNER_DIR="${DMJ_SIGNER_WORK_DIR:-/opt/dmj/signer-vm}"
+PKI_PUB="${DMJ_PKI_PUB:-/opt/dmj/pki/pub}"
+OPENSSL="${DMJ_OPENSSL_BIN:-openssl}"
+DB="${ICA_DIR}/index.txt"
+
+[ -f "$DB" ] || exit 0
+
+# 1) Mark expired entries and tidy DB
+"${OPENSSL}" ca -config "${ICA_DIR}/openssl.cnf" -updatedb >/dev/null 2>&1 || true
+
+revoke_older_by_cn() {
+  local cn="$1"
+  # Collect (notAfter,serial) for VALID entries that contain CN=<cn>
+  mapfile -t rows < <(awk -F'[ \t]+' -v CN="CN=${cn}" \
+    '$1=="V" && index($0,CN)>0 {print $2 "\t" $4}' "$DB" | sort)
+  (( ${#rows[@]} <= 1 )) && return 0
+  local keep
+  keep="$(printf '%s\n' "${rows[@]}" | tail -n1 | awk -F'\t' '{print $2}')"
+  printf '%s\n' "${rows[@]}" | awk -F'\t' -v k="$keep" '{print $2}' \
+    | while read -r s; do
+        [ "$s" = "$keep" ] && continue
+        "${OPENSSL}" ca -config "${ICA_DIR}/openssl.cnf" \
+          -revoke "${ICA_DIR}/newcerts/${s}.pem" \
+          -crl_reason superseded >/dev/null 2>&1 || true
+      done
+}
+
+cn_of() { [ -f "$1" ] && "${OPENSSL}" x509 -in "$1" -noout -subject \
+            | sed -n 's/.*CN=//; s/,.*//; p' || true; }
+
+ocsp_cn="$(cn_of "${OCSP_DIR}/ocsp.crt")"
+tsa_cn="$(cn_of "${TSA_DIR}/tsa.crt")"
+signer_cn="$(cn_of "${SIGNER_DIR}/signer.crt")"
+
+[ -n "$ocsp_cn" ]   && revoke_older_by_cn "$ocsp_cn"
+[ -n "$tsa_cn" ]    && revoke_older_by_cn "$tsa_cn"
+[ -n "$signer_cn" ] && revoke_older_by_cn "$signer_cn"
+
+# 2) Regenerate CRL and publish both AIA paths
+"${OPENSSL}" ca -config "${ICA_DIR}/openssl.cnf" -gencrl -out "${ICA_DIR}/ica.crl" || true
+sudo install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/dmj-one-issuing-ca-r1.crl"
+sudo install -m 0644 "${ICA_DIR}/ica.crl" "${PKI_PUB}/ica.crl"
+HEAL
+sudo chmod 0755 /usr/local/bin/dmj-pki-heal
+
+# Heal once now, so subsequent reissues don't trip on unique_subject=yes
+/usr/local/bin/dmj-pki-heal || true
+
 
 # Public files (for AIA/CDP/OCSP fetches)
 sudo install -m 0644 "${ROOT_DIR}/root.crl" "${PKI_PUB}/dmj-one-root-ca-r1.crl"
@@ -2254,6 +2328,7 @@ SyslogIdentifier=dmj-signer
 User=dmjsvc
 Group=dmjsvc
 Type=simple
+ExecStartPre=/usr/local/bin/dmj-pki-heal
 EnvironmentFile=-/etc/dmj/dmj-worker.secrets
 EnvironmentFile=-/etc/dmj/dmj-signer.env
 WorkingDirectory=/opt/dmj/signer-vm
@@ -2911,24 +2986,35 @@ async function ensureSchema(env: Env) {
   // } catch (e) {
   //   /* ignore: column already exists */
   // }
+
+  // --- schema drift fixups for existing deployments ---
+  try { await env.DB.prepare(`ALTER TABLE ${p}documents ADD COLUMN issuer_fp TEXT`).run(); } catch (_) { /* exists */ }
+  await env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS ${p}documents_uniq_issuer_serial ON ${p}documents(issuer_fp, cert_serial)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS ${p}documents_signed_at_idx ON ${p}documents(signed_at DESC)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS ${p}documents_revoked_idx ON ${p}documents(revoked_at)`).run();
+ 
 }
 
 // Store a short-lived downloadable blob and return its id
 async function putDownload(env: Env, bytes: Uint8Array, mime: string, filename: string){
   const p = env.DB_PREFIX;
   const ttl = parseInt(env.DOWNLOAD_TTL || "900", 10); // default 15 min
-  const id = crypto.randomUUID();
   // Uint8Array -> base64 (chunked to avoid stack limits)
-  let bin = "";
-  const step = 0x8000;
-  for (let i=0; i<bytes.length; i+=step){
-    bin += String.fromCharCode(...bytes.subarray(i, i+step));
-  }
+  let bin = ""; const step = 0x8000;
+  for (let i=0; i<bytes.length; i+=step){ bin += String.fromCharCode(...bytes.subarray(i, i+step)); }
   const b64 = btoa(bin);
-  await env.DB.prepare(
-    `INSERT INTO ${p}downloads(id,mime,filename,body_base64,expires_at) VALUES(?,?,?,?,?)`
-  ).bind(id, mime, filename, b64, Math.floor(Date.now()/1000) + ttl).run();
-  return id;
+  // Generate a unique id and insert atomically; retry on the rare conflict.
+  for (let i=0; i<3; i++) {
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO ${p}downloads(id,mime,filename,body_base64,expires_at)
+       VALUES(?,?,?,?,?)
+       ON CONFLICT(id) DO NOTHING`
+    ).bind(id, mime, filename, b64, Math.floor(Date.now()/1000) + ttl).run();
+    const ok = await env.DB.prepare(`SELECT 1 AS one FROM ${p}downloads WHERE id=?`).bind(id).first() as any;
+    if (ok) return id;
+  }
+  throw new Error("could not allocate unique download id");
 }
 
 // Fetch (and optionally consume) a stored blob by id
@@ -4217,6 +4303,7 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
       const downloadUrl = String(r.download||"");
       const sha         = String(r.sha256||"");
       const certSerial  = String(r.serial||"");
+      const issuerFp    = String(r.issuer_fp||"");
       // ---- ENFORCE VERIFIED BEFORE DOWNLOAD ----
       const okEmbedded = !!(r && r.hasSignature && r.isValid && r.coversDocument && r.issuedByUs);
       if (!downloadUrl || !okEmbedded) {
@@ -4227,10 +4314,11 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
       const p = env.DB_PREFIX;
 
       await env.DB
-        .prepare(`INSERT OR IGNORE INTO ${p}documents
-                  (id,doc_sha256,meta_json,signed_at,revoked_at,cert_serial)
-                  VALUES(?,?,?,?,NULL,?)`)
-        .bind(crypto.randomUUID(), sha || "", meta || "{}", now(), certSerial || "")
+        .prepare(`INSERT INTO ${p}documents
+                  (id,doc_sha256,meta_json,signed_at,revoked_at,cert_serial,issuer_fp)
+                  VALUES(?,?,?,?,NULL,?,?)
+                  ON CONFLICT(doc_sha256) DO NOTHING`)
+        .bind(crypto.randomUUID(), sha || "", meta || "{}", now(), certSerial || "", issuerFp || "")
         .run();
       // Upsert verification facts now (no blobs; just metadata)
       await env.DB
@@ -4471,9 +4559,15 @@ CREATE TABLE IF NOT EXISTS ${DB_PREFIX}documents(
   signed_at INTEGER,
   revoked_at INTEGER,
   revoke_reason TEXT,
-  cert_serial TEXT
+  cert_serial TEXT,
+  issuer_fp   TEXT
 );
+
 CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_sha_idx ON ${DB_PREFIX}documents(doc_sha256);
+CREATE UNIQUE INDEX IF NOT EXISTS ${DB_PREFIX}documents_uniq_issuer_serial ON ${DB_PREFIX}documents(issuer_fp, cert_serial);
+CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_signed_at_idx ON ${DB_PREFIX}documents(signed_at DESC);
+CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_revoked_idx ON ${DB_PREFIX}documents(revoked_at);
+
 CREATE TABLE IF NOT EXISTS ${DB_PREFIX}doc_verifications(
   doc_sha256 TEXT PRIMARY KEY,
   has_signature INTEGER,
@@ -4516,6 +4610,11 @@ say "[+] Applying schema to remote D1..."
 # say "[i] Ensuring cert_serial column exists..."
 # ( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN cert_serial TEXT;" ) || true
 
+# Ensure new columns/indexes exist when upgrading older databases.
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "ALTER TABLE ${DB_PREFIX}documents ADD COLUMN issuer_fp TEXT;" ) || true
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "CREATE UNIQUE INDEX IF NOT EXISTS ${DB_PREFIX}documents_uniq_issuer_serial ON ${DB_PREFIX}documents(issuer_fp, cert_serial);" ) || true
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_signed_at_idx ON ${DB_PREFIX}documents(signed_at DESC);" ) || true
+( cd "$WORKER_DIR" && "$WR" d1 execute "${D1_NAME}" --remote --command "CREATE INDEX IF NOT EXISTS ${DB_PREFIX}documents_revoked_idx ON ${DB_PREFIX}documents(revoked_at);" ) || true
 
 # Optional clean-up: remove any server-side session records (not strictly required,
 # since rotating SESSION_HMAC_KEY already invalidates cookies, but keeps table tidy).
