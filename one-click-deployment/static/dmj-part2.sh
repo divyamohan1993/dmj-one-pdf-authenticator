@@ -1434,6 +1434,12 @@ fix_perms
 say "[+] Preparing dmj.one PKI under ${PKI_DIR} ..."
 sudo mkdir -p "${ROOT_DIR}/"{certs,newcerts,private} "${ICA_DIR}/"{certs,newcerts,private} "${OCSP_DIR}" "${PKI_PUB}"
 sudo touch "${ROOT_DIR}/index.txt" "${ICA_DIR}/index.txt"
+
+# Ensure duplicate subjects are allowed (typical for renewals/reissues)
+  sudo tee "${ICA_DIR}/index.txt.attr" >/dev/null <<'EOF'
+unique_subject = no
+EOF  
+
 # Use long, uppercase hex serials so we have room for millions of document certs.
 # OpenSSL reads this serial file as a hex integer and increments for each issuance.
 # The newcerts filename is <SERIAL>.pem, matching this value.
@@ -1896,8 +1902,9 @@ DIR="$(dirname "$FILE")"; mkdir -p "$DIR"
 old="${FILE}.old"
 
 # Generate new pair
-u="$(tr -dc 'a-z0-9' </dev/urandom | head -c 12)"
-p="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 28)"
+u="$(openssl rand -hex 12)"; u="${u:0:12}"
+p="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9')"; p="${p:0:28}"
+
 tmp="${FILE}.$$.$RANDOM"
 printf '%s:%s\n' "$u" "$p" > "$tmp"
 chmod 600 "$tmp"
