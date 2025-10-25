@@ -494,6 +494,9 @@ import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
 import org.bouncycastle.asn1.cms.CMSAttributes;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
+import org.bouncycastle.asn1.ess.ESSCertIDv2;
+import org.bouncycastle.asn1.ess.SigningCertificateV2;
+import org.bouncycastle.cms.DefaultSignedAttributeTableGenerator;
 import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -755,9 +758,34 @@ public class SignerServer {
     byte[] toSign = IOUtils.toByteArray(content);
     ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(pk);
     CMSSignedDataGenerator gen = new CMSSignedDataGenerator();
+
+    final X509Certificate signingCert = chain.get(0);
+    // --- Add ESS SigningCertificateV2 (required by PAdES/CAdES with SHA‑2) and drop CMS signingTime ---
+    // Compute SHA‑256 over the DER-encoded signer certificate (RFC 5035 / EN 319 122‑1 §5.2.2.3).
+    final byte[] certHash = MessageDigest.getInstance("SHA-256").digest(signingCert.getEncoded());
+    final ESSCertIDv2 ess = new ESSCertIDv2(certHash); // default alg = SHA‑256
+    final SigningCertificateV2 scv2 = new SigningCertificateV2(new ESSCertIDv2[] { ess });
+    final Attribute scv2Attr =
+        new Attribute(PKCSObjectIdentifiers.id_aa_signingCertificateV2, new DERSet(scv2));
+
+    var signedAttrGen = new DefaultSignedAttributeTableGenerator() {
+      @Override
+      @SuppressWarnings("rawtypes")
+      public AttributeTable getAttributes(java.util.Map params) {
+        AttributeTable base = super.getAttributes(params); // provides contentType + messageDigest (+ signingTime)
+        java.util.Hashtable<org.bouncycastle.asn1.ASN1ObjectIdentifier, Attribute> ht = base.toHashtable();
+        // PAdES: CMS signing-time MUST NOT be present; PDF /M carries the claimed time (EN 319 142‑1, Table 1).
+        ht.remove(CMSAttributes.signingTime);
+        // Add ESS SigningCertificateV2 to bind the signer cert to the signature.
+        ht.put(PKCSObjectIdentifiers.id_aa_signingCertificateV2, scv2Attr);
+        return new AttributeTable(ht);
+      }
+    };
+
     gen.addSignerInfoGenerator(
       new JcaSignerInfoGeneratorBuilder(new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
-        .build(signer, chain.get(0)) // leaf
+        .setSignedAttributeGenerator(signedAttrGen)
+        .build(signer, signingCert)
     );
     gen.addCertificates(new JcaCertStore(chain)); // include chain
     CMSTypedData msg = new CMSProcessableByteArray(toSign);
