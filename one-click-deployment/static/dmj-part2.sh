@@ -173,7 +173,7 @@ say(){ printf "%s\n" "$*" >&3; }
 # shellcheck source=/dev/null
 . <(curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 \
       -H 'Cache-Control: no-cache, no-store, must-revalidate' \
-      "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-fetcher.sh.tmpl?_=$(date +%s)")
+      "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh?_=$(date +%s)")
 
 
 # Single place to render a precise failure with file:line, command & stack
