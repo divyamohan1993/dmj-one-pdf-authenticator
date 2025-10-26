@@ -4512,7 +4512,7 @@ function diagnostics(env: Env, haveDB=true){
   return `<ul>${li}</ul>`;
 }
 
-async function handleAdmin(env: Env, req: Request, adminPath: string){
+async function handleAdmin(env: Env, req: Request, adminPath: string, nonce: string){
   await ensureSchema(env);
   const u = new URL(req.url);
   const cookieHeader = req.headers.get("cookie") || "";
