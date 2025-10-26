@@ -612,7 +612,7 @@ public class SignerServer {
   // TSA certificate path for embedding into DSS (override via DMJ_TSA_CERT)
   static final Path TSA_CERT_PATH = Paths.get(Optional.ofNullable(System.getenv("DMJ_TSA_CERT"))
                                                .orElse("/opt/dmj/pki/tsa/tsa.crt"));
-  static final boolean OCSP_USE_GET = !"0".equals(Optional.ofNullable(System.getenv("DMJ_OCSP_GET")).orElse("1"));
+  static final boolean OCSP_USE_GET = !"0".equals(Optional.ofNullable(System.getenv("DMJ_OCSP_GET")).orElse("0"));
 
   static { Security.addProvider(new BouncyCastleProvider()); }
 
@@ -2369,6 +2369,8 @@ DMJ_ADD_DOC_TIMESTAMP=1
 # Optional explicit OCSP URL for DSS/VRI (B‑LT). Defaults to local ocsp.*.
 DMJ_OCSP_URL=${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 
+
+
 ENV
 sudo chmod 0640 "$DMJ_ENV_FILE"
 
@@ -2777,6 +2779,8 @@ server {
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
+    # ensure the client sees the correct OCSP content-type exactly once
+    proxy_hide_header  Content-Type;
     proxy_http_version 1.1;
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
@@ -2800,6 +2804,8 @@ server {
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
+    # ensure the client sees the correct OCSP content-type exactly once
+    proxy_hide_header  Content-Type;
     proxy_http_version 1.1;
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
@@ -3021,6 +3027,8 @@ clean_cron=$(echo "$existing_cron" | grep -Fv '/usr/local/bin/dmj-fix-perms' \
 printf "%s\n%s\n%s\n%s\n%s\n" "$clean_cron" \
   "$CRON_JOB1" "$CRON_JOB2" "$CRON_JOB3" "$CRON_JOB4" \
   | sudo crontab -u "$DMJ_USER" -
+
+
 
 ### --- Worker project --------------------------------------------------------
 say "[+] Preparing Cloudflare Worker at ${WORKER_DIR} ..."
@@ -5001,11 +5009,11 @@ WantedBy=multi-user.target
 UNIT
 
 # Enable/disable wrangler tail based on verbosity toggle
-if [ "\${DMJ_LOG_VERBOSE:-1}" = "1" ]; then
+# if [ "\${DMJ_LOG_VERBOSE:-1}" = "1" ]; then
   sudo systemctl enable --now dmj-worker-tail.service || true
-else
-  sudo systemctl disable --now dmj-worker-tail.service 2>/dev/null || true
-fi
+# else
+#   sudo systemctl disable --now dmj-worker-tail.service 2>/dev/null || true
+# fi
 
 
 
