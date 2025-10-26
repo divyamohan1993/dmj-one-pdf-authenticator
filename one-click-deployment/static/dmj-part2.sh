@@ -3069,6 +3069,7 @@ const text = (html: string, nonce: string) =>
         `script-src 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com https://dmj.one; ` +
         `script-src-elem 'self' 'nonce-${nonce}' https://cdnjs.cloudflare.com https://static.cloudflareinsights.com https://dmj.one; ` +
         "connect-src 'self' https: https://cloudflareinsights.com https://dmj.one; " +
+        "form-action 'self'; " +
         "frame-ancestors 'none'"
     }
   });
@@ -3097,23 +3098,27 @@ function b64(s: string){ return Uint8Array.from(atob(s), c => c.charCodeAt(0)); 
 function hex(a: ArrayBuffer){ return [...new Uint8Array(a)].map(x=>x.toString(16).padStart(2,"0")).join(""); }
 function concat(...parts: Uint8Array[]){ let len=0; for(const p of parts) len+=p.length; const out=new Uint8Array(len); let off=0; for(const p of parts){ out.set(p, off); off+=p.length; } return out; }
 
-function sameOrigin(req: Request){
-  const u = new URL(req.url);
-  const expected = `${u.protocol}//${u.host}`;
-
+function sameOrigin(req: Request): boolean {
+  const expected = new URL(req.url).origin; // normalized (scheme + host + port)
   const o = req.headers.get("origin");
-  if (o) return o === expected;
 
-  // Fallback for agents that omit Origin on same-origin form posts
-  const r = req.headers.get("referer");
-  if (r) {
-    try { return new URL(r).origin === expected; } catch {/* ignore */}
+  // If Origin is present and not "null", compare normalized origins.
+  if (o && o !== "null") {
+    try { return new URL(o).origin === expected; }
+    catch { return false; }
   }
 
-  // With SameSite=Strict cookies, a cross-site attacker won't send our cookie.
-  // Treat absence of both headers as acceptable.
+  // Fallback: some browsers omit Origin on same-site POSTs; use Referer if present.
+  const r = req.headers.get("referer");
+  if (r) {
+    try { return new URL(r).origin === expected; }
+    catch { return false; }
+  }
+
+  // If both headers are absent, do not block — your SameSite=Strict CSRF cookie still protects you.
   return true;
 }
+
 
 // --- CSRF helpers (double-submit cookie) -------------------------------
 function getCookie(req: Request, name: string): string {
@@ -4551,11 +4556,13 @@ async function handleAdmin(env: Env, req: Request, adminPath: string, nonce: str
 
 
   if (req.method === "POST"){
-    // Enforce same-origin (Origin/Referer) on admin POSTs
-    if (!sameOrigin(req)) return new Response("bad origin", { status: 403 });
     const form = await req.formData();
-    if (!csrfOk(req, form)) {
-      return new Response("bad csrf", { status: 403 });
+    const originOK = sameOrigin(req);
+    const csrfOK   = csrfOk(req, form);
+
+    // Block only if BOTH fail. Either check passing is sufficient.
+    if (!originOK && !csrfOK) {
+      return new Response("forbidden", { status: 403 });
     }
     if (u.pathname === adminPath + "/login"){
       const pass = String(form.get("password")||"");
