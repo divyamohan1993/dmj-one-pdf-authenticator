@@ -102,7 +102,7 @@ DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
 DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-0}"       # 1 = rotate signer freely - dont - invalidates files
 DMJ_REISSUE_TSA="${DMJ_REISSUE_TSA:-0}"
 DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
-I_UNDERSTAND_THE_RISK="${I_UNDERSTAND_THE_RISK:-NO}"
+I_UNDERSTAND_THE_RISK="${I_UNDERSTAND_THE_RISK:-YES}"
 
 if [[ "${DEPLOYMENT_MODE}" == "DEV" ]]; then
     I_UNDERSTAND_THE_RISK=YES    
@@ -169,6 +169,12 @@ fi
 
 # Helper to print minimal progress to console
 say(){ printf "%s\n" "$*" >&3; }
+
+# shellcheck source=/dev/null
+. <(curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 \
+      -H 'Cache-Control: no-cache, no-store, must-revalidate' \
+      "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-fetcher.sh.tmpl?_=$(date +%s)")
+
 
 # Single place to render a precise failure with file:line, command & stack
 _dmj_trace_fail() {
@@ -584,6 +590,10 @@ public class SignerServer {
   static final int OCSP_TIMEOUT_MS = Integer.parseInt(Optional.ofNullable(System.getenv("DMJ_OCSP_TIMEOUT_MS")).orElse("5000"));
   static final boolean ADD_DOC_TIMESTAMP = !"0".equals(Optional.ofNullable(System.getenv("DMJ_ADD_DOC_TIMESTAMP")).orElse("0")); // for B-LTA
   static final String OCSP_URL_ENV = Optional.ofNullable(System.getenv("DMJ_OCSP_URL")).orElse(""); // optional; CRL is used anyway
+  // TSA certificate path for embedding into DSS (override via DMJ_TSA_CERT)
+  static final Path TSA_CERT_PATH = Paths.get(Optional.ofNullable(System.getenv("DMJ_TSA_CERT"))
+                                               .orElse("/opt/dmj/pki/tsa/tsa.crt"));
+  static final boolean OCSP_USE_GET = !"0".equals(Optional.ofNullable(System.getenv("DMJ_OCSP_GET")).orElse("1"));
 
   static { Security.addProvider(new BouncyCastleProvider()); }
 
@@ -759,6 +769,10 @@ public class SignerServer {
     byte[] expected = mac.doFinal();
     byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
     return MessageDigest.isEqual(expected, provided);
+  }
+
+  static String b64url(byte[] in) {
+    return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(in);
   }
 
   // Build a detached CMS over the exact ByteRange bytes and embed the chain
@@ -1215,17 +1229,31 @@ public class SignerServer {
       OCSPReq req = new OCSPReqBuilder().addRequest(certId).build();
       byte[] body = req.getEncoded();
 
-      HttpURLConnection conn = (HttpURLConnection) new URL(OCSP_URL_ENV).openConnection();
-      conn.setConnectTimeout(OCSP_TIMEOUT_MS);
-      conn.setReadTimeout(OCSP_TIMEOUT_MS);
-      conn.setUseCaches(false);
-      conn.setDoOutput(true);
-      conn.setRequestMethod("POST");
-      conn.setRequestProperty("Content-Type", "application/ocsp-request");
-      conn.setRequestProperty("Accept", "application/ocsp-response");
-      conn.setRequestProperty("Accept-Encoding", "identity");
-      conn.setFixedLengthStreamingMode(body.length);
-      try (OutputStream os = conn.getOutputStream()) { os.write(body); }
+      HttpURLConnection conn;
+      if (OCSP_USE_GET) {
+        // Cache-friendly GET: append Base64URL (unpadded) of the OCSPRequest DER to the path
+        String base = OCSP_URL_ENV.endsWith("/") ? OCSP_URL_ENV : (OCSP_URL_ENV + "/");
+        URL url = new URL(base + b64url(body));
+        conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(OCSP_TIMEOUT_MS);
+        conn.setReadTimeout(OCSP_TIMEOUT_MS);
+        conn.setUseCaches(true);
+        conn.setRequestProperty("Accept", "application/ocsp-response");
+        conn.setRequestProperty("Accept-Encoding", "identity");
+      } else {
+        conn = (HttpURLConnection) new URL(OCSP_URL_ENV).openConnection();
+        conn.setConnectTimeout(OCSP_TIMEOUT_MS);
+        conn.setReadTimeout(OCSP_TIMEOUT_MS);
+        conn.setUseCaches(false);
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/ocsp-request");
+        conn.setRequestProperty("Accept", "application/ocsp-response");
+        conn.setRequestProperty("Accept-Encoding", "identity");
+        conn.setFixedLengthStreamingMode(body.length);
+        try (OutputStream os = conn.getOutputStream()) { os.write(body); }
+      }
 
       int code = conn.getResponseCode();
       if (code != 200) throw new IOException("OCSP HTTP " + code);
@@ -1246,7 +1274,7 @@ public class SignerServer {
       log.warn("OCSP fetch failed for serial={} : {}", subject.getSerialNumber(), String.valueOf(e));
       return null;
     }
-+  }
+  }
 
   /** Create (or reuse) DSS and add Certs/CRLs (+ optional OCSP), and a VRI entry for the latest signature. */
   static byte[] addDSS_LTV(byte[] pdf, List<X509Certificate> chain) throws Exception {
@@ -1304,10 +1332,34 @@ public class SignerServer {
           ocspsArr.add(os);
           ocspStreams.add(os);
         }
-      }
+      }      
 
       // (Optional) OCSP – if you expose an OCSP URL, you can query and embed here.
       // For B-LT CRL alone is sufficient per PAdES profile; keeping OCSP optional. (See PDFBox AddValidationInformation.) :contentReference[oaicite:3]{index=3}
+      // ---- Also embed TSA cert (and its OCSP) so DocTimeStamp can be validated offline ----
+      try {
+        if (Files.exists(TSA_CERT_PATH)) {
+          X509Certificate tsaCert = readX509(TSA_CERT_PATH);
+          // Add TSA cert to DSS.Certs
+          COSStream tcs = doc.getDocument().createCOSStream();
+          try (OutputStream os = tcs.createOutputStream(COSName.FLATE_DECODE)) {
+            os.write(tsaCert.getEncoded());
+          }
+          certsArr.add(tcs);
+          // Add TSA OCSP (subject=tsa, issuer=ICA)
+          if (ICA_CERT != null) {
+            byte[] ocsp = tryFetchOCSP(tsaCert, ICA_CERT);
+            if (ocsp != null && ocsp.length > 0) {
+              COSStream os = doc.getDocument().createCOSStream();
+              try (OutputStream oo = os.createOutputStream(COSName.FLATE_DECODE)) { oo.write(ocsp); }
+              ocspsArr.add(os);
+              ocspStreams.add(os);
+            }
+          }
+        }
+      } catch (Exception ex) { log.warn("DSS: TSA embed failed: {}", String.valueOf(ex)); }
+
+
 
       // Build VRI for this signature
       COSDictionary vri = new COSDictionary();
@@ -3044,6 +3096,37 @@ function sameOrigin(req: Request){
   return true;
 }
 
+// --- CSRF helpers (double-submit cookie) -------------------------------
+function getCookie(req: Request, name: string): string {
+  const raw = req.headers.get("cookie") || "";
+  for (const part of raw.split(/;\s*/)) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i) === name) return decodeURIComponent(part.slice(i+1));
+  }
+  return "";
+}
+function cookiePublic(name:string, value:string, opts:Record<string,string|number|boolean>={}): string{
+  const pairs = [`${name}=${value}`];
+  if (opts["Path"]) pairs.push(`Path=${opts["Path"]}`);
+  // Public (readable) so JS can mirror it in a header; still Strict + Secure.
+  pairs.push("SameSite=Strict");
+  pairs.push("Secure");
+  return pairs.join("; ");
+}
+function newCsrfToken(): string {
+  const a = new Uint8Array(32);
+  crypto.getRandomValues(a);
+  return b64e(a);
+}
+function csrfOk(req: Request, form?: FormData): boolean {
+  const cookieTok = getCookie(req, "csrf");
+  if (!cookieTok) return false;
+  const hdrTok = req.headers.get("x-csrf") || "";
+  const frmTok = form ? String(form.get("csrf")||"") : "";
+  return hdrTok === cookieTok || frmTok === cookieTok;
+}
+
+
 // --- Minimal ZIP (STORE, no compression) for 2-3 files ---
 // CRC32 table
 const CRC_TABLE = (() => {
@@ -4079,7 +4162,8 @@ function renderHome(issuerDomain: string, nonce: string) {
 
 
 
-function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
+// function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
+function renderAdminLogin(issuer: string, adminPath: string, nonce: string, csrf: string){
   const html = `<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -4091,6 +4175,7 @@ function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
   <style>body{background:#fafbfc} .card{border:1px solid #edf0f3}</style>
+  <meta name="csrf-token" content="${csrf}">
 </head>
 <body class="d-flex align-items-center" style="min-height:100vh">
   <main class="container">
@@ -4105,6 +4190,7 @@ function renderAdminLogin(issuer: string, adminPath: string, nonce: string){
             <p class="text-secondary">Enter the <b>admin portal key</b> to access the dashboard for <span class="text-nowrap">${issuer}</span>.</p>
             <form method="post" action="${adminPath}/login" class="mt-3">
               <div class="mb-3">
+                <input type="hidden" name="csrf" value="${csrf}" />
                 <label class="form-label">Admin key</label>
                 <div class="input-group">
                   <input type="password" class="form-control" name="password" required autocomplete="current-password" placeholder="••••••••••••••" />
@@ -4174,7 +4260,7 @@ function renderAdminBootstrapOnce(key: string, issuer: string, adminPath: string
 return text(html.replaceAll("__CSP_NONCE__", nonce), nonce);
 }
 
-function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
+function renderAdminDashboard(issuer: string, adminPath: string, nonce: string, csrf: string){
   const html = `<!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -4185,6 +4271,7 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet" />
+  <meta name="csrf-token" content="${csrf}">
   <style>
     body{background:#fbfcfe}
     .card{border:1px solid #edf0f3}
@@ -4201,8 +4288,8 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
   <div id="liveRegion" aria-live="polite"></div>
   <nav class="navbar navbar-expand-lg bg-white border-bottom">
     <div class="container">
-      <a class="navbar-brand d-flex align-items-center" href="#"><i class="bi-shield-check me-2" style="color:#0d6efd"></i>dmj.one Admin</a>
-      <form method="post" action="${adminPath}/logout" class="ms-auto"><button class="btn btn-outline-secondary"><i class="bi-box-arrow-right me-2"></i>Logout</button></form>
+      <a class="navbar-brand d-flex align-items-center" href="#"><i class="bi-shield-check me-2" style="color:#0d6efd"></i>dmj.one Admin</a>    
+      <form method="post" action="${adminPath}/logout" class="ms-auto"><input type="hidden" name="csrf" value="${csrf}" /><button class="btn btn-outline-secondary"><i class="bi-box-arrow-right me-2"></i>Logout</button></form>     
     </div>
   </nav>
 
@@ -4256,6 +4343,7 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
 
   <script nonce="__CSP_NONCE__">
     const AP = "${adminPath}"; // dynamic admin base path
+    const CSRF = (document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')) || '';
     const toast = (msg, kind='primary') => {
       const t = document.getElementById('toast'); 
       t.className = 'alert alert-' + kind + ' shadow-sm'; 
@@ -4297,7 +4385,7 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
       const b = e.target.closest('button.revoke'); if(!b) return;
       const sha = b.getAttribute('data-sha');
       const fd = new FormData(); fd.set('sha', sha);      
-      const res = await fetch(AP+'/revoke', {method:'POST', body:fd, headers:{'Accept':'application/json'}});
+      const res = await fetch(AP+'/revoke', {method:'POST', body:fd, headers:{'Accept':'application/json','X-CSRF':CSRF}});
       if(!res.ok){ toast('Revoke failed','danger'); return; }
       const r = await res.json();
       toast('Revoked '+sha.slice(0,8)+'…','warning');
@@ -4324,8 +4412,9 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string){
         const fd = new FormData();
         fd.set('file', file, file.name);
         const m = (meta.value||'').trim(); if(m) fd.set('meta', m); // uses whatever is in "Optional metadata" right now
-        
-        const res = await fetch(AP+'/sign', { method:'POST', body:fd, headers:{'Accept':'application/json'} });
+                
+        const res = await fetch(AP+'/sign', { method:'POST', body:fd, headers:{'Accept':'application/json','X-CSRF':CSRF} });
+         
         if(!res.ok){ const t = await res.text(); throw new Error(t||'sign error'); }
         const r = await res.json();
         if(!r.download){ throw new Error('no download url'); }
@@ -4415,7 +4504,11 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
     // one-time admin portal key display (first visit)
     const show = await consumeOneTimeAdminKey(env);
     if (show){      
-      return renderAdminBootstrapOnce(show, env.ISSUER, adminPath);
+      const res = renderAdminBootstrapOnce(show, env.ISSUER, adminPath);
+      // also seed CSRF for the very next POST (login)
+      const tok = newCsrfToken();
+      res.headers.append("set-cookie", cookiePublic("csrf", tok, {Path: adminPath}));
+      return res;
     }
     // JSON feed for dashboard data
     if (u.searchParams.get("json") === "1") {
@@ -4426,14 +4519,25 @@ async function handleAdmin(env: Env, req: Request, adminPath: string){
       const active = docs.filter((d:any)=>!d.revoked_at).length;
       return json({ documents: docs, counts: { total: docs.length, active, revoked: docs.length-active } });
     }
-    if (!session) return renderAdminLogin(env.ISSUER, adminPath);
-    return renderAdminDashboard(env.ISSUER, adminPath);
+    const tok = newCsrfToken();
+    if (!session) {
+      const r = renderAdminLogin(env.ISSUER, adminPath, nonce, tok);
+      r.headers.append("set-cookie", cookiePublic("csrf", tok, {Path: adminPath}));
+      return r;
+    }
+    const r = renderAdminDashboard(env.ISSUER, adminPath, nonce, tok);
+    r.headers.append("set-cookie", cookiePublic("csrf", tok, {Path: adminPath}));
+    return r;
   }
 
 
   if (req.method === "POST"){
-    // if (!sameOrigin(req)) return new Response("bad origin", { status: 403 });
-    const form = await req.formData();    
+    // Enforce same-origin (Origin/Referer) on admin POSTs
+    if (!sameOrigin(req)) return new Response("bad origin", { status: 403 });
+    const form = await req.formData();
+    if (!csrfOk(req, form)) {
+      return new Response("bad csrf", { status: 403 });
+    }
     if (u.pathname === adminPath + "/login"){
       const pass = String(form.get("password")||"");
       const ok = await verifyPBKDF2(env, pass);      
@@ -4846,6 +4950,9 @@ say "[✓] Done."
 
 
 # --- Optional: systemd unit to tail Worker logs into journald ---------------
+echo "[+] Running post-deploy verification ..."
+dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh"
+
 sudo tee /etc/systemd/system/dmj-worker-tail.service >/dev/null <<UNIT
 [Unit]
 Description=Cloudflare Worker tail -> journald
@@ -4887,80 +4994,8 @@ fi
 sleep 10
 
 # --- Post-deploy verification ------------------------------------------------
-sudo tee /usr/local/bin/dmj-verify.sh >/dev/null <<'VERIFY'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
-logfail() {
-  echo "[x] $*" >&2
-  echo "---- journalctl: dmj-signer.service (last 200 lines) ----" >&2
-  journalctl -u dmj-signer.service -n 200 --no-pager || true
-  exit 1
-}
-ok(){ echo "[✓] $*"; }
-
-# Discover signer port from the runtime file (falls back to 18080)
-PORT="$(cat /run/dmj/signer.port 2>/dev/null || echo 18080)"
-
-# 1) systemd service running
-systemctl is-active --quiet dmj-signer.service || logfail "dmj-signer.service is not active"
-
-# 2) Signer health (direct and via nginx if DNS/LE is ready)
-curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null || logfail "Signer health (loopback) failed"
-ok "Signer /healthz (loopback) OK"
-
-# Try the nginx vhost if resolvable; don't fail deployment on DNS/LE timing
-SIGNER_HOST="$(grep -E '^SIGNER_DOMAIN=' /etc/dmj/dmj-signer.env | cut -d= -f2- || true)"
-if [[ -n "$SIGNER_HOST" ]]; then
-  if curl -fsS --max-time 5 "https://${SIGNER_HOST}/healthz" >/dev/null; then
-    ok "Signer /healthz via nginx vhost OK"
-  else
-    echo "[!] Signer vhost health check skipped/failed (DNS/LE may still be provisioning)"
-  fi
-fi
-
-# 3) TSA health + RFC 3161 end-to-end
-curl -fsS "http://127.0.0.1:9090/healthz" | grep -q '^ok' || logfail "TSA /healthz failed"
-ok "TSA /healthz OK"
-
-TMPD="$(mktemp -d)"
-trap 'rm -rf "$TMPD"' EXIT
-echo "dmj one" > "$TMPD/in.dat"
-openssl ts -query -data "$TMPD/in.dat" -sha256 -cert -out "$TMPD/req.tsq"
-
-# POST to local TSA, ensure correct Content-Type and a parseable reply
-curl -fsS -D "$TMPD/h" \
-     -H 'Content-Type: application/timestamp-query' \
-     --data-binary @"$TMPD/req.tsq" \
-     "http://127.0.0.1:9090/" > "$TMPD/resp.tsr" \
-  || logfail "TSA POST failed"
-
-grep -qi '^content-type: *application/timestamp-reply' "$TMPD/h" \
-  || logfail "TSA wrong Content-Type (want application/timestamp-reply)"
-
-openssl ts -reply -in "$TMPD/resp.tsr" -text >/dev/null \
-  || logfail "TSA reply not parseable by openssl(1) ts -reply"
-ok "TSA end-to-end (query→reply) OK"
-
-# 4) OCSP sanity (check a cert the DB knows about: signer leaf vs issuer)
-# 'good' or 'unknown' both prove the responder is answering; we just need a 200 + parseable response.
-if ! openssl ocsp -issuer /opt/dmj/pki/ica/ica.crt \
-                  -cert   /opt/dmj/signer-vm/signer.crt \
-                  -url    http://127.0.0.1:9080 \
-                  -no_nonce -resp_text >/dev/null 2>&1; then
-  logfail "OCSP query failed"
-fi
-ok "OCSP responder reachable & responding"
-
-# 5) Signer /spki JSON
-curl -fsS "http://127.0.0.1:${PORT}/spki" | grep -q '"spki"' \
-  || logfail "Signer /spki did not return JSON"
-ok "Signer /spki OK"
-
-echo "----------------------------------------------------------------"
-echo "[✓] All internal endpoints validated successfully."
-VERIFY
+echo "[+] Running post-deploy verification ..."
+dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh"
 sudo chmod +x /usr/local/bin/dmj-verify.sh
 
-echo "[+] Running post-deploy verification ..."
 /usr/local/bin/dmj-verify.sh || true

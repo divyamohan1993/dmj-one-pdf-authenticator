@@ -1,0 +1,265 @@
+# modules/dmj-fetcher.sh.tmpl
+# Guard against double-loading
+if [[ "${_DMJ_FETCHER_V2:-0}" -eq 1 ]]; then
+  return 0
+fi
+readonly _DMJ_FETCHER_V2=1
+readonly _DMJ_FETCHER_TAG="dmj-fetcher"
+readonly _DMJ_FETCHER_VERSION="2.0.0"
+
+# --- internal defaults (module-controlled; can be overridden *inside* this file only)
+# networking / retries
+__DMJ_CONNECT_TIMEOUT=10        # s
+__DMJ_MAX_TIME=60               # s per transfer
+__DMJ_RETRIES=6                 # aggressive retries incl. connrefused/all-errors
+__DMJ_LOCK_WAIT=20              # s to wait for a per-dest lock
+__DMJ_MAX_BYTES=$((50*1024*1024))  # 50 MiB payload safety cap (0 = unlimited)
+# safety / behavior
+__DMJ_ALLOW_INSECURE=0          # 1 to allow http / redirects to http
+__DMJ_PINNEDPUBKEY=""           # curl SPKI pin: e.g. sha256//BASE64...
+__DMJ_TLS_MIN="1.2"             # min TLS version enforced when curl supports it
+__DMJ_TLS_MAX=""                # optional max TLS (e.g. 1.3)
+__DMJ_ALLOW_HTML=0              # block HTML payloads by default
+__DMJ_EXPECT_TYPE=""            # optional Content-Type regex (case-insensitive)
+__DMJ_BACKUP_ON_CHANGE=0        # 1 = keep .bak.YYYYmmddTHHMMSS on change
+__DMJ_UNIT_NAME="dmj-signer.service"  # for your journalctl view (see notes)
+# -------------------------------------------------------------------------------
+
+# Prefer FD3 (like your part2 logger), else stderr
+__dmj_log_to_console() {
+  local level="$1"; shift
+  if [[ -e /proc/$$/fd/3 ]]; then printf "%s\n" "[$_DMJ_FETCHER_TAG][$level] $*" >&3
+  else printf "%s\n" "[$_DMJ_FETCHER_TAG][$level] $*" >&2
+  fi
+}
+
+# Best-effort log to journald (will show under `-u dmj-signer.service` when called
+# *from that unit’s process tree*; otherwise visible via `-t dmj-fetcher`).
+__dmj_log_to_journal() {
+  local pri="$1"; shift
+  local msg="$*"
+  if command -v systemd-cat >/dev/null 2>&1; then
+    # Same cgroup => entries appear under the unit; always visible via -t identifier.
+    systemd-cat --identifier="$_DMJ_FETCHER_TAG" --priority="$pri" <<<"$msg" 2>/dev/null || true
+  elif command -v logger >/dev/null 2>&1; then
+    logger -t "$_DMJ_FETCHER_TAG" -p "user.$pri" -- "$msg" 2>/dev/null || true
+  fi
+}
+
+__dmj_log() {
+  local pri="$1"; shift
+  local msg="$*"
+  __dmj_log_to_console "$pri" "$msg"
+  __dmj_log_to_journal "$pri" "$msg"
+}
+
+# sudo wrapper (no-op if root or sudo missing)
+__dmj_sudo(){ if command -v sudo >/dev/null 2>&1 && [ "${EUID:-$(id -u)}" -ne 0 ]; then sudo "$@"; else "$@"; fi; }
+
+# compare two files robustly without depending on a single tool
+__dmj_same_files() {
+  local a="$1" b="$2"
+  [[ -f "$a" && -f "$b" ]] || return 1
+  if command -v cmp >/dev/null 2>&1; then cmp -s "$a" "$b"; return $?; fi
+  if command -v diff >/dev/null 2>&1; then diff -q "$a" "$b" >/dev/null 2>&1; return $?; fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    [[ "$(sha256sum "$a" | awk '{print $1}')" == "$(sha256sum "$b" | awk '{print $1}')" ]]
+    return $?
+  fi
+  # last resort: byte count + md5sum if present
+  if command -v md5sum >/dev/null 2>&1; then
+    [[ "$(md5sum "$a" | awk '{print $1}')" == "$(md5sum "$b" | awk '{print $1}')" ]]
+    return $?
+  fi
+  return 1
+}
+
+# single place to print precise source location (module-file:line)
+__dmj_where() {
+  # Called inside dmj_fetch_fresh; show *module* file and exact line
+  local src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+  local line="${BASH_LINENO[0]:-0}"
+  printf '%s:%s' "$src" "$line"
+}
+
+# Core: always-fresh, atomic, ACL-friendly fetch-and-install
+# Usage: dmj_fetch_fresh "URL" "DEST" [MODE] [EXPECTED_SHA256]
+dmj_fetch_fresh() {
+  ( # subshell: fully isolate from caller’s strict mode and traps
+    set +e; set +o pipefail; trap - ERR; umask 077
+
+    # ------- inputs -------
+    local url="${1:-}" dest_in="${2:-}" mode="${3:-}" expect_sha="${4:-}"
+    if [[ -z "$url" || -z "$dest_in" ]]; then
+      __dmj_log err "$(__dmj_where) usage: dmj_fetch_fresh <url> <dest> [mode] [sha256]"
+      exit 0
+    fi
+
+    # resolve DEST if directory/ends-with-slash
+    local dest="$dest_in"
+    if [[ -d "$dest_in" || "$dest_in" == */ ]]; then
+      local base_from_url; base_from_url="$(basename "${url%%\?*}")"
+      dest="${dest_in%/}/${base_from_url}"
+    fi
+
+    # policy: HTTPS only unless explicitly allowed
+    local host; host="${url#*://}"; host="${host%%/*}"
+    if [[ "$__DMJ_ALLOW_INSECURE" != "1" && "$url" != https://* ]]; then
+      __dmj_log warning "$(__dmj_where) blocked non-HTTPS URL: $url"
+      exit 0
+    fi
+
+    # ensure parent dir exists
+    local dir base; dir="$(dirname -- "$dest")"; base="$(basename -- "$dest")"
+    __dmj_sudo install -d -m 0755 "$dir" 2>/dev/null || true
+
+    # per-dest concurrency lock
+    local lockdir="/var/lock/dmj"
+    __dmj_sudo install -d -m 0755 "$lockdir" 2>/dev/null || true
+    local h; h="$(printf '%s' "$dest" | (sha256sum 2>/dev/null || shasum -a 256 2>/dev/null || cksum) | awk '{print $1}')"
+    local lock="${lockdir}/${h}.lock" lockfd=217
+    if command -v flock >/dev/null 2>&1; then
+      eval "exec ${lockfd}>'$lock'"
+      flock -w "$__DMJ_LOCK_WAIT" "${lockfd}" || { __dmj_log warning "$(__dmj_where) lock timeout; skipped $dest"; exit 0; }
+    fi
+
+    # stage temp in same dir so default ACLs apply to the new inode
+    local tmp headers ts
+    tmp="$(__dmj_sudo mktemp -p "$dir" ".${base}.tmp.XXXXXXXX")" || { __dmj_log err "$(__dmj_where) mktemp failed in $dir"; exit 0; }
+    headers="${tmp}.hdr"
+    ts="$(date +%s%N)"
+    local url_busted; [[ "$url" == *\?* ]] && url_busted="${url}&_=${ts}" || url_busted="${url}?_=${ts}"
+
+    # --- fetch with curl (preferred), fallback to wget ---
+    local http_code="000" fetch_rc=0
+    if command -v curl >/dev/null 2>&1; then
+      # build curl args (retries on *all* errors, include connrefused; force HTTPS unless allowed)
+      local args=()
+      args+=(-sSL --compressed -D "$headers" -o "$tmp" -w '%{http_code}')
+      args+=(--connect-timeout "$__DMJ_CONNECT_TIMEOUT" --max-time "$__DMJ_MAX_TIME")
+      args+=(--retry "$__DMJ_RETRIES" --retry-all-errors --retry-connrefused)  # aggressive & self-healing
+      [[ "$__DMJ_ALLOW_INSECURE" != "1" ]] && args+=(--proto '=https' --proto-redir '=https')
+      [[ -n "$__DMJ_TLS_MIN" ]] && args+=(--tlsv"$__DMJ_TLS_MIN")
+      [[ -n "$__DMJ_TLS_MAX" ]] && args+=(--tls-max "$__DMJ_TLS_MAX")
+      [[ -n "$__DMJ_PINNEDPUBKEY" ]] && args+=(--pinnedpubkey "$__DMJ_PINNEDPUBKEY") # SPKI pin
+      args+=(-H 'Cache-Control: no-cache, no-store, must-revalidate' -H 'Pragma: no-cache' -H 'Accept: */*')
+      http_code="$(__dmj_sudo curl "${args[@]}" "$url_busted" 2>/dev/null || echo '000')"
+      fetch_rc=$?
+    elif command -v wget >/dev/null 2>&1; then
+      # wget fallback: capture headers on stderr with -S; approximate no-cache
+      __dmj_sudo wget -q -O "$tmp" --server-response \
+        --timeout="$__DMJ_MAX_TIME" --tries=$((__DMJ_RETRIES+1)) \
+        --header='Cache-Control: no-cache, no-store, must-revalidate' \
+        --header='Pragma: no-cache' \
+        "$url_busted" 2> "$headers"
+      fetch_rc=$?
+      # attempt to parse last HTTP/ status
+      http_code="$(grep -Eo 'HTTP/[0-9.]+[[:space:]]+[0-9]+' "$headers" | tail -1 | awk '{print $2}' 2>/dev/null || echo 000)"
+      [[ -z "$http_code" ]] && http_code="000"
+    else
+      __dmj_log err "$(__dmj_where) neither curl nor wget found; cannot fetch"
+      __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+      exit 0
+    fi
+
+    # HTTP decisioning: 404/non-200 => do NOT update
+    if [[ "$http_code" == "404" ]]; then
+      __dmj_log warning "$(__dmj_where) $dest not updated (HTTP 404)"
+      __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+      exit 0
+    fi
+    if [[ "$http_code" != "200" || "$fetch_rc" -ne 0 ]]; then
+      __dmj_log warning "$(__dmj_where) $dest not updated (HTTP ${http_code}, rc=${fetch_rc})"
+      __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+      exit 0
+    fi
+
+    # sanity: non-empty; optionally block HTML; optional type regex; size cap
+    if ! __dmj_sudo test -s "$tmp"; then
+      __dmj_log warning "$(__dmj_where) $dest not updated (empty payload)"
+      __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+      exit 0
+    fi
+    local ct; ct="$(grep -i '^content-type:' "$headers" | tail -1 | tr -d '\r' | awk -F: '{print $2}' | xargs || true)"
+    if echo "$ct" | grep -qiE 'text/html|application/xhtml|text/xml'; then
+      if [[ "$__DMJ_ALLOW_HTML" != "1" ]]; then
+        __dmj_log warning "$(__dmj_where) looks like HTML (${ct}); skip $dest"
+        __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+        exit 0
+      fi
+    fi
+    if [[ -n "$__DMJ_EXPECT_TYPE" ]] && ! echo "$ct" | grep -qiE "$__DMJ_EXPECT_TYPE"; then
+      __dmj_log warning "$(__dmj_where) unexpected Content-Type '${ct}' (wanted /${__DMJ_EXPECT_TYPE}/); skip $dest"
+      __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+      exit 0
+    fi
+    if [[ "$__DMJ_MAX_BYTES" -gt 0 ]]; then
+      local sz; sz="$(__dmj_sudo wc -c < "$tmp" | tr -d '[:space:]' || echo 0)"
+      if [[ "$sz" -gt "$__DMJ_MAX_BYTES" ]]; then
+        __dmj_log warning "$(__dmj_where) payload too large (${sz} > ${__DMJ_MAX_BYTES}); skip $dest"
+        __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+        exit 0
+      fi
+    fi
+    if [[ -n "$expect_sha" ]]; then
+      local got_sha=""
+      if command -v sha256sum >/dev/null 2>&1; then
+        got_sha="$(__dmj_sudo sha256sum "$tmp" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        got_sha="$(__dmj_sudo shasum -a 256 "$tmp" | awk '{print $1}')"
+      fi
+      if [[ -n "$got_sha" && "${got_sha,,}" != "${expect_sha,,}" ]]; then
+        __dmj_log warning "$(__dmj_where) checksum mismatch; skip $dest"
+        __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+        exit 0
+      fi
+    fi
+
+    # no-op if identical
+    if [[ -f "$dest" ]] && __dmj_sudo bash -c "__dmj_same_files '$tmp' '$dest'" 2>/dev/null; then
+      __dmj_log info "$(__dmj_where) up-to-date: $dest"
+      __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true
+      exit 0
+    fi
+
+    # optional backup
+    if [[ -f "$dest" && "$__DMJ_BACKUP_ON_CHANGE" == "1" ]]; then
+      local tsb; tsb="$(date +%Y%m%dT%H%M%S)"
+      __dmj_sudo cp -a -- "$dest" "${dest}.bak.${tsb}" 2>/dev/null || true
+    fi
+
+    # preserve current owner:group if file exists
+    local own="" grp=""
+    if [[ -f "$dest" ]] && command -v stat >/dev/null 2>&1; then
+      own="$(__dmj_sudo stat -c '%u' "$dest" 2>/dev/null || echo '')"
+      grp="$(__dmj_sudo stat -c '%g' "$dest" 2>/dev/null || echo '')"
+    fi
+
+    # atomic publish (same-dir rename -> atomic on same filesystem)
+    if ! __dmj_sudo mv -f -T -- "$tmp" "$dest" 2>/dev/null; then
+      __dmj_sudo mv -f -- "$tmp" "$dest" 2>/dev/null || { __dmj_log err "$(__dmj_where) failed to install $dest"; __dmj_sudo rm -f "$tmp" "$headers" 2>/dev/null || true; exit 0; }
+    fi
+
+    # restore owner/group if captured
+    if [[ -n "$own" && -n "$grp" ]]; then __dmj_sudo chown "$own:$grp" "$dest" 2>/dev/null || true; fi
+
+    # apply explicit mode if provided else keep ACL-driven defaults; ensure ACL mask allows named entries
+    if [[ -n "$mode" ]]; then
+      __dmj_sudo chmod "$mode" "$dest" 2>/dev/null || true
+    else
+      if command -v getfacl >/dev/null 2>&1 && command -v setfacl >/dev/null 2>&1; then
+        if getfacl -p -d "$dir" 2>/dev/null | grep -q '^default:'; then
+          __dmj_sudo setfacl -m m::rw "$dest" 2>/dev/null || true
+        fi
+      fi
+    fi
+
+    # SELinux relabel + fsync best effort
+    command -v restorecon >/dev/null 2>&1 && __dmj_sudo restorecon -F "$dest" 2>/dev/null || true
+    if sync --help 2>&1 | grep -q -- ' -f'; then __dmj_sudo sync -f "$dest" 2>/dev/null || true; else sync 2>/dev/null || true; fi
+
+    __dmj_sudo rm -f "$headers" 2>/dev/null || true
+    __dmj_log notice "$(__dmj_where) updated: $dest"
+    exit 0
+  ); return 0
+}
