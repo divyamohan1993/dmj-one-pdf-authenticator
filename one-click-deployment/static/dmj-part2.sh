@@ -172,6 +172,27 @@ say(){ printf "%s\n" "$*" >&3; }
 
 # shellcheck source=/dev/null
 # . <(curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 -H 'Cache-Control: no-cache, no-store, must-revalidate' "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh?_=$(date +%s)")
+# Robust loader for dmj-fetcher (copy/paste as-is)
+DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
+
+tmp="$(mktemp)"
+if curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 \
+        -H 'Cache-Control: no-cache, no-store, must-revalidate' \
+        "${DMJ_FETCHER_URL}?_=$(date +%s)" \
+        | sed 's/\r$//' > "$tmp"; then
+  if bash -n "$tmp"; then
+    # shellcheck source=/dev/null
+    . "$tmp"
+  else
+    echo "[dmj-fetcher] syntax check failed for $DMJ_FETCHER_URL" \
+      | systemd-cat --identifier=dmj-fetcher --priority=err
+  fi
+else
+  echo "[dmj-fetcher] download failed for $DMJ_FETCHER_URL" \
+    | systemd-cat --identifier=dmj-fetcher --priority=err
+fi
+rm -f "$tmp"
+
 
 
 # Single place to render a precise failure with file:line, command & stack
@@ -918,8 +939,8 @@ public class SignerServer {
       int sigIndex = 0;
       for (PDSignature s : doc.getSignatureDictionaries()) {
         any = true; sigIndex++;
-        // Use the SubFilter *name* for reliable comparison and branch for RFC 3161 DocTimeStamp
-        String sf = (s.getSubFilter() != null ? s.getSubFilter().getName() : "");
+        // Use the SubFilter string for reliable comparison and branch for RFC 3161 DocTimeStamp
+        String sf = java.util.Optional.ofNullable(s.getSubFilter()).orElse("");
         subFilter = sf;
 
         int[] br = s.getByteRange();
