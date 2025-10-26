@@ -4986,7 +4986,7 @@ WorkingDirectory=${WORKER_DIR}
 EnvironmentFile=-/etc/dmj/dmj-worker.secrets
 StandardOutput=journal
 StandardError=inherit
-ExecStart=${WR} tail --name ${WORKER_NAME} --format=pretty
+ExecStart=${WR} tail ${WORKER_NAME} --format=pretty
 Restart=always
 
 [Install]
