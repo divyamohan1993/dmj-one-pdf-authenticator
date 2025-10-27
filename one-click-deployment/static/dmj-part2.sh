@@ -1526,18 +1526,6 @@ public class SignerServer {
         String shaHex   = toHexUpper(java.security.MessageDigest.getInstance("SHA-256").digest(signed));
         String base     = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0,12);
         Path zipPath    = writeBundleZip(signed, base);
-
-
-        boolean wantsZip = (ctx.header("Accept") != null && ctx.header("Accept").contains("application/zip"))
-                   || "1".equals(ctx.queryParam("as_zip"));
-        if (wantsZip) {
-          ctx.contentType("application/zip");
-          ctx.header("Content-Disposition", "attachment; filename=\"" + zipPath.getFileName() + "\"");
-          ctx.result(Files.newInputStream(zipPath));   // stream it
-          return;
-        }
-
-
         String rel      = "/dl/" + zipPath.getFileName().toString();
         String url      = PKI_BASE + rel;
 
