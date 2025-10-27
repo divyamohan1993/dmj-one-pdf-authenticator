@@ -22,7 +22,7 @@ DMJ_LEGACY_WR_DIR="${DMJ_HOME}/.wrangler"             # symlink to XDG
 DMJ_LEGACY_CFG="${DMJ_LEGACY_WR_DIR}/config/default.toml"
 
 # Set this variable at the top (defaulting to 0, so safe)
-GEN_STUBS=${GEN_STUBS:-1}
+GEN_STUBS=${GEN_STUBS:-0}
 
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
