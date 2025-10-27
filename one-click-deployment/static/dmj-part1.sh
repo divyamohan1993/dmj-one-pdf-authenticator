@@ -22,7 +22,7 @@ DMJ_LEGACY_WR_DIR="${DMJ_HOME}/.wrangler"             # symlink to XDG
 DMJ_LEGACY_CFG="${DMJ_LEGACY_WR_DIR}/config/default.toml"
 
 # Set this variable at the top (defaulting to 0, so safe)
-GEN_STUBS=${GEN_STUBS:-0}
+GEN_STUBS=${GEN_STUBS:-1}
 
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
 
@@ -80,23 +80,23 @@ sudo chown -R "$DMJ_USER:$DMJ_USER" "$DMJ_HOME"
 sudo chmod 700 "$DMJ_HOME"
 sudo chmod -R go-rwx "$DMJ_HOME"
 
-echo "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
-sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-# Remove any old per-domain stubs (both exact and wildcard matches)
-sudo rm -f /etc/nginx/sites-enabled/pki* \
-            /etc/nginx/sites-enabled/ocsp* \
-            /etc/nginx/sites-enabled/signer* \
-            /etc/nginx/sites-enabled/tsa* 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/*pki* \
-            /etc/nginx/sites-enabled/*ocsp* \
-            /etc/nginx/sites-enabled/*signer* \
-            /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true
-
-
-echo "[+] Waiting 2 seconds..."
-sleep 2
-
 if [ "$GEN_STUBS" -eq 1 ]; then
+
+  echo "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
+  sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+  # Remove any old per-domain stubs (both exact and wildcard matches)
+  sudo rm -f /etc/nginx/sites-enabled/pki* \
+              /etc/nginx/sites-enabled/ocsp* \
+              /etc/nginx/sites-enabled/signer* \
+              /etc/nginx/sites-enabled/tsa* 2>/dev/null || true
+  sudo rm -f /etc/nginx/sites-enabled/*pki* \
+              /etc/nginx/sites-enabled/*ocsp* \
+              /etc/nginx/sites-enabled/*signer* \
+              /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true
+
+  echo "[+] Waiting 2 seconds..."
+  sleep 2
+
   echo "[+] Create minimal stub HTTP blocks for Let's Encrypt if they don't already exist"
   for DOMAIN in ocsp.dmj.one pki.dmj.one signer.dmj.one tsa.dmj.one; do
     CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
@@ -123,10 +123,10 @@ EOF
   sudo nginx -t && sudo systemctl reload nginx
 
   echo "[i] Generating ocsp, signer, tsa and pki domain's LetsEncrypt Certificate"
-  sudo certbot --nginx -d ocsp.dmj.one    --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-  sudo certbot --nginx -d pki.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-  sudo certbot --nginx -d signer.dmj.one  --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
-  sudo certbot --nginx -d tsa.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one --quiet
+  sudo certbot --nginx -d ocsp.dmj.one    --no-redirect --non-interactive --agree-tos -m contact@dmj.one
+  sudo certbot --nginx -d pki.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one
+  sudo certbot --nginx -d signer.dmj.one  --no-redirect --non-interactive --agree-tos -m contact@dmj.one
+  sudo certbot --nginx -d tsa.dmj.one     --no-redirect --non-interactive --agree-tos -m contact@dmj.one
 
 fi
 
