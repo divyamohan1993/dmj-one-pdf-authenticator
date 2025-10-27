@@ -1529,18 +1529,6 @@ public class SignerServer {
         String rel      = "/dl/" + zipPath.getFileName().toString();
         String url      = PKI_BASE + rel;
 
-        // If the client explicitly asks for a ZIP, stream it directly.
-        // This avoids any front-end misrouting that could hit "/" (healthz) and return "ok".
-        String accept = Optional.ofNullable(ctx.header("Accept")).orElse("");
-        boolean wantsZip = accept.contains("application/zip") || "1".equals(ctx.queryParam("as_zip"));
-        if (wantsZip) {
-          ctx.contentType("application/zip");
-          ctx.header("Content-Disposition", "attachment; filename=\"" + zipPath.getFileName() + "\"");
-          ctx.header("Cache-Control", "no-store");
-          ctx.result(Files.newInputStream(zipPath));
-          return;
-        }
-
         // issuer fingerprint (SHA-256 over DER certificate) for DB uniqueness (issuer_fp, cert_serial)
         X509Certificate issuerCert = (dm.chain.size() >= 2) ? dm.chain.get(1) : ICA_CERT;
         String issuerFp = (issuerCert != null) ? sha256Hex(issuerCert.getEncoded()) : "";
@@ -2691,7 +2679,7 @@ server {
   server_name ${PKI_DOMAIN};
 
   root ${PKI_PUB};
-  autoindex off;  
+  autoindex off;
   
   # Security & cache
   add_header X-Content-Type-Options "nosniff" always;
@@ -2721,10 +2709,7 @@ server {
   # Ad-hoc bundles should not be cached
   location /dl/ {
     add_header Cache-Control "no-store" always;
-    try_files \$uri =404;        
-    types { 
-      application/zip zip;
-    }
+    try_files \$uri =404;
   }
 }
 server {   
@@ -2764,9 +2749,6 @@ server {
   location /dl/ {
     add_header Cache-Control "no-store" always;
     try_files \$uri =404;
-    types { 
-      application/zip zip;
-    }
   }
 }
 NGX
@@ -2786,11 +2768,8 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type \$http_content_type;
-    proxy_request_buffering off;
-    proxy_buffering off;
-    proxy_hide_header Content-Type;
-    add_header       Content-Type "application/ocsp-response" always;
-    proxy_set_header Accept-Encoding "";
+    proxy_buffering    off;
+    add_header         Content-Type "application/ocsp-response" always;
   }
 }
 server {
@@ -2812,11 +2791,8 @@ server {
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
     proxy_set_header   Content-Type \$http_content_type;
-    proxy_request_buffering off;
-    proxy_buffering off;
-    proxy_hide_header Content-Type;
-    add_header       Content-Type "application/ocsp-response" always;
-    proxy_set_header Accept-Encoding "";
+    proxy_buffering    off;
+    add_header         Content-Type "application/ocsp-response" always;
   }
 }
 NGX
