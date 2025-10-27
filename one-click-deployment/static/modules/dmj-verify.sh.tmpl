@@ -9,7 +9,9 @@ logfail() {
   exit 1
 }
 ok(){ echo "[✓] $*"; }
+say(){ printf "%s\n" "$*" >&3; }
 
+say "[=] Verify.sh Loaded, called and is running..."
 # Discover signer port from the runtime file (falls back to 18080)
 PORT="$(cat /run/dmj/signer.port 2>/dev/null || echo 18080)"
 
