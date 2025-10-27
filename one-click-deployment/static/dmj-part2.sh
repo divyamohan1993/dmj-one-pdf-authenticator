@@ -1532,9 +1532,7 @@ public class SignerServer {
         // If the client explicitly asks for a ZIP, stream it directly.
         // This avoids any front-end misrouting that could hit "/" (healthz) and return "ok".
         String accept = Optional.ofNullable(ctx.header("Accept")).orElse("");
-        boolean wantsZip =
-            accept.contains("application/zip") ||
-            "1".equals(ctx.queryParam("as_zip"));
+        boolean wantsZip = accept.contains("application/zip") || "1".equals(ctx.queryParam("as_zip"));
         if (wantsZip) {
           ctx.contentType("application/zip");
           ctx.header("Content-Disposition", "attachment; filename=\"" + zipPath.getFileName() + "\"");
