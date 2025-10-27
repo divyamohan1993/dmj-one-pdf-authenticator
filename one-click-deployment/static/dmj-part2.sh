@@ -788,11 +788,7 @@ public class SignerServer {
     byte[] expected = mac.doFinal();
     byte[] provided = java.util.Base64.getDecoder().decode(providedB64);
     return MessageDigest.isEqual(expected, provided);
-  }
-
-  static String b64url(byte[] in) {
-    return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(in);
-  }
+  }  
 
   // Build a detached CMS over the exact ByteRange bytes and embed the chain
   static byte[] buildDetachedCMS(InputStream content, PrivateKey pk, List<X509Certificate> chain) throws Exception {
@@ -1248,31 +1244,20 @@ public class SignerServer {
       OCSPReq req = new OCSPReqBuilder().addRequest(certId).build();
       byte[] body = req.getEncoded();
 
-      HttpURLConnection conn;
-      if (OCSP_USE_GET) {
-        // Cache-friendly GET: append Base64URL (unpadded) of the OCSPRequest DER to the path
-        String base = OCSP_URL_ENV.endsWith("/") ? OCSP_URL_ENV : (OCSP_URL_ENV + "/");
-        URL url = new URL(base + b64url(body));
-        conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(OCSP_TIMEOUT_MS);
-        conn.setReadTimeout(OCSP_TIMEOUT_MS);
-        conn.setUseCaches(true);
-        conn.setRequestProperty("Accept", "application/ocsp-response");
-        conn.setRequestProperty("Accept-Encoding", "identity");
-      } else {
-        conn = (HttpURLConnection) new URL(OCSP_URL_ENV).openConnection();
-        conn.setConnectTimeout(OCSP_TIMEOUT_MS);
-        conn.setReadTimeout(OCSP_TIMEOUT_MS);
-        conn.setUseCaches(false);
-        conn.setDoOutput(true);
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/ocsp-request");
-        conn.setRequestProperty("Accept", "application/ocsp-response");
-        conn.setRequestProperty("Accept-Encoding", "identity");
-        conn.setFixedLengthStreamingMode(body.length);
-        try (OutputStream os = conn.getOutputStream()) { os.write(body); }
-      }
+      // Always POST (some responders do not support GET reliably).
+      HttpURLConnection conn = (HttpURLConnection) new URL(OCSP_URL_ENV).openConnection();
+      conn.setConnectTimeout(OCSP_TIMEOUT_MS);
+      conn.setReadTimeout(OCSP_TIMEOUT_MS);
+      conn.setUseCaches(false);
+      conn.setDoOutput(true);
+      conn.setRequestMethod("POST");
+      conn.setRequestProperty("Content-Type", "application/ocsp-request");
+      conn.setRequestProperty("Accept", "application/ocsp-response");
+      // Ask for an uncompressed DER body; some libs choke on gzip here.
+      conn.setRequestProperty("Accept-Encoding", "identity");
+      // Avoid chunked transfer-encoding issues with some OCSP front-ends.
+      conn.setFixedLengthStreamingMode(body.length);
+      try (OutputStream os = conn.getOutputStream()) { os.write(body); }
 
       int code = conn.getResponseCode();
       if (code != 200) throw new IOException("OCSP HTTP " + code);
@@ -2779,8 +2764,6 @@ server {
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
-    # ensure the client sees the correct OCSP content-type exactly once
-    proxy_hide_header  Content-Type;
     proxy_http_version 1.1;
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
@@ -2804,8 +2787,6 @@ server {
 
   location / {
     proxy_pass         http://127.0.0.1:9080/;
-    # ensure the client sees the correct OCSP content-type exactly once
-    proxy_hide_header  Content-Type;
     proxy_http_version 1.1;
     proxy_set_header   Host \$host;
     proxy_set_header   Content-Length \$content_length;
