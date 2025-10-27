@@ -179,17 +179,17 @@ tmp="$(mktemp)"
 if curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 \
         -H 'Cache-Control: no-cache, no-store, must-revalidate' \
         "${DMJ_FETCHER_URL}?_=$(date +%s)" \
-        | sed 's/\r$//' > "$tmp"; then
+  | sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' > "$tmp"; then
   if bash -n "$tmp"; then
     # shellcheck source=/dev/null
     . "$tmp"
   else
-    echo "[dmj-fetcher] syntax check failed for $DMJ_FETCHER_URL" \
-      | systemd-cat --identifier=dmj-fetcher --priority=err
+    systemd-cat --identifier=dmj-fetcher --priority=err \
+      <<<"[dmj-fetcher] syntax check failed for $DMJ_FETCHER_URL"
   fi
 else
-  echo "[dmj-fetcher] download failed for $DMJ_FETCHER_URL" \
-    | systemd-cat --identifier=dmj-fetcher --priority=err
+  systemd-cat --identifier=dmj-fetcher --priority=err \
+    <<<"[dmj-fetcher] download failed for $DMJ_FETCHER_URL"
 fi
 rm -f "$tmp"
 

@@ -10,7 +10,7 @@ __DMJ_CONNECT_TIMEOUT=10         # s
 __DMJ_MAX_TIME=60                # s per transfer
 __DMJ_RETRIES=6                  # curl retries (incl. connrefused/all-errors)
 __DMJ_LOCK_WAIT=20               # s
-__DMJ_MAX_BYTES=$((50*1024*1024))# payload cap (0 = unlimited)
+__DMJ_MAX_BYTES=52428800         # payload cap (50*1024*1024; 0 = unlimited)
 __DMJ_ALLOW_INSECURE=0           # 1 = allow http
 __DMJ_PINNEDPUBKEY=""            # curl SPKI pin (sha256//...) (optional)
 __DMJ_TLS_MIN="1.2"              # min TLS; set empty to disable constraint
