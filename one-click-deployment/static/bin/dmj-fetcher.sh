@@ -198,7 +198,7 @@ dmj_fetch_fresh() {
                         if (substr(tok,2,1)=="{") {
                             n=tok
                             sub(/^\$\{/, "", n); sub(/\}$/, "", n)
-                            split(n, parts, ":-"); name=parts[1]
+                            d=index(n,":-"); if (d>0) name=substr(n,1,d-1); else name=n
                         } else {
                             name=substr(tok,2)
                         }
@@ -233,11 +233,21 @@ dmj_fetch_fresh() {
                     n=split(HAVEVARS, L, /[ \t]+/)
                     for (i=1;i<=n;i++) if (L[i]!="") allowed[L[i]]=1
                 }
-                # Detect a simple LHS assignment at start of line:
-                #   [export|readonly|local|typeset|declare] VAR=...
-                function lhs_assign(line,    m) {
-                    if (match(line, /^[ \t]*(export|readonly|local|typeset|declare)?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/, m)) {
-                        return m[2]
+                # Return VAR name if line is a simple assignment at start of line:
+                #   [export|readonly|local|typeset|declare] [-flags] VAR=...
+                function lhs_assign(line,   name) {
+                    # strip leading ws
+                    sub(/^[ \t]+/, "", line)
+                    # drop leading keywords+optional flags repeatedly
+                    while (match(line, /^(export|readonly|local|typeset|declare)([ \t]+-[^ \t]+)*/)) {
+                        line = substr(line, RSTART + RLENGTH)
+                        sub(/^[ \t]+/, "", line)
+                    }
+                    # now expect VAR[ ws]*=
+                    if (match(line, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*=/)) {
+                        name = substr(line, RSTART, RLENGTH)
+                        sub(/[ \t]*=.*/, "", name)
+                        return name
                     }
                     return ""
                 }
@@ -260,8 +270,7 @@ dmj_fetch_fresh() {
                         repl = tok
                         if (name in allowed) {
                             envv = ENVIRON[name]
-                            # Skip replacement once name was assigned earlier in file,
-                            # except when we are *on* the assignment line for that same name.
+                            # Skip after first in-file assignment, except on that line itself
                             if (!(name in assigned) || name==LH) {
                                 if (hasdef) {
                                     if (envv != "") repl = envv
