@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8">
+<title>dmj.one Trust Kit — Quick Guide</title>
+<style>body{font-family:ui-sans-serif,system-ui;margin:40px;max-width:900px}code{background:#f6f6f6;padding:2px 4px;border-radius:4px}</style>
+<h1>dmj.one Trust Kit — Quick Guide</h1>
+<p><b>Install the dmj.one Root CA</b> once. Then dmj.one‑signed PDFs show as trusted.</p>
+
+<h2>Windows — One-click (recommended)</h2>
+<ol>
+  <li>Right-click <code>install-dmj-certificates.bat</code> → <b>Run as administrator</b></li>
+  <li>The installer adds:
+    <ul>
+      <li><b>dmj-one-root-ca-r1.(cer/crt)</b> → <b>Trusted Root Certification Authorities</b></li>
+      <li><b>dmj-one-issuing-ca-r1.(cer/crt)</b> → <b>Intermediate Certification Authorities</b></li>
+    </ul>
+  </li>
+  <li>Verify (optional) with <code>certmgr.msc</code></li>
+</ol>
+
+<h3>Manual alternative</h3>
+<p><b>Root CA:</b> Double-click <code>dmj-one-root-ca-r1.cer</code> → <b>Install Certificate…</b> → <b>Local Machine</b> (or <b>Current User</b>) → 
+<b>Place all certificates in the following store</b> → <b>Trusted Root Certification Authorities</b> → finish and approve.</p>
+<p><b>Issuing CA (optional):</b> import <code>dmj-one-issuing-ca-r1.cer</code> into <b>Intermediate Certification Authorities</b>.</p>
+
+<h2>macOS</h2>
+<ol>
+  <li>Double‑click <code>dmj-one-root-ca-r1.cer</code> (opens Keychain Access)</li>
+  <li>Select the <b>System</b> keychain (or <b>login</b>)</li>
+  <li>Drag the certificate in (or <b>File → Import Items…</b>)</li>
+  <li>Double‑click it → <b>Trust</b> → set <b>Always Trust</b></li>
+</ol>
+
+<h2>Linux (Ubuntu/Debian)</h2>
+<ol>
+  <li>Copy Root (PEM): <code>sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/</code></li>
+  <li>Update: <code>sudo update-ca-certificates</code></li>
+</ol>
+
+<h2>Acrobat only (no system changes)</h2>
+<ol>
+  <li>Acrobat → <b>Edit → Preferences → Signatures → Identities &amp; Trusted Certificates → More…</b></li>
+  <li><b>Trusted Certificates → Import</b> → select the Root</li>
+  <li>Tick <b>Use this certificate as a trusted root</b> and save</li>
+</ol>
+
+<p>Reopen your PDF; it should show as trusted and unchanged.</p>
