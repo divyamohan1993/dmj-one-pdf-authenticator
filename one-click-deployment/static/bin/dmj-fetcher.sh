@@ -185,74 +185,101 @@ dmj_fetch_fresh() {
             tmp_vars="${tmp}.vars"
             tmp_proc="${tmp}.proc"
 
-            # 1) Preserve escaped dollars so they aren't substituted
+            # 1) Protect escaped dollars so they are never substituted
             #    e.g., \$host, \${dir} -> keep as literals
             sed 's/\\\$/__DMJ_ESC_DOLLAR__/g' "$tmp" > "$tmp_esc" || exit 72
 
-            # 2) Discover candidate variable names ${VAR} or $VAR (from unescaped dollars)
+            # 2) Discover candidate names (${VAR}, ${VAR:-...}, $VAR) from unescaped dollars
             awk '
                 {
-                    line=$0
-                    gsub(/__DMJ_ESC_DOLLAR__/,"",line)
-                    while (match(line, /\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*/)) {
-                        tok=substr(line, RSTART, RLENGTH)
-                        if (substr(tok,2,1)=="{")      name=substr(tok,3,RLENGTH-3)
-                        else                           name=substr(tok,2)
+                    s=$0
+                    while (match(s, /\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*/)) {
+                        tok=substr(s,RSTART,RLENGTH)
+                        if (substr(tok,2,1)=="{") {
+                            n=tok
+                            sub(/^\$\{/, "", n); sub(/\}$/, "", n)
+                            split(n, parts, ":-"); name=parts[1]
+                        } else {
+                            name=substr(tok,2)
+                        }
                         print name
-                        line=substr(line, RSTART+RLENGTH)
+                        s=substr(s,RSTART+RLENGTH)
                     }
                 }
             ' "$tmp_esc" | sort -u > "$tmp_vars"
 
-            # 3) Export any of those names that are set in *this* shell (so envsubst/awk can see them)
-            varlist=""
+            # 3) Export only the variables that actually exist in *this* shell
+            #    (so awk can read them via ENVIRON[]). Unknown placeholders stay untouched.
+            varnames=""
             if [ -s "$tmp_vars" ]; then
-                # shellcheck disable=SC2163
                 while IFS= read -r vname; do
                     case "$vname" in
-                        ''|*[!A-Za-z0-9_]* ) continue ;;
-                        [0-9]* ) continue ;;
+                        ''|*[!A-Za-z0-9_]*|[0-9]* ) continue ;;
                     esac
                     eval 'present=${'"$vname"'+x}'
                     if [ -n "${present-}" ]; then
-                        # export current value without changing it
                         eval "export $vname"
-                        varlist="${varlist}\${$vname} "
+                        varnames="$varnames $vname"
                     fi
                 done < "$tmp_vars"
             fi
 
-            # 4) Perform substitution using envsubst if available; else awk fallback
-            if [ -n "$varlist" ] && command -v envsubst >/dev/null 2>&1; then
-                envsubst "$varlist" < "$tmp_esc" > "$tmp_proc" || exit 73
-            elif [ -n "$varlist" ]; then
-                # Awk fallback: replace ${NAME} and $NAME (word boundary) from ENVIRON[]
-                awk -v VF="$tmp_vars" '
-                    BEGIN {
-                        while ((getline n < VF) > 0) names[cnt++]=n
+            # 4) Smart substitution (order-aware):
+            #    - Replace until a variable gets assigned in the file; skip afterwards.
+            #    - On a same-line assignment like VAR="${VAR:-x}", replace the RHS if ENV provides VAR.
+            #    - ${VAR:-x} is replaced only when ENV VAR is non-empty; else left for runtime defaulting.
+            awk -v HAVEVARS="$varnames" '
+                BEGIN {
+                    n=split(HAVEVARS, L, /[ \t]+/)
+                    for (i=1;i<=n;i++) if (L[i]!="") allowed[L[i]]=1
+                }
+                # Detect a simple LHS assignment at start of line:
+                #   [export|readonly|local|typeset|declare] VAR=...
+                function lhs_assign(line,    m) {
+                    if (match(line, /^[ \t]*(export|readonly|local|typeset|declare)?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/, m)) {
+                        return m[2]
                     }
-                    {
-                        line=$0
-                        for (i=0;i<cnt;i++) {
-                            n=names[i]
-                            # ${NAME}
-                            gsub("\\$\\{" n "\\}", ENVIRON[n], line)
-                            # $NAME followed by non-word or end
-                            while (match(line, "\\$" n "([^A-Za-z0-9_]|$)")) {
-                                pre = substr(line,1,RSTART-1)
-                                suf = substr(line,RSTART+length("$" n))
-                                bch = substr(line,RSTART+length("$" n), RLENGTH-length("$" n))
-                                line = pre ENVIRON[n] bch suf
+                    return ""
+                }
+                {
+                    ln=$0
+                    LH=lhs_assign(ln)
+                    out=""; rest=ln
+                    while (match(rest, /\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*/)) {
+                        pre = substr(rest,1,RSTART-1)
+                        tok = substr(rest,RSTART,RLENGTH)
+                        name=""; hasdef=0
+                        if (substr(tok,2,1)=="{") {
+                            n = tok
+                            sub(/^\$\{/, "", n); sub(/\}$/, "", n)
+                            d = index(n,":-")
+                            if (d>0) { name = substr(n,1,d-1); hasdef=1 } else { name=n }
+                        } else {
+                            name = substr(tok,2)
+                        }
+                        repl = tok
+                        if (name in allowed) {
+                            envv = ENVIRON[name]
+                            # Skip replacement once name was assigned earlier in file,
+                            # except when we are *on* the assignment line for that same name.
+                            if (!(name in assigned) || name==LH) {
+                                if (hasdef) {
+                                    if (envv != "") repl = envv
+                                } else {
+                                    repl = envv
+                                }
                             }
                         }
-                        print line "\n"
+                        out = out pre repl
+                        rest = substr(rest, RSTART+RLENGTH)
                     }
-                ' "$tmp_esc" > "$tmp_proc" || exit 74
-            else
-                cp "$tmp_esc" "$tmp_proc" || exit 75
-            fi
+                    out = out rest
+                    print out
+                    if (LH!="") assigned[LH]=1
+                }
+            ' "$tmp_esc" > "$tmp_proc" || exit 77
 
-            # 5) Restore escaped dollars
+            # 5) Restore escaped dollars and write back
             sed 's/__DMJ_ESC_DOLLAR__/\\$/g' "$tmp_proc" > "$tmp" || exit 76
             rm -f "$tmp_esc" "$tmp_proc" "$tmp_vars" 2>/dev/null || :
         fi
