@@ -16,9 +16,8 @@ dmj_fetch_fresh() {
     #   DMJ_FETCH_AUTH_HEADER     e.g. "Authorization: Bearer TOKEN" (optional)
     #   DMJ_FETCH_ALLOWED_HOSTS   comma-separated allowlist of hostnames (optional)
 
-    # Harden shell: enable pipefail if available (POSIX.1-2024)
-    ( set -o pipefail ) >/dev/null 2>&1 && set -o pipefail || :
-    set -eu
+    # No global set/pipefail/traps here — do those in a subshell to avoid
+    # side-effects on callers running strict mode.
 
     if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
         printf '%s\n' "usage: dmj_fetch_fresh URL DEST [PERM] [SHA256]" >&2
@@ -55,84 +54,100 @@ dmj_fetch_fresh() {
     fi
 
     # Ensure destination directory
-    dir=$(dirname -- "$dest"); base=$(basename -- "$dest"); [ -d "$dir" ] || mkdir -p -- "$dir"
+    dir=$(dirname "$dest"); base=$(basename "$dest"); [ -d "$dir" ] || mkdir -p "$dir"
 
-    # Temp file in same dir for atomic rename
-    tmp=$( (umask 077; mktemp -p "$dir" ".${base}.tmp.XXXXXX") ) || { printf '%s\n' "error: mktemp failed in $dir" >&2; return 70; }
-    cleanup() { rm -f -- "$tmp"; }; trap cleanup INT TERM HUP EXIT
+    # Portable mktemp template in same dir (no GNU -p)
+    umask 077
+    tmp="${dir%/}/.${base}.tmp.XXXXXXXXXX"
+    tmp=$(mktemp "$tmp") || { printf '%s\n' "error: mktemp failed in $dir" >&2; return 70; }
 
-    # Defaults
-    curl_bin=${DMJ_FETCH_CURL-curl}
-    : "${DMJ_FETCH_CONNECT_TIMEOUT:=10}"
-    : "${DMJ_FETCH_MAX_TIME:=900}"
-    : "${DMJ_FETCH_RETRIES:=5}"
-    : "${DMJ_FETCH_INSECURE:=0}"
-    : "${DMJ_FETCH_HSTS_FILE:=$HOME/.cache/dmj_fetch_hsts}"
+    # Do the risky work in a subshell with strict mode + cleanup trap,
+    # so we don't alter caller shell options or traps.
+    (
+        set -eu
+        # pipefail if available
+        ( set -o pipefail ) >/dev/null 2>&1 && set -o pipefail || :
+        trap 'rm -f "$tmp"' INT TERM HUP EXIT
 
-    # Build argv for curl using "set --" (POSIX-safe)
-    set -- "$curl_bin" \
-        --fail --location \
-        --connect-timeout "$DMJ_FETCH_CONNECT_TIMEOUT" \
-        --max-time "$DMJ_FETCH_MAX_TIME" \
-        --retry "$DMJ_FETCH_RETRIES" --retry-connrefused
+        # Defaults
+        curl_bin=${DMJ_FETCH_CURL-curl}
+        : "${DMJ_FETCH_CONNECT_TIMEOUT:=10}"
+        : "${DMJ_FETCH_MAX_TIME:=900}"
+        : "${DMJ_FETCH_RETRIES:=5}"
+        : "${DMJ_FETCH_INSECURE:=0}"
+        : "${DMJ_FETCH_HSTS_FILE:=$HOME/.cache/dmj_fetch_hsts}"
 
-    # Add retry-all-errors if supported by the installed curl
-    if "$curl_bin" --help all 2>/dev/null | grep -q -- "--retry-all-errors"; then
-        set -- "$@" --retry-all-errors
-    fi
+        # Build argv for curl using "set --" (POSIX-safe)
+        set -- "$curl_bin" \
+            --fail --location \
+            --connect-timeout "$DMJ_FETCH_CONNECT_TIMEOUT" \
+            --max-time "$DMJ_FETCH_MAX_TIME" \
+            --retry "$DMJ_FETCH_RETRIES" --retry-connrefused
 
-    # Progress behavior tuned to whether stderr is a TTY
-    if [ -t 2 ]; then set -- "$@" --progress-bar; else set -- "$@" --no-progress-meter; fi
-
-    # Bypass caches (request revalidation) & avoid content-encoding transformations
-    set -- "$@" \
-        -H "Cache-Control: no-cache, no-store" \
-        -H "Pragma: no-cache" \
-        -H "Expires: 0" \
-        -H "Accept-Encoding: identity"
-
-    # Optional Authorization (or any single custom header)
-    [ -n "${DMJ_FETCH_AUTH_HEADER-}" ] && set -- "$@" -H "$DMJ_FETCH_AUTH_HEADER"
-
-    # Enforce HTTPS (and HSTS) unless DMJ_FETCH_INSECURE=1
-    if [ "$DMJ_FETCH_INSECURE" -eq 0 ]; then
-        set -- "$@" --proto "=https" --proto-redir "=https" --tlsv1.2 --hsts "$DMJ_FETCH_HSTS_FILE"
-    fi
-
-    # Output & URL
-    set -- "$@" --output "$tmp" --url "$url"
-
-    # Execute curl
-    "$@"
-
-    # Optional checksum verification
-    if [ -n "$expected" ]; then
-        if command -v sha256sum >/dev/null 2>&1; then
-            got=$(sha256sum -- "$tmp" | awk '{print $1}')
-        elif command -v shasum >/dev/null 2>&1; then
-            got=$(shasum -a 256 -- "$tmp" | awk '{print $1}')
-        elif command -v openssl >/dev/null 2>&1; then
-            got=$(openssl dgst -sha256 "$tmp" | awk '{print $NF}' | tr 'A-F' 'a-f')
-        else
-            printf '%s\n' "error: no SHA-256 tool (sha256sum|shasum|openssl)" >&2; return 69
+        # Add retry-all-errors if supported by the installed curl (≥7.71.0)
+        if "$curl_bin" --help all 2>/dev/null | grep -q -- "--retry-all-errors"; then
+            set -- "$@" --retry-all-errors
         fi
-        [ "$got" = "$expected" ] || {
-            printf '%s\n' "error: checksum mismatch for $dest" >&2
-            printf '  expected: %s\n' "$expected" >&2
-            printf '  got:      %s\n' "$got" >&2
-            return 60
-        }
-    fi
 
-    # Apply permission (set it on temp, then atomic rename)
-    [ -n "$perm" ] && chmod -- "$perm" "$tmp"
+        # Progress behavior; gate --no-progress-meter (≥7.67.0)
+        if "$curl_bin" --help all 2>/dev/null | grep -q -- "--no-progress-meter"; then
+            if [ -t 2 ]; then set -- "$@" --progress-bar; else set -- "$@" --no-progress-meter; fi
+        else
+            set -- "$@" -sS
+        fi
 
-    # Atomic install (rename on same FS; otherwise cp+rm)
-    if mv -f -- "$tmp" "$dest" 2>/dev/null; then :; else
-        cp -- "$tmp" "$dest" && rm -f -- "$tmp" || { printf '%s\n' "error: could not install $dest" >&2; return 71; }
-    fi
+        # Bypass caches & avoid content-encoding transformations
+        set -- "$@" \
+            -H "Cache-Control: no-cache, no-store" \
+            -H "Pragma: no-cache" \
+            -H "Expires: 0" \
+            -H "Accept-Encoding: identity"
 
-    trap - INT TERM HUP EXIT
-    rm -f -- "$tmp" 2>/dev/null || :
+        # Optional Authorization (or any single custom header)
+        [ -n "${DMJ_FETCH_AUTH_HEADER-}" ] && set -- "$@" -H "$DMJ_FETCH_AUTH_HEADER"
+
+        # Enforce HTTPS; gate --hsts (≥7.74.0)
+        if [ "$DMJ_FETCH_INSECURE" -eq 0 ]; then
+            set -- "$@" --proto "=https" --proto-redir "=https" --tlsv1.2
+            if "$curl_bin" --help all 2>/dev/null | grep -q -- "--hsts"; then
+                set -- "$@" --hsts "$DMJ_FETCH_HSTS_FILE"
+            fi
+        fi
+
+        # Output & URL
+        set -- "$@" --output "$tmp" --url "$url"
+
+        # Execute curl
+        "$@"
+
+        # Optional checksum verification
+        if [ -n "$expected" ]; then
+            if command -v sha256sum >/dev/null 2>&1; then
+                got=$(sha256sum "$tmp" | awk '{print $1}')
+            elif command -v shasum >/dev/null 2>&1; then
+                got=$(shasum -a 256 "$tmp" | awk '{print $1}')
+            elif command -v openssl >/dev/null 2>&1; then
+                got=$(openssl dgst -sha256 "$tmp" | awk '{print $NF}' | tr 'A-F' 'a-f')
+            else
+                printf '%s\n' "error: no SHA-256 tool (sha256sum|shasum|openssl)" >&2; exit 69
+            fi
+            [ "$got" = "$expected" ] || {
+                printf '%s\n' "error: checksum mismatch for %s" "$dest" >&2
+                printf '  expected: %s\n' "$expected" >&2
+                printf '  got:      %s\n' "$got" >&2
+                exit 60
+            }
+        fi
+
+        # Apply permission (set it on temp, then atomic rename)
+        [ -n "$perm" ] && chmod "$perm" "$tmp"
+
+        # Atomic install (rename on same FS; otherwise cp+rm)
+        if mv -f "$tmp" "$dest" 2>/dev/null; then :; else
+            cp "$tmp" "$dest" && rm -f "$tmp" || { printf '%s\n' "error: could not install $dest" >&2; exit 71; }
+        fi
+
+        trap - INT TERM HUP EXIT
+    )
     return 0
 }
