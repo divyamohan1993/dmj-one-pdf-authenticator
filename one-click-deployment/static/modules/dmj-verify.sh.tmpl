@@ -11,6 +11,8 @@ ok(){ echo "[✓] $*"; }
 say(){ printf "%s\n" "$*" >&3; }
 
 say "${TESTVAR}"
+
+TESTVAR="${TESTVAR:-tsa.dmj.one}"
 echo "${TESTVAR}"
 
 say "[=] Verify.sh Loaded, called and is running..."
