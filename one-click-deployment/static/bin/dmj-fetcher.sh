@@ -1,10 +1,13 @@
+# dmj-fetcher.sh
 # POSIX sh (no Bash-isms)
-dmj_fetch_fresh() {
-    # Usage: dmj_fetch_fresh URL DEST [PERM] [SHA256]
-    #   URL     - source URL to download (HTTPS by default)
-    #   DEST    - destination path including filename
-    #   PERM    - optional file mode, e.g. 0755
-    #   SHA256  - optional expected SHA-256 hex digest (with or without "sha256:" prefix)
+dmj_fetch_fresh() {    
+    # Usage: dmj_fetch_fresh URL DEST [flags...]
+    # dmj_fetch_fresh "url" "des/ti/na.tion" -chmod 0755 -chown "dmjsvc:dmjsvc" -hash "sha256:7f9c...c0a" -replacevars true
+    # Flags (optional; can be used instead of positionals):
+    #   -chmod OCTAL         set permissions (e.g. 0755)
+    #   -chown USER[:GROUP]  set ownership on the final file
+    #   -hash  SHA256        expected SHA-256 (hex, or 'sha256:<hex>')
+    #   -replacevars [bool]  expand ${VAR}/$VAR from current shell/env (default: false)
     #
     # Environment variables (optional):
     #   DMJ_FETCH_CURL            path to curl (default: curl)
@@ -19,15 +22,51 @@ dmj_fetch_fresh() {
     # No global set/pipefail/traps here — do those in a subshell to avoid
     # side-effects on callers running strict mode.
 
-    if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
-        printf '%s\n' "usage: dmj_fetch_fresh URL DEST [PERM] [SHA256]" >&2
+    if [ "$#" -lt 2 ]; then
+        printf '%s\n' "usage: dmj_fetch_fresh URL DEST [PERM] [SHA256] [-chmod OCTAL] [-chown USER[:GROUP]] [-hash SHA256] [-replacevars [true|false]]" >&2
         return 64
     fi
 
     url=$1
     dest=$2
-    perm=${3-}
-    expected=${4-}
+    shift 2
+
+    # Defaults (positional back-compat + flags)
+    perm=""
+    expected=""
+    owner=""
+    do_replace=0
+
+    # Legacy positionals [PERM] [SHA256] if present and not flags
+    case "${1-}" in -*) ;; "" ) ;; * ) perm=$1; shift ;; esac
+    case "${1-}" in -*) ;; "" ) ;; * ) expected=$1; shift ;; esac
+
+    # Flag parser (POSIX)
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -chmod)
+                [ "$#" -ge 2 ] || { printf '%s\n' "error: -chmod requires an argument" >&2; return 64; }
+                perm=$2; shift 2 ;;
+            -chown)
+                [ "$#" -ge 2 ] || { printf '%s\n' "error: -chown requires an argument" >&2; return 64; }
+                owner=$2; shift 2 ;;
+            -hash)
+                [ "$#" -ge 2 ] || { printf '%s\n' "error: -hash requires an argument" >&2; return 64; }
+                expected=$2; shift 2 ;;
+            -replacevars)
+                do_replace=1
+                case "${2-}" in
+                    true|1|yes|on)  do_replace=1; shift 2 ;;
+                    false|0|no|off) do_replace=0; shift 2 ;;
+                    -*)             shift 1 ;;    # next flag
+                    "" )            shift 1 ;;    # bare toggle
+                    *  )            shift 1 ;;    # ignore non-boolean
+                esac ;;
+            --) shift; break ;;
+            -*) printf '%s\n' "error: unknown flag '$1'" >&2; return 64 ;;
+            *)  printf '%s\n' "error: unexpected argument '$1'" >&2; return 64 ;;
+        esac
+    done
 
     # Validate permission (octal)
     if [ -n "$perm" ]; then
@@ -139,12 +178,99 @@ dmj_fetch_fresh() {
             }
         fi
 
+        # Optional variable replacement (only when -replacevars was requested)
+        if [ "${do_replace:-0}" -eq 1 ]; then
+            esc_marker="__DMJ_ESC_DOLLAR__"
+            tmp_esc="${tmp}.esc"
+            tmp_vars="${tmp}.vars"
+            tmp_proc="${tmp}.proc"
+
+            # 1) Preserve escaped dollars so they aren't substituted
+            #    e.g., \$host, \${dir} -> keep as literals
+            sed 's/\\\$/__DMJ_ESC_DOLLAR__/g' "$tmp" > "$tmp_esc" || exit 72
+
+            # 2) Discover candidate variable names ${VAR} or $VAR (from unescaped dollars)
+            awk '
+                {
+                    line=$0
+                    gsub(/__DMJ_ESC_DOLLAR__/,"",line)
+                    while (match(line, /\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*/)) {
+                        tok=substr(line, RSTART, RLENGTH)
+                        if (substr(tok,2,1)=="{")      name=substr(tok,3,RLENGTH-3)
+                        else                           name=substr(tok,2)
+                        print name
+                        line=substr(line, RSTART+RLENGTH)
+                    }
+                }
+            ' "$tmp_esc" | sort -u > "$tmp_vars"
+
+            # 3) Export any of those names that are set in *this* shell (so envsubst/awk can see them)
+            varlist=""
+            if [ -s "$tmp_vars" ]; then
+                # shellcheck disable=SC2163
+                while IFS= read -r vname; do
+                    case "$vname" in
+                        ''|*[!A-Za-z0-9_]* ) continue ;;
+                        [0-9]* ) continue ;;
+                    esac
+                    eval 'present=${'"$vname"'+x}'
+                    if [ -n "${present-}" ]; then
+                        # export current value without changing it
+                        eval "export $vname"
+                        varlist="${varlist}\${$vname} "
+                    fi
+                done < "$tmp_vars"
+            fi
+
+            # 4) Perform substitution using envsubst if available; else awk fallback
+            if [ -n "$varlist" ] && command -v envsubst >/dev/null 2>&1; then
+                envsubst "$varlist" < "$tmp_esc" > "$tmp_proc" || exit 73
+            elif [ -n "$varlist" ]; then
+                # Awk fallback: replace ${NAME} and $NAME (word boundary) from ENVIRON[]
+                awk -v VF="$tmp_vars" '
+                    BEGIN {
+                        while ((getline n < VF) > 0) names[cnt++]=n
+                    }
+                    {
+                        line=$0
+                        for (i=0;i<cnt;i++) {
+                            n=names[i]
+                            # ${NAME}
+                            gsub("\\$\\{" n "\\}", ENVIRON[n], line)
+                            # $NAME followed by non-word or end
+                            while (match(line, "\\$" n "([^A-Za-z0-9_]|$)")) {
+                                pre = substr(line,1,RSTART-1)
+                                suf = substr(line,RSTART+length("$" n))
+                                bch = substr(line,RSTART+length("$" n), RLENGTH-length("$" n))
+                                line = pre ENVIRON[n] bch suf
+                            }
+                        }
+                        print line "\n"
+                    }
+                ' "$tmp_esc" > "$tmp_proc" || exit 74
+            else
+                cp "$tmp_esc" "$tmp_proc" || exit 75
+            fi
+
+            # 5) Restore escaped dollars
+            sed 's/__DMJ_ESC_DOLLAR__/\\$/g' "$tmp_proc" > "$tmp" || exit 76
+            rm -f "$tmp_esc" "$tmp_proc" "$tmp_vars" 2>/dev/null || :
+        fi
+
         # Apply permission (set it on temp, then atomic rename)
         [ -n "$perm" ] && chmod "$perm" "$tmp"
 
         # Atomic install (rename on same FS; otherwise cp+rm)
         if mv -f "$tmp" "$dest" 2>/dev/null; then :; else
             cp "$tmp" "$dest" && rm -f "$tmp" || { printf '%s\n' "error: could not install $dest" >&2; exit 71; }
+        fi
+
+        # Optional ownership
+        if [ -n "${owner-}" ]; then
+            if ! chown "$owner" "$dest"; then
+                printf '%s\n' "error: failed to chown $dest to $owner" >&2
+                exit 72
+            fi
         fi
 
         trap - INT TERM HUP EXIT
