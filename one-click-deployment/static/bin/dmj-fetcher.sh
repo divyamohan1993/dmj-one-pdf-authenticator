@@ -289,7 +289,8 @@ dmj_fetch_fresh() {
             ' "$tmp_esc" > "$tmp_proc" || exit 77
 
             # 5) Restore escaped dollars and write back
-            sed 's/__DMJ_ESC_DOLLAR__/\\$/g' "$tmp_proc" > "$tmp" || exit 76
+            # sed 's/__DMJ_ESC_DOLLAR__/\\$/g' "$tmp_proc" > "$tmp" || exit 76
+            sed 's/__DMJ_ESC_DOLLAR__/$/g' "$tmp_proc" > "$tmp" || exit 76
             rm -f "$tmp_esc" "$tmp_proc" "$tmp_vars" 2>/dev/null || :
         fi
 
