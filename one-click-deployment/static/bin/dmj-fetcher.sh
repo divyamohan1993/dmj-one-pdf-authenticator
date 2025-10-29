@@ -224,10 +224,10 @@ dmj_fetch_fresh() {
                 done < "$tmp_vars"
             fi
 
-            # 4) Smart substitution (order-aware):
+             # 4) Smart substitution (order-aware):
             #    - Replace until a variable gets assigned in the file; skip afterwards.
-            #    - On a same-line assignment like VAR="${VAR:-x}", replace the RHS if ENV provides VAR.
-            #    - ${VAR:-x} is replaced only when ENV VAR is non-empty; else left for runtime defaulting.
+            #    - Do NOT replace a variable on its own assignment line
+            #      (e.g., keep TESTVAR="${TESTVAR:-default}").
             awk -v HAVEVARS="$varnames" '
                 BEGIN {
                     n=split(HAVEVARS, L, /[ \t]+/)
@@ -268,10 +268,10 @@ dmj_fetch_fresh() {
                             name = substr(tok,2)
                         }
                         repl = tok
-                        if (name in allowed) {
+                         if (name in allowed) {
                             envv = ENVIRON[name]
-                            # Skip after first in-file assignment, except on that line itself
-                            if (!(name in assigned) || name==LH) {
+                            if (!(name in assigned) && name != LH) {
+                            # Skip after first assignment; also skip replacing the LHS var on its own line
                                 if (hasdef) {
                                     if (envv != "") repl = envv
                                 } else {
