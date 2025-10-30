@@ -89,7 +89,7 @@ dmj_fetch_fresh() {
         allowed=0; oldIFS=$IFS; IFS=,
         for h in $DMJ_FETCH_ALLOWED_HOSTS; do [ "$host" = "$h" ] && { allowed=1; break; }; done
         IFS=$oldIFS
-        [ $allowed -eq 1 ] || { printf '%s\n' "error: host '$host' not allowed"; return 65; }
+        [ $allowed -eq 1 ] || { printf '%s\n' "error: host '$host' not allowed" >&2; return 65; }
     fi
 
     # Ensure destination directory
@@ -295,17 +295,21 @@ dmj_fetch_fresh() {
             rm -f "$tmp_esc" "$tmp_proc" "$tmp_vars" 2>/dev/null || :
         fi
 
-        # Normalize line endings (CRLF → LF) to avoid $'\r' errors on Unix shells
-        # Only attempt if file is text (skip binary files to be safe)
-        if file "$tmp" 2>/dev/null | grep -qi 'text'; then
-            # Portable CRLF cleanup (no dos2unix dependency)
-            # sed safely rewrites file in place
-            sed -i 's/\r$//' "$tmp" 2>/dev/null || {
-                # Fallback if sed -i unsupported (rare minimal shells)
-                tmp_clean="${tmp}.clean"
-                sed 's/\r$//' "$tmp" > "$tmp_clean" && mv "$tmp_clean" "$tmp"
-            }
-        fi        
+        # Normalize UTF‑8 BOM and CRLF → LF for *text* payloads.
+        # Prefer file(1) when present; otherwise fall back to extension heuristics.
+        is_text=0
+        if command -v file >/dev/null 2>&1; then
+            if file "$tmp" 2>/dev/null | grep -qi 'text'; then is_text=1; fi
+        else
+            case "$dest" in
+                *.sh|*.env|*.txt|*.conf|*.cfg|*.json|*.yaml|*.yml|*.toml|*.service|*.unit|*.properties|*.ini|*.tmpl) is_text=1;;
+            esac
+        fi
+        if [ "$is_text" -eq 1 ]; then
+            tmp_clean="${tmp}.clean"
+            # Portable cleanup using awk: drop BOM on first line and CR at end-of-line.
+            awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {sub(/\r$/,"")} 1' "$tmp" >"$tmp_clean" && mv "$tmp_clean" "$tmp"
+        fi      
 
         # Apply permission (set it on temp, then atomic rename)
         [ -n "$perm" ] && chmod "$perm" "$tmp"
