@@ -7,11 +7,7 @@ set -o errtrace
 shopt -s inherit_errexit 2>/dev/null || true
 umask 077
 
-
-
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-DEV}" # DEV / PROD
-
-
 
 ### --- Config / Inputs -------------------------------------------------------
 DMJ_USER="dmjsvc"
@@ -170,30 +166,31 @@ fi
 # Helper to print minimal progress to console
 say(){ printf "%s\n" "$*" >&3; }
 
-# shellcheck source=/dev/null
-# . <(curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 -H 'Cache-Control: no-cache, no-store, must-revalidate' "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh?_=$(date +%s)")
-# Robust loader for dmj-fetcher (copy/paste as-is)
+
+#-------------- URL to File downloader ---------------------------
+# Use case: dmj_fetch_fresh "url" "des/ti/na.tion" -chmod 0755 -chown "dmjsvc:dmjsvc" -hash "sha256:7f9c...c0a" -replacevars true
+# URL and destinaiton are mandatory. Permission and hash are optional but recommended to securely verify the fetched contents
+# dmj_fetch_fresh url to file creator. ensure same chown permissions and defaults to 600 chmod
 DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
+# get the hash: curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh" | sha256sum
+DMJ_FETCHER_URL_HASH="sha256:hash"
+t="$(mktemp -t dmj_fetcher.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 70; }
+trap 'rm -f "$t" "$t.n"' EXIT
+e(){ m="[dmj-fetcher] $*"; command -v systemd-cat >/dev/null && systemd-cat --identifier=dmj-fetcher --priority=err <<<"$m" || logger -t dmj-fetcher -p user.err "$m" 2>/dev/null || echo "$m" >&2; }
 
-tmp="$(mktemp)"
-if curl -fsSL --retry 6 --retry-all-errors --proto '=https' --tlsv1.2 \
-        -H 'Cache-Control: no-cache, no-store, must-revalidate' \
-        "${DMJ_FETCHER_URL}?_=$(date +%s)" \
-  | sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' > "$tmp"; then
-  if bash -n "$tmp"; then
-    # shellcheck source=/dev/null
-    . "$tmp"
-  else
-    systemd-cat --identifier=dmj-fetcher --priority=err \
-      <<<"[dmj-fetcher] syntax check failed for $DMJ_FETCHER_URL"
-  fi
-else
-  systemd-cat --identifier=dmj-fetcher --priority=err \
-    <<<"[dmj-fetcher] download failed for $DMJ_FETCHER_URL"
-fi
-rm -f "$tmp"
+C=(curl -fsSL --retry 6 --proto '=https' --tlsv1.2 -H 'Cache-Control: no-cache, no-store, must-revalidate'); curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && C+=('--retry-all-errors')
+"${C[@]}" -o "$t" "${DMJ_FETCHER_URL}?_=$(date +%s)" || { e "download failed for $DMJ_FETCHER_URL"; exit 66; }
 
+exp="${DMJ_FETCHER_URL_HASH#sha256:}"; exp="$(printf %s "$exp" | tr -d '[:space:]' | tr A-F a-f)"; printf %s "$exp" | grep -Eq '^[0-9a-f]{64}$' || { e "DMJ_FETCHER_URL_HASH must be 64-hex SHA-256"; exit 68; }
+if command -v sha256sum >/dev/null; then act="$(sha256sum "$t" | awk '{print tolower($1)}')"
+elif command -v shasum >/dev/null; then act="$(shasum -a 256 "$t" | awk '{print tolower($1)}')"
+elif command -v openssl >/dev/null; then act="$(openssl dgst -sha256 -r "$t" | awk '{print tolower($1)}')"
+else e "no SHA-256 tool found"; exit 69; fi
+[ "$act" = "$exp" ] || { e "authenticity of dmj-fetcher.sh could not be verified and hence no scripts will be downloaded"; exit 67; }
 
+awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {sub(/\r$/,"")} 1' "$t" >"$t.n" && mv "$t.n" "$t"
+bash -n "$t" || { e "syntax check failed for $DMJ_FETCHER_URL"; exit 65; }
+. "$t"
 
 # Single place to render a precise failure with file:line, command & stack
 _dmj_trace_fail() {
@@ -249,7 +246,6 @@ fix_perms() {
   # Public Folder Full access to allow nginx to read
   sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
   sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
-
   
   # Make all executables generated executable
   sudo find /usr/local/bin/ -type f -exec chmod 0755 {} + 2>/dev/null || true
@@ -352,8 +348,6 @@ sudo chmod 600 "$ADMIN_PATH_FILE"
 say "[i] Admin portal path for this deploy: /${ADMIN_PATH}"
 
 # ----------------------------------------------------------------------------
-
-
 # Sanity-check: do not proceed with empty secrets (prevents bad deploys)
 for v in SIGNING_GATEWAY_HMAC_KEY SESSION_HMAC_KEY TOTP_MASTER_KEY; do
   if [ -z "${!v:-}" ]; then
@@ -363,10 +357,8 @@ for v in SIGNING_GATEWAY_HMAC_KEY SESSION_HMAC_KEY TOTP_MASTER_KEY; do
   fi
 done
 
-
 # Admin portal key (cleartext shown once via GUI). We store a hash as a Worker secret.
 ADMIN_KEY_FILE="${STATE_DIR}/admin-key.txt"
-
 
 # Always rotate the admin key at each deploy (unless explicitly disabled)
 if [ "${DMJ_ROTATE_ADMIN_KEY}" = "1" ]; then
@@ -488,8 +480,6 @@ POM
 
 
 # Java server (sign, verify, spki) — trimmed for brevity but complete.
-# --- REPLACE the Java heredoc in rp2.sh with this version ---
-# as_dmj tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
 sudo tee "${SIGNER_DIR}/src/main/java/one/dmj/signer/SignerServer.java" >/dev/null <<'JAVA'
 package one.dmj.signer;
 
@@ -1745,7 +1735,7 @@ crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, nonRepudiation
-extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12
+extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12, 1.3.6.1.5.5.7.3.36
 subjectKeyIdentifier = hash
 authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
@@ -1967,190 +1957,9 @@ openssl x509 -in "${ICA_DIR}/ica.crt"   -outform der -out "${PKI_PUB}/dmj-one-is
 TRUST_KIT_ZIP="${PKI_PUB}/dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip"
 if [ ! -f "$TRUST_KIT_ZIP" ] || [ "$DMJ_REGEN_TRUST_KIT" = "1" ]; then
   # fresh readmes
-  sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.txt" >/dev/null <<'TXT'
-dmj.one Trust Kit — Quick Guide
-================================
-
-What this is
-------------
-• dmj.one Root CA (R1): install this once to trust dmj.one‑signed PDFs.
-• dmj.one Issuing CA (R1): optional helper for some apps. Do NOT add to “Trusted Root”.
-
- Windows — ONE-CLICK (recommended)
-----------------------------------
-1) Right-click **install-dmj-certificates.bat** → **Run as administrator**.
-2) The installer will:
-   • import **dmj-one-root-ca-r1.(cer/crt)** into **Trusted Root Certification Authorities**
-   • import **dmj-one-issuing-ca-r1.(cer/crt)** into **Intermediate Certification Authorities**
-3) It prints success/failure for each step. Verify with **certmgr.msc** if desired.
-
- Windows — manual (alternative)
--------------------------------
-Root CA (system-wide):
-1) Double-click **dmj-one-root-ca-r1.cer** → **Install Certificate…**
-2) Choose **Local Machine** (or **Current User**) → **Next**
-3) **Place all certificates in the following store** → **Browse** → **Trusted Root Certification Authorities**
-4) **OK** → **Next** → **Finish** → approve the warning (**Yes**)
-
-Issuing CA (optional helper):
-• Import **dmj-one-issuing-ca-r1.cer** into **Intermediate Certification Authorities**
-
-macOS — system trust
---------------------
-1) Double‑click  dmj-one-root-ca-r1.cer  (opens Keychain Access).
-2) In the left bar, click the “System” keychain (or “login” if you don’t have admin rights).
-3) Drag the certificate into the list (or use File → Import Items…).
-4) Double‑click the “dmj.one Root CA R1” → expand “Trust” → set “When using this certificate” to “Always Trust”.
-5) Close the window; enter your password to save. Done.
-
-Linux (Ubuntu/Debian)
----------------------
-1) Copy the Root CA (PEM) into the local trust store:
-     sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/
-2) Update the system CA bundle:
-     sudo update-ca-certificates
-
-Acrobat only (no system changes)
---------------------------------
-1) Adobe Acrobat/Reader → Edit → Preferences → Signatures → Identities & Trusted Certificates → More…
-2) Trusted Certificates → Import → pick the Root (and Issuing CA if you want).
-3) In “Trust”, tick “Use this certificate as a trusted root”. Save.
-
-After installing
-----------------
-• Open your PDF again. It should show the signature as valid (trusted) and not changed.
-• If a document is later revoked, Acrobat can flag it during verification (enable revocation checks in Preferences).
-
-Files in this folder
---------------------
-• dmj-one-root-ca-r1.cer  (DER – Windows)
-• dmj-one-root-ca-r1.crt  (PEM)
-• dmj-one-issuing-ca-r1.crt  (PEM, optional)
-• dmj-one-ica-chain-r1.pem   (PEM chain)
-• this guide (TXT/HTML) and SHA256SUMS
-
-Security tip: Only install CAs you trust. This kit is published at pki.dmj.one.
-TXT
-  sudo tee "${PKI_PUB}/install-dmj-certificates.bat" >/dev/null <<'BAT'
-@echo off
-setlocal enabledelayedexpansion
-
-REM -------------------------------------------------
-REM  DMJ Root + Intermediate Certificate Importer
-REM  Works even when elevated (uses %~dp0 for paths)
-REM -------------------------------------------------
-
-:: Re-run as admin if not already
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-  echo [!] Elevating... please accept the UAC prompt.
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Start-Process -FilePath '%~f0' -Verb RunAs"
-  exit /b
-)
-
-:: Folder where this script lives (always ends with backslash)
-set "BASEDIR=%~dp0"
-
-:: Candidate filenames (support .cer/.crt)
-set "ROOT_CANDIDATES=dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt"
-set "ICA_CANDIDATES=dmj-one-issuing-ca-r1.crt dmj-one-issuing-ca-r1.cer"
-
-:: Resolve actual files
-set "ROOT_CERT="
-for %%F in (%ROOT_CANDIDATES%) do (
-  if exist "%BASEDIR%%%F" (
-    set "ROOT_CERT=%BASEDIR%%%F"
-    goto :gotRoot
-  )
-)
-:gotRoot
-
-set "ICA_CERT="
-for %%F in (%ICA_CANDIDATES%) do (
-  if exist "%BASEDIR%%%F" (
-    set "ICA_CERT=%BASEDIR%%%F"
-    goto :gotICA
-  )
-)
-:gotICA
-
-echo --------------------------------------------
-echo Installing DMJ Certificates from:
-echo   %BASEDIR%
-echo --------------------------------------------
-
-if defined ROOT_CERT (
-  echo [+] Installing Root CA: "%ROOT_CERT%"
-  certutil -addstore -enterprise -f "Root" "%ROOT_CERT%"
-) else (
-  echo [x] Root certificate not found in folder. Looked for:
-  echo     %ROOT_CANDIDATES%
-)
-
-if defined ICA_CERT (
-  echo [+] Installing Intermediate CA: "%ICA_CERT%"
-  certutil -addstore -enterprise -f "CA" "%ICA_CERT%"
-) else (
-  echo [x] Intermediate certificate not found in folder. Looked for:
-  echo     %ICA_CANDIDATES%
-)
-
-echo --------------------------------------------
-echo [✓] Done. Verify with: certmgr.msc
-echo   - Trusted Root Certification Authorities
-echo   - Intermediate Certification Authorities
-echo --------------------------------------------
-pause
-endlocal
-BAT
-  sudo tee "${PKI_PUB}/dmj-one-trust-kit-README.html" >/dev/null <<'HTML'
-<!doctype html><meta charset="utf-8">
-<title>dmj.one Trust Kit — Quick Guide</title>
-<style>body{font-family:ui-sans-serif,system-ui;margin:40px;max-width:900px}code{background:#f6f6f6;padding:2px 4px;border-radius:4px}</style>
-<h1>dmj.one Trust Kit — Quick Guide</h1>
-<p><b>Install the dmj.one Root CA</b> once. Then dmj.one‑signed PDFs show as trusted.</p>
-
-<h2>Windows — One-click (recommended)</h2>
-<ol>
-  <li>Right-click <code>install-dmj-certificates.bat</code> → <b>Run as administrator</b></li>
-  <li>The installer adds:
-    <ul>
-      <li><b>dmj-one-root-ca-r1.(cer/crt)</b> → <b>Trusted Root Certification Authorities</b></li>
-      <li><b>dmj-one-issuing-ca-r1.(cer/crt)</b> → <b>Intermediate Certification Authorities</b></li>
-    </ul>
-  </li>
-  <li>Verify (optional) with <code>certmgr.msc</code></li>
-</ol>
-
-<h3>Manual alternative</h3>
-<p><b>Root CA:</b> Double-click <code>dmj-one-root-ca-r1.cer</code> → <b>Install Certificate…</b> → <b>Local Machine</b> (or <b>Current User</b>) → 
-<b>Place all certificates in the following store</b> → <b>Trusted Root Certification Authorities</b> → finish and approve.</p>
-<p><b>Issuing CA (optional):</b> import <code>dmj-one-issuing-ca-r1.cer</code> into <b>Intermediate Certification Authorities</b>.</p>
-
-<h2>macOS</h2>
-<ol>
-  <li>Double‑click <code>dmj-one-root-ca-r1.cer</code> (opens Keychain Access)</li>
-  <li>Select the <b>System</b> keychain (or <b>login</b>)</li>
-  <li>Drag the certificate in (or <b>File → Import Items…</b>)</li>
-  <li>Double‑click it → <b>Trust</b> → set <b>Always Trust</b></li>
-</ol>
-
-<h2>Linux (Ubuntu/Debian)</h2>
-<ol>
-  <li>Copy Root (PEM): <code>sudo cp dmj-one-root-ca-r1.crt /usr/local/share/ca-certificates/</code></li>
-  <li>Update: <code>sudo update-ca-certificates</code></li>
-</ol>
-
-<h2>Acrobat only (no system changes)</h2>
-<ol>
-  <li>Acrobat → <b>Edit → Preferences → Signatures → Identities &amp; Trusted Certificates → More…</b></li>
-  <li><b>Trusted Certificates → Import</b> → select the Root</li>
-  <li>Tick <b>Use this certificate as a trusted root</b> and save</li>
-</ol>
-
-<p>Reopen your PDF; it should show as trusted and unchanged.</p>
-HTML
+  dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/dmj-one-trust-kit-README.txt" "${PKI_PUB}/dmj-one-trust-kit-README.txt" -chmod 0644
+  dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/install-dmj-certificates.bat" "${PKI_PUB}/install-dmj-certificates.bat" -chmod 0644
+  dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/dmj-one-trust-kit-README.html" "${PKI_PUB}/dmj-one-trust-kit-README.html" -chmod 0644
 
   ( cd "${PKI_PUB}" && sha256sum \
       dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
@@ -2646,6 +2455,27 @@ server {
   ssl_certificate     /etc/letsencrypt/live/${SIGNER_DOMAIN}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/${SIGNER_DOMAIN}/privkey.pem;
 
+  # --- TLS: RFC 9325 / Mozilla Intermediate ---
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
+                ECDHE-RSA-AES256-GCM-SHA384:
+                ECDHE-ECDSA-CHACHA20-POLY1305:
+                ECDHE-RSA-CHACHA20-POLY1305:
+                ECDHE-ECDSA-AES128-GCM-SHA256:
+                ECDHE-RSA-AES128-GCM-SHA256';
+  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
+  ssl_ecdh_curve X25519:prime256v1:secp384r1;
+  ssl_prefer_server_ciphers off;
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_tickets off;
+  ssl_early_data off;
+  # --- OCSP Stapling --- LetsEncrypt disabled OCSP stapling so disabling.
+  ssl_stapling off;
+  # ssl_stapling on; ssl_stapling_verify on;
+  # ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+  # resolver 1.1.1.1 1.0.0.1 valid=300s; resolver_timeout 5s;
+
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_signer combined;
   error_log  syslog:server=unix:/dev/log warn;
 
@@ -2720,6 +2550,27 @@ server {
   # ssl_certificate and ssl_certificate_key managed by certbot
   ssl_certificate /etc/letsencrypt/live/${PKI_DOMAIN}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/${PKI_DOMAIN}/privkey.pem;
+
+  # --- TLS: RFC 9325 / Mozilla Intermediate ---
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
+                ECDHE-RSA-AES256-GCM-SHA384:
+                ECDHE-ECDSA-CHACHA20-POLY1305:
+                ECDHE-RSA-CHACHA20-POLY1305:
+                ECDHE-ECDSA-AES128-GCM-SHA256:
+                ECDHE-RSA-AES128-GCM-SHA256';
+  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
+  ssl_ecdh_curve X25519:prime256v1:secp384r1;
+  ssl_prefer_server_ciphers off;
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_tickets off;
+  ssl_early_data off;
+  # --- OCSP Stapling --- LetsEncrypt disabled OCSP stapling so disabling.
+  ssl_stapling off;
+  # ssl_stapling on; ssl_stapling_verify on;
+  # ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+  # resolver 1.1.1.1 1.0.0.1 valid=300s; resolver_timeout 5s;
   
   root ${PKI_PUB};
   autoindex off;
@@ -2780,6 +2631,27 @@ server {
   # ssl_certificate and ssl_certificate_key managed by certbot
   ssl_certificate /etc/letsencrypt/live/${OCSP_DOMAIN}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/${OCSP_DOMAIN}/privkey.pem;
+
+  # --- TLS: RFC 9325 / Mozilla Intermediate ---
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
+                ECDHE-RSA-AES256-GCM-SHA384:
+                ECDHE-ECDSA-CHACHA20-POLY1305:
+                ECDHE-RSA-CHACHA20-POLY1305:
+                ECDHE-ECDSA-AES128-GCM-SHA256:
+                ECDHE-RSA-AES128-GCM-SHA256';
+  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
+  ssl_ecdh_curve X25519:prime256v1:secp384r1;
+  ssl_prefer_server_ciphers off;
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_tickets off;
+  ssl_early_data off;
+  # --- OCSP Stapling ---
+  ssl_stapling off;
+  # ssl_stapling on; ssl_stapling_verify on;
+  # ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+  # resolver 1.1.1.1 1.0.0.1 valid=300s; resolver_timeout 5s;
 
   gzip off;
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_ocsp combined;
@@ -2845,6 +2717,27 @@ server {
 
   ssl_certificate     /etc/letsencrypt/live/tsa.dmj.one/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/tsa.dmj.one/privkey.pem;
+
+  # --- TLS: RFC 9325 / Mozilla Intermediate ---
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
+                ECDHE-RSA-AES256-GCM-SHA384:
+                ECDHE-ECDSA-CHACHA20-POLY1305:
+                ECDHE-RSA-CHACHA20-POLY1305:
+                ECDHE-ECDSA-AES128-GCM-SHA256:
+                ECDHE-RSA-AES128-GCM-SHA256';
+  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
+  ssl_ecdh_curve X25519:prime256v1:secp384r1;
+  ssl_prefer_server_ciphers off;
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_tickets off;
+  ssl_early_data off;
+  # --- OCSP Stapling ---
+  ssl_stapling off;
+  # ssl_stapling on; ssl_stapling_verify on;
+  # ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+  # resolver 1.1.1.1 1.0.0.1 valid=300s; resolver_timeout 5s;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
   error_log  syslog:server=unix:/dev/log warn;
@@ -4966,7 +4859,7 @@ say "[✓] Done."
 
 # --- Optional: systemd unit to tail Worker logs into journald ---------------
 echo "[+] Running post-deploy verification ..."
-dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh"
+dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh" -chmod 0755
 
 sudo tee /etc/systemd/system/dmj-worker-tail.service >/dev/null <<UNIT
 [Unit]
