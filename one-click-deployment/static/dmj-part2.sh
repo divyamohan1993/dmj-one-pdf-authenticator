@@ -169,11 +169,9 @@ say(){ printf "%s\n" "$*" >&3; }
 
 #-------------- URL to File downloader ---------------------------
 # Use case: dmj_fetch_fresh "url" "des/ti/na.tion" -chmod 0755 -chown "dmjsvc:dmjsvc" -hash "sha256:7f9c...c0a" -replacevars true
-# URL and destinaiton are mandatory. Permission and hash are optional but recommended to securely verify the fetched contents
-# dmj_fetch_fresh url to file creator. ensure same chown permissions and defaults to 600 chmod
+# generate the hash after updations: curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh" | sha256sum
 DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
-# get the hash: curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh" | sha256sum
-DMJ_FETCHER_URL_HASH="sha256:hash"
+DMJ_FETCHER_URL_HASH="sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a"
 t="$(mktemp -t dmj_fetcher.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 70; }
 trap 'rm -f "$t" "$t.n"' EXIT
 e(){ m="[dmj-fetcher] $*"; command -v systemd-cat >/dev/null && systemd-cat --identifier=dmj-fetcher --priority=err <<<"$m" || logger -t dmj-fetcher -p user.err "$m" 2>/dev/null || echo "$m" >&2; }
@@ -4863,7 +4861,7 @@ dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-au
 
 sudo tee /etc/systemd/system/dmj-worker-tail.service >/dev/null <<UNIT
 [Unit]
-Description=Cloudflare Worker tail -> journald
+Description="Cloudflare Worker tail to journald"
 After=network-online.target
 Wants=network-online.target
 
