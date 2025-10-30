@@ -295,6 +295,18 @@ dmj_fetch_fresh() {
             rm -f "$tmp_esc" "$tmp_proc" "$tmp_vars" 2>/dev/null || :
         fi
 
+        # Normalize line endings (CRLF → LF) to avoid $'\r' errors on Unix shells
+        # Only attempt if file is text (skip binary files to be safe)
+        if file "$tmp" 2>/dev/null | grep -qi 'text'; then
+            # Portable CRLF cleanup (no dos2unix dependency)
+            # sed safely rewrites file in place
+            sed -i 's/\r$//' "$tmp" 2>/dev/null || {
+                # Fallback if sed -i unsupported (rare minimal shells)
+                tmp_clean="${tmp}.clean"
+                sed 's/\r$//' "$tmp" > "$tmp_clean" && mv "$tmp_clean" "$tmp"
+            }
+        fi        
+
         # Apply permission (set it on temp, then atomic rename)
         [ -n "$perm" ] && chmod "$perm" "$tmp"
 
