@@ -193,8 +193,8 @@ if [ -f /etc/dmj/fetcher.env ]; then
 fi
 
 # Default fetcher location + pinned hash (update hash when you update the script)
-DMJ_FETCHER_URL="${DMJ_FETCHER_URL:-https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh}"
-DMJ_FETCHER_URL_HASH="${DMJ_FETCHER_URL_HASH:-sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a}"
+DMJ_FETCHER_URL="${DMJ_FETCHER_URL:-url}"
+DMJ_FETCHER_URL_HASH="${DMJ_FETCHER_URL_HASH:-sha256:hash}"
 
 t="$(mktemp -t dmj_fetcher.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 70; }
 trap 'rm -f "$t" "$t.n"' EXIT
@@ -274,8 +274,8 @@ sudo bash -c "cat > /etc/dmj/fetcher.env" <<'EENV'
 # /etc/dmj/fetcher.env
 # Update the hash whenever you update the fetcher:
 #   curl -fsSL "$DMJ_FETCHER_URL" | sha256sum
-DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
-DMJ_FETCHER_URL_HASH="sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a"
+DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh.tmpl"
+DMJ_FETCHER_URL_HASH="sha256:735e68a0d1e1f6f359372bf7698cda6bb8f3aa62393115dbd229a0bba110260f"
 
 # Runtime behavior (all optional)
 DMJ_FETCH_CONNECT_TIMEOUT=10
@@ -421,30 +421,3 @@ RP2
 
 echo "[*] Exiting Part 1 now. After you complete login, run Part 2. After login, edit the D1 id usint nano and once done, run: sudo bash ${STATE_DIR}/rp2.sh"
 exit 0
-
-
-
-
-
-
-
-
-# -------------- URL to File downloader ---------------------------
-# Use case: dmj_fetch_fresh "url" "des/ti/na.tion" -chmod 0755 -chown "dmjsvc:dmjsvc" -hash "sha256:7f9c...c0a" -replacevars true
-# generate the hash after updations: curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh" | sha256sum
-# DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
-# DMJ_FETCHER_URL_HASH="sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a"
-# t="$(mktemp -t dmj_fetcher.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 70; }
-# trap 'rm -f "$t" "$t.n"' EXIT
-# e(){ m="[dmj-fetcher] $*"; command -v systemd-cat >/dev/null && systemd-cat --identifier=dmj-fetcher --priority=err <<<"$m" || logger -t dmj-fetcher -p user.err "$m" 2>/dev/null || echo "$m" >&2; }
-# C=(curl -fsSL --retry 6 --proto '=https' --tlsv1.2 -H 'Cache-Control: no-cache, no-store, must-revalidate'); curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && C+=('--retry-all-errors')
-# "${C[@]}" -o "$t" "${DMJ_FETCHER_URL}?_=$(date +%s)" || { e "download failed for $DMJ_FETCHER_URL"; exit 66; }
-# exp="${DMJ_FETCHER_URL_HASH#sha256:}"; exp="$(printf %s "$exp" | tr -d '[:space:]' | tr A-F a-f)"; printf %s "$exp" | grep -Eq '^[0-9a-f]{64}$' || { e "DMJ_FETCHER_URL_HASH must be 64-hex SHA-256"; exit 68; }
-# if command -v sha256sum >/dev/null; then act="$(sha256sum "$t" | awk '{print tolower($1)}')"
-# elif command -v shasum >/dev/null; then act="$(shasum -a 256 "$t" | awk '{print tolower($1)}')"
-# elif command -v openssl >/dev/null; then act="$(openssl dgst -sha256 -r "$t" | awk '{print tolower($1)}')"
-# else e "no SHA-256 tool found"; exit 69; fi
-# [ "$act" = "$exp" ] || { e "authenticity of dmj-fetcher.sh could not be verified and hence no scripts will be downloaded"; exit 67; }
-# awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {sub(/\r$/,"")} 1' "$t" >"$t.n" && mv "$t.n" "$t"
-# bash -n "$t" || { e "syntax check failed for $DMJ_FETCHER_URL"; exit 65; }
-# . "$t"
