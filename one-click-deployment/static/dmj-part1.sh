@@ -170,6 +170,126 @@ else
   set -u
 fi
 
+# --- install dmj-fetch-fresh helper (global CLI) ----------------------------
+echo "[+] Installing dmj-fetch-fresh helper..."
+sudo bash -c "cat > /usr/local/bin/dmj-fetch-fresh" <<'EOSH'
+#!/usr/bin/env bash
+# dmj-fetch-fresh: fetch the latest dmj-fetcher.sh (with pinned SHA-256),
+# source it, and delegate to the dmj_fetch_fresh() function.
+# Usage: dmj-fetch-fresh URL DEST [-chmod OCTAL] [-chown USER[:GROUP]] [-hash sha256:HEX] [-replacevars true|false]
+set -euo pipefail
+umask 077
+
+# Optional override/config file:
+#   /etc/dmj/fetcher.env may define:
+#     DMJ_FETCHER_URL, DMJ_FETCHER_URL_HASH,
+#     DMJ_FETCH_CONNECT_TIMEOUT, DMJ_FETCH_MAX_TIME, DMJ_FETCH_RETRIES,
+#     DMJ_FETCH_AUTH_HEADER, DMJ_FETCH_HSTS_FILE
+if [ -f /etc/dmj/fetcher.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /etc/dmj/fetcher.env
+  set +a
+fi
+
+# Default fetcher location + pinned hash (update hash when you update the script)
+DMJ_FETCHER_URL="${DMJ_FETCHER_URL:-https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh}"
+DMJ_FETCHER_URL_HASH="${DMJ_FETCHER_URL_HASH:-sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a}"
+
+t="$(mktemp -t dmj_fetcher.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 70; }
+trap 'rm -f "$t" "$t.n"' EXIT
+log_err() {
+  m="[dmj-fetch-fresh] $*"
+  if command -v systemd-cat >/dev/null 2>&1; then
+    systemd-cat --identifier=dmj-fetch-fresh --priority=err <<<"$m"
+  else
+    logger -t dmj-fetch-fresh -p user.err "$m" 2>/dev/null || echo "$m" >&2
+  fi
+}
+
+command -v curl >/dev/null 2>&1 || { log_err "curl not installed"; exit 127; }
+
+# Build curl argv (HTTPS enforced, retries, HSTS if supported, quiet unless TTY)
+C=(curl --fail --location
+    --connect-timeout "${DMJ_FETCH_CONNECT_TIMEOUT:-10}"
+    --max-time "${DMJ_FETCH_MAX_TIME:-900}"
+    --retry "${DMJ_FETCH_RETRIES:-6}" --retry-connrefused
+    --proto '=https' --proto-redir '=https' --tlsv1.2
+    -H 'Cache-Control: no-cache, no-store, must-revalidate'
+    -H 'Pragma: no-cache' -H 'Expires: 0'
+    -H 'Accept-Encoding: identity')
+
+# Add retry-all-errors (curl >= 7.71.0) when available
+curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && C+=('--retry-all-errors')
+
+# Add HSTS cache (curl >= 7.74.0) when available
+if curl --help all 2>/dev/null | grep -q -- '--hsts'; then
+  HSTS_FILE="${DMJ_FETCH_HSTS_FILE:-$HOME/.cache/dmj_fetch_hsts}"
+  mkdir -p "$(dirname "$HSTS_FILE")" 2>/dev/null || true
+  C+=('--hsts' "$HSTS_FILE")
+fi
+
+# Progress behavior: --no-progress-meter (>= 7.67.0) or -sS fallback
+if curl --help all 2>/dev/null | grep -q -- '--no-progress-meter'; then
+  if [ -t 2 ]; then C+=('--progress-bar'); else C+=('--no-progress-meter'); fi
+else
+  C+=('-sS')
+fi
+
+# Optional single custom header (e.g., Authorization: Bearer ...)
+[ -n "${DMJ_FETCH_AUTH_HEADER:-}" ] && C+=(-H "$DMJ_FETCH_AUTH_HEADER")
+
+# Download the fetcher
+"${C[@]}" -o "$t" "${DMJ_FETCHER_URL}?_=$(date +%s)" \
+  || { log_err "download failed: $DMJ_FETCHER_URL"; exit 66; }
+
+# Verify pinned SHA-256
+exp="${DMJ_FETCHER_URL_HASH#sha256:}"
+exp="$(printf %s "$exp" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+printf %s "$exp" | grep -Eq '^[0-9a-f]{64}$' || { log_err "DMJ_FETCHER_URL_HASH must be 64-hex SHA-256"; exit 68; }
+
+if command -v sha256sum >/dev/null 2>&1; then act="$(sha256sum "$t" | awk '{print tolower($1)}')"
+elif command -v shasum    >/dev/null 2>&1; then act="$(shasum -a 256 "$t" | awk '{print tolower($1)}')"
+elif command -v openssl   >/dev/null 2>&1; then act="$(openssl dgst -sha256 -r "$t" | awk '{print tolower($1)}')"
+else log_err "no SHA-256 tool found"; exit 69; fi
+
+[ "$act" = "$exp" ] || { log_err "authenticity of dmj-fetcher.sh could not be verified (got $act)"; exit 67; }
+
+# Normalize (strip BOM, CRs) and syntax-check as POSIX sh
+awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {sub(/\r$/,"")} 1' "$t" >"$t.n" && mv "$t.n" "$t"
+sh -n "$t" || { log_err "syntax check failed for fetched dmj-fetcher.sh"; exit 65; }
+
+# Source the fetcher and delegate
+# shellcheck disable=SC1090
+. "$t"
+
+set +e
+dmj_fetch_fresh "$@"
+rc=$?
+set -e
+exit "$rc"
+EOSH
+
+sudo bash -c "cat > /etc/dmj/fetcher.env" <<'EENV'
+# /etc/dmj/fetcher.env
+# Update the hash whenever you update the fetcher:
+#   curl -fsSL "$DMJ_FETCHER_URL" | sha256sum
+DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
+DMJ_FETCHER_URL_HASH="sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a"
+
+# Runtime behavior (all optional)
+DMJ_FETCH_CONNECT_TIMEOUT=10
+DMJ_FETCH_MAX_TIME=30
+DMJ_FETCH_RETRIES=3
+# DMJ_FETCH_AUTH_HEADER="Authorization: Bearer <token>"
+# DMJ_FETCH_HSTS_FILE="/var/lib/dmj/.cache/dmj_fetch_hsts"
+EENV
+
+sudo chmod 0755 /usr/local/bin/dmj-fetch-fresh
+
+# --- /install dmj-fetch-fresh ------------------------------------------------
+
+
 # === CONSOLIDATED AUTH CHECK (always as service user) =======================
 echo "[+] Checking Wrangler auth (service acct: ${DMJ_USER})..."
 # WHOAMI_OUTPUT="$( (as_dmj "$WRANGLER_BIN" whoami 2>&1 || true) )"
