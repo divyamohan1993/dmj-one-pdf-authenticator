@@ -96,7 +96,8 @@ dmj_fetch_fresh() {
     dir=$(dirname "$dest"); base=$(basename "$dest"); [ -d "$dir" ] || mkdir -p "$dir"
 
     # Portable mktemp template in same dir (no GNU -p)
-    # umask 077
+    # 077 - 0600 || 022 - 0755
+    umask 022
     tmp="${dir%/}/.${base}.tmp.XXXXXXXXXX"
     tmp=$(mktemp "$tmp") || { printf '%s\n' "error: mktemp failed in $dir" >&2; return 70; }
 
