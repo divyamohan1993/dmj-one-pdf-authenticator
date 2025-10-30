@@ -1,123 +1,43 @@
-# dmj-part2.sh
 #!/usr/bin/env bash
-# Fail hard, and *propagate* ERR into functions/subshells/$(...)
+# dmj-part2.sh
 set -Eeuo pipefail
-set -o errtrace
-# (Bash ≥4.4) make "set -e" apply inside command substitutions too
 shopt -s inherit_errexit 2>/dev/null || true
 umask 077
 
-DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-DEV}" # DEV / PROD
+dmj-fetch-fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/vars.env" "/etc/dmj/vars.env" -chmod 0644
 
-### --- Config / Inputs -------------------------------------------------------
-DMJ_USER="dmjsvc"
-LOG_DIR="/var/log/dmj"
-STATE_DIR="/var/lib/dmj"
-CONF_DIR="/etc/dmj"
-INST_ENV="${CONF_DIR}/installer.env"
+### --- Load all Configs / Inputs -------------------------------------------------------
+if [ ! -x /etc/dmj/vars.env ]; then
+  # shellcheck source=/etc/dmj/vars.env
+  set -a && . /etc/dmj/vars.env && set +a
+fi
+
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
-
-### ---------- Logging / Verbosity ----------
-LOG_DIR="/var/log/dmj"; STATE_DIR="/var/lib/dmj"; CONF_DIR="/etc/dmj"
 mkdir -p "$LOG_DIR" "$STATE_DIR" "$CONF_DIR"
-LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
-# cd $LOG_DIR && sudo rm -rf *
-# keep last 10 logs; delete older
-find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +14 -delete
-
-DMJ_VERBOSE="${DMJ_VERBOSE:-1}"
-DMJ_VERBOSE_LOGS="${DMJ_VERBOSE_LOGS:-0}"
-
-# Load installation id / DB_PREFIX
+find "$LOG_DIR" -type f -name 'part2-*.log' -mtime +1 -delete
 # shellcheck disable=SC1090
 [ -f "$INST_ENV" ] && source "$INST_ENV" || { echo "[x] Missing ${INST_ENV}. Run Part 1 first."; exit 1; }
 
-DMJ_ROOT_DOMAIN="${DMJ_ROOT_DOMAIN:-dmj.one}"
-SIGNER_DOMAIN="${SIGNER_DOMAIN:-signer.${DMJ_ROOT_DOMAIN}}"
-
-# Support/contact & Worker<->Signer header names (overrideable)
-SUPPORT_EMAIL="${SUPPORT_EMAIL:-contact@${DMJ_ROOT_DOMAIN}}"
-WORKER_HMAC_HEADER="${WORKER_HMAC_HEADER:-x-worker-hmac}"
-WORKER_HMAC_TS_HEADER="${WORKER_HMAC_TS_HEADER:-x-worker-ts}"
-WORKER_HMAC_NONCE_HEADER="${WORKER_HMAC_NONCE_HEADER:-x-worker-nonce}"
-
-# WORKER_NAME="dmj-${INSTALLATION_ID}-docsign"
-WORKER_NAME="document-signer"
-WORKER_DIR="/opt/dmj/worker"
-SIGNER_DIR="/opt/dmj/signer-vm"
-NGINX_SITE="/etc/nginx/sites-available/dmj-signer"
-NGINX_SITE_LINK="/etc/nginx/sites-enabled/dmj-signer"
-SIGNER_FIXED_PORT="${SIGNER_FIXED_PORT:-18080}"   # single, deterministic port (no file needed) 
-
-# --- PKI / OCSP endpoints (brand + URLs) -------------------------------------
-PKI_DOMAIN="${PKI_DOMAIN:-pki.${DMJ_ROOT_DOMAIN}}"
-OCSP_DOMAIN="${OCSP_DOMAIN:-ocsp.${DMJ_ROOT_DOMAIN}}"
-TSA_DOMAIN="${TSA_DOMAIN:-tsa.dmj.one}"
-
-OPT_DIR="/opt/dmj"
-PKI_DIR="/opt/dmj/pki"
-ROOT_DIR="${PKI_DIR}/root"
-ICA_DIR="${PKI_DIR}/ica"
-OCSP_DIR="${PKI_DIR}/ocsp"
-PKI_PUB="${PKI_DIR}/pub"
-TSA_DIR="${PKI_DIR}/tsa"
-
-DL_DIR="${PKI_PUB}/dl"
 sudo mkdir -p "${DL_DIR}"
 sudo mkdir -p "${TSA_DIR}"
 # dl/ must be writable by the non‑root service user for ad‑hoc bundles
 sudo chown "${DMJ_USER}:${DMJ_USER}" "${DL_DIR}"
 sudo chmod 755 "${PKI_PUB}" "${DL_DIR}"
 sudo chown -R "${DMJ_USER}:${DMJ_USER}" "${TSA_DIR}"
-
 find /opt/dmj/pki/pub/dl -type f -mtime +1 -delete
 
-# Branded subject names (official)
-ROOT_CN="${ROOT_CN:-dmj.one Root CA R1}"
-ICA_CN="${ICA_CN:-dmj.one Issuing CA R1}"
-OCSP_CN="${OCSP_CN:-dmj.one OCSP Responder R1}"
-SIGNER_CN="${SIGNER_CN:-dmj.one Signer}"
-ORG_NAME="${ORG_NAME:-dmj.one Trust Services}"
-COUNTRY="${COUNTRY:-IN}"
-# TSA (RFC 3161)
-TSA_CN="${TSA_CN:-dmj.one TSA R1}"
-
-# Optional: control AIA/CRL scheme for certificates (keep http as default)
-AIA_SCHEME="${AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
-OCSP_AIA_SCHEME="${OCSP_AIA_SCHEME:-http}"   # use http (recommended). Only set to https if you KNOW clients will follow.
-
+LOG_FILE="${LOG_DIR}/part2-$(date +%Y%m%dT%H%M%S).log"
 PASS="$(openssl rand -hex 24)"
-PKCS12_ALIAS="${PKCS12_ALIAS:-dmj-one}"
-
-# ---- Shipping policy flags (pin end-user CA kit) ----
-CA_SERIES="${CA_SERIES:-r1}"                    # Active CA on the server (may change in the future)
-DMJ_SHIP_CA_SERIES="${DMJ_SHIP_CA_SERIES:-r1}"  # The end-user kit you ship. Pin this for years.
-DMJ_REISSUE_ROOT="${DMJ_REISSUE_ROOT:-0}"       # 0 = never touch Root by default
-DMJ_REISSUE_ICA="${DMJ_REISSUE_ICA:-0}"         # 0 = never touch Issuing by default
-DMJ_REISSUE_OCSP="${DMJ_REISSUE_OCSP:-0}"       # 0 = rarely needed
-DMJ_REISSUE_LEAF="${DMJ_REISSUE_LEAF:-0}"       # 1 = rotate signer freely - dont - invalidates files
-DMJ_REISSUE_TSA="${DMJ_REISSUE_TSA:-0}"
-DMJ_REGEN_TRUST_KIT="${DMJ_REGEN_TRUST_KIT:-1}" # 0 = never overwrite user Trust Kit ZIP
-I_UNDERSTAND_THE_RISK="${I_UNDERSTAND_THE_RISK:-YES}"
-
 if [[ "${DEPLOYMENT_MODE}" == "DEV" ]]; then
     I_UNDERSTAND_THE_RISK=YES    
 fi
 
 # Require D1 id (single shared DB)
-CF_D1_DATABASE_ID="${CF_D1_DATABASE_ID:-}"
 if [ -z "${CF_D1_DATABASE_ID}" ]; then
   echo "[x] Please export CF_D1_DATABASE_ID to your D1 database id (UUID)."
   echo "    You can run:  dmj-wrangler d1 list --json"
   exit 1
 fi
-
-# --- Admin credential rotation flags -----------------------------------------
-# Rotate the admin login key on every deploy (recommended: keep =1)
-DMJ_ROTATE_ADMIN_KEY="${DMJ_ROTATE_ADMIN_KEY:-1}"
-# Also rotate the session HMAC so all existing admin sessions are forced to re-login
-DMJ_FORCE_ADMIN_RELOGIN="${DMJ_FORCE_ADMIN_RELOGIN:-1}"
-
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
@@ -165,30 +85,6 @@ fi
 
 # Helper to print minimal progress to console
 say(){ printf "%s\n" "$*" >&3; }
-
-
-#-------------- URL to File downloader ---------------------------
-# Use case: dmj_fetch_fresh "url" "des/ti/na.tion" -chmod 0755 -chown "dmjsvc:dmjsvc" -hash "sha256:7f9c...c0a" -replacevars true
-# generate the hash after updations: curl -fsSL "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh" | sha256sum
-DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh"
-DMJ_FETCHER_URL_HASH="sha256:daff69838b476a95e43d23fef1acd40b2c30d2a78a8ad98b1a7ca348be2af62a"
-t="$(mktemp -t dmj_fetcher.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 70; }
-trap 'rm -f "$t" "$t.n"' EXIT
-e(){ m="[dmj-fetcher] $*"; command -v systemd-cat >/dev/null && systemd-cat --identifier=dmj-fetcher --priority=err <<<"$m" || logger -t dmj-fetcher -p user.err "$m" 2>/dev/null || echo "$m" >&2; }
-
-C=(curl -fsSL --retry 6 --proto '=https' --tlsv1.2 -H 'Cache-Control: no-cache, no-store, must-revalidate'); curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && C+=('--retry-all-errors')
-"${C[@]}" -o "$t" "${DMJ_FETCHER_URL}?_=$(date +%s)" || { e "download failed for $DMJ_FETCHER_URL"; exit 66; }
-
-exp="${DMJ_FETCHER_URL_HASH#sha256:}"; exp="$(printf %s "$exp" | tr -d '[:space:]' | tr A-F a-f)"; printf %s "$exp" | grep -Eq '^[0-9a-f]{64}$' || { e "DMJ_FETCHER_URL_HASH must be 64-hex SHA-256"; exit 68; }
-if command -v sha256sum >/dev/null; then act="$(sha256sum "$t" | awk '{print tolower($1)}')"
-elif command -v shasum >/dev/null; then act="$(shasum -a 256 "$t" | awk '{print tolower($1)}')"
-elif command -v openssl >/dev/null; then act="$(openssl dgst -sha256 -r "$t" | awk '{print tolower($1)}')"
-else e "no SHA-256 tool found"; exit 69; fi
-[ "$act" = "$exp" ] || { e "authenticity of dmj-fetcher.sh could not be verified and hence no scripts will be downloaded"; exit 67; }
-
-awk 'NR==1{sub(/^\xef\xbb\xbf/,"")} {sub(/\r$/,"")} 1' "$t" >"$t.n" && mv "$t.n" "$t"
-bash -n "$t" || { e "syntax check failed for $DMJ_FETCHER_URL"; exit 65; }
-. "$t"
 
 # Single place to render a precise failure with file:line, command & stack
 _dmj_trace_fail() {
@@ -468,6 +364,32 @@ sudo tee "${SIGNER_DIR}/pom.xml" >/dev/null <<'POM'
                 </filter>
               </filters>
             </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Supply-chain hygiene: generate & attach CycloneDX SBOM at package -->
+      <plugin>
+        <groupId>org.cyclonedx</groupId>
+        <artifactId>cyclonedx-maven-plugin</artifactId>
+        <!-- 2.9.1 is the latest stable as of Nov 28, 2024 -->
+        <version>2.9.1</version>
+        <configuration>
+          <!-- Keep to the current spec and include license texts -->
+          <schemaVersion>1.6</schemaVersion>
+          <includeLicenseText>true</includeLicenseText>
+          <!-- Produce both JSON and XML and give stable, artifact-aligned names -->
+          <outputFormat>all</outputFormat>
+          <outputName>${project.artifactId}-${project.version}-sbom</outputName>
+          <!-- Ensure the SBOM is attached so it’s stored with the artifact -->
+          <skipAttach>false</skipAttach>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>makeBom</goal>
+            </goals>
           </execution>
         </executions>
       </plugin>
@@ -1955,9 +1877,9 @@ openssl x509 -in "${ICA_DIR}/ica.crt"   -outform der -out "${PKI_PUB}/dmj-one-is
 TRUST_KIT_ZIP="${PKI_PUB}/dmj-one-trust-kit-${DMJ_SHIP_CA_SERIES}.zip"
 if [ ! -f "$TRUST_KIT_ZIP" ] || [ "$DMJ_REGEN_TRUST_KIT" = "1" ]; then
   # fresh readmes
-  dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/dmj-one-trust-kit-README.txt" "${PKI_PUB}/dmj-one-trust-kit-README.txt" -chmod 0644
-  dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/install-dmj-certificates.bat" "${PKI_PUB}/install-dmj-certificates.bat" -chmod 0644
-  dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/dmj-one-trust-kit-README.html" "${PKI_PUB}/dmj-one-trust-kit-README.html" -chmod 0644
+  dmj-fetch-fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/dmj-one-trust-kit-README.txt" "${PKI_PUB}/dmj-one-trust-kit-README.txt" -chmod 0644
+  dmj-fetch-fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/install-dmj-certificates.bat" "${PKI_PUB}/install-dmj-certificates.bat" -chmod 0644
+  dmj-fetch-fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/docs/dmj-one-trust-kit-README.html" "${PKI_PUB}/dmj-one-trust-kit-README.html" -chmod 0644
 
   ( cd "${PKI_PUB}" && sha256sum \
       dmj-one-root-ca-r1.cer dmj-one-root-ca-r1.crt \
@@ -2102,6 +2024,15 @@ sudo chmod 0755 /usr/local/bin/dmj-tsa.js
 
 say "[+] Building Java signer..."
 ( cd "$SIGNER_DIR" && mvn -q -DskipTests clean package )
+# Make SBOMs world-readable next to the JAR for easy retrieval/audit
+# Files come from cyclonedx-maven-plugin with outputName=${artifactId}-${version}-sbom
+SBOM_BASE="${SIGNER_DIR}/target/dmj-signer-1.0.0-sbom"
+for ext in json xml; do
+  if [ -f "${SBOM_BASE}.${ext}" ]; then
+    sudo chmod 0644 "${SBOM_BASE}.${ext}" || true
+    echo "[i] SBOM generated: ${SBOM_BASE}.${ext}"
+  fi
+done
 fix_perms
 
 ### --- Single “stack” entrypoint and unit (Signer + OCSP under dmjsvc) -------
@@ -2496,10 +2427,10 @@ say "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
 # First, remove conflicting/legacy sites so our servers aren't ignored.
 say "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
-sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
-sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
+# sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+# sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
+# sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
+# sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
 
 sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
 server {
@@ -2685,10 +2616,10 @@ server {
   # NGINX 'location =' is an exact URI match, and 'return 200' is the
   # simplest way to serve a successful health response.
   # refs: nginx 'location' and 'return' directives.
-  location = /healthz {
-      return 200 "ok\n";
-      add_header Content-Type text/plain;
-  }
+  # location = /healthz {
+  #     return 200 "ok";
+  #     add_header Content-Type text/plain;
+  # }
 
   location / {
     limit_except POST GET { return 405; }
@@ -2748,10 +2679,10 @@ server {
   # NGINX 'location =' is an exact URI match, and 'return 200' is the
   # simplest way to serve a successful health response.
   # refs: nginx 'location' and 'return' directives.
-  location = /healthz {
-      return 200 "ok\n";
-      add_header Content-Type text/plain;
-  }
+  # location = /healthz {
+  #     return 200 "ok";
+  #     add_header Content-Type text/plain;
+  # }
 
   location / {
     limit_except POST GET { return 405; }
@@ -4857,7 +4788,7 @@ say "[✓] Done."
 
 # --- Optional: systemd unit to tail Worker logs into journald ---------------
 echo "[+] Running post-deploy verification ..."
-dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh" -chmod 0755
+dmj-fetch-fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh" -chmod 0755
 
 sudo tee /etc/systemd/system/dmj-worker-tail.service >/dev/null <<UNIT
 [Unit]
@@ -4901,7 +4832,7 @@ sleep 10
 
 # --- Post-deploy verification ------------------------------------------------
 # echo "[+] Running post-deploy verification ..."
-# dmj_fetch_fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh"
+# dmj-fetch-fresh "https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/modules/dmj-verify.sh.tmpl" "/usr/local/bin/dmj-verify.sh"
 # sudo chmod +x /usr/local/bin/dmj-verify.sh
 
 # /usr/local/bin/dmj-verify.sh || true
