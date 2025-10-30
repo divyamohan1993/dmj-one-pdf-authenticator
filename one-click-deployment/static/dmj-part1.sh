@@ -275,7 +275,7 @@ sudo bash -c "cat > /etc/dmj/fetcher.env" <<'EENV'
 # Update the hash whenever you update the fetcher:
 #   curl -fsSL "$DMJ_FETCHER_URL" | sha256sum
 DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh.tmpl"
-DMJ_FETCHER_URL_HASH="sha256:735e68a0d1e1f6f359372bf7698cda6bb8f3aa62393115dbd229a0bba110260f"
+DMJ_FETCHER_URL_HASH="sha256:3c28869907adc2dd9e87d21e86f772e289bc49b3cd79ce9a711b6d48babd4b3c"
 
 # Runtime behavior (all optional)
 DMJ_FETCH_CONNECT_TIMEOUT=10
