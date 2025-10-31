@@ -171,8 +171,8 @@ dmj_fetch_fresh() {
             else
                 printf '%s\n' "error: no SHA-256 tool (sha256sum|shasum|openssl)" >&2; exit 69
             fi
-            [ "$got" = "$expected" ] || {
-                printf '%s\n' "error: checksum mismatch for %s" "$dest" >&2
+            [ "$got" = "$expected" ] || {                
+                printf 'error: checksum mismatch for %s\n' "$dest" >&2
                 printf '  expected: %s\n' "$expected" >&2
                 printf '  got:      %s\n' "$got" >&2
                 exit 60
