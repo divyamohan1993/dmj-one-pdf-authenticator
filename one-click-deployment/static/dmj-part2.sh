@@ -138,7 +138,7 @@ fix_perms() {
     
   # Public Folder Full access to allow nginx to read
   sudo find "$PKI_PUB"      -type d -exec chmod 0755 {} + 2>/dev/null || true
-  sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true
+  sudo find "$PKI_PUB"      -type f -exec chmod 0644 {} + 2>/dev/null || true  
   
   # Make all executables generated executable
   sudo find /usr/local/bin/ -type f -exec chmod 0755 {} + 2>/dev/null || true
@@ -2584,7 +2584,7 @@ NGX
 sudo tee /etc/nginx/sites-available/dmj-tsa >/dev/null <<NGX
 server {
   listen 80;
-  server_name tsa.dmj.one;
+  server_name ${TSA_DOMAIN};
   gzip off;
 
   access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx_tsa combined;
@@ -2623,11 +2623,11 @@ server {
 server {
   listen 443 ssl;
   http2 on;
-  server_name tsa.dmj.one;
+  server_name ${TSA_DOMAIN};
   gzip off;
 
-  ssl_certificate     /etc/letsencrypt/live/tsa.dmj.one/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/tsa.dmj.one/privkey.pem;
+  ssl_certificate     /etc/letsencrypt/live/${TSA_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${TSA_DOMAIN}/privkey.pem;
   include /etc/letsencrypt/options-ssl-nginx.conf;
   ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
