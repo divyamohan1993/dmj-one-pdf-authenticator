@@ -467,6 +467,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
@@ -955,25 +957,39 @@ public class SignerServer {
 
   static Path writeBundleZip(byte[] signedPdf, String baseName) throws IOException {
     Files.createDirectories(PKI_PUB.resolve("dl"));
+    // Desired mode for public downloads: -rw-r--r-- (0644)
+    final java.util.Set<PosixFilePermission> PUB_0644 = java.util.EnumSet.of(
+        PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+        PosixFilePermission.GROUP_READ, PosixFilePermission.OTHERS_READ
+    );
     // Allocate a unique file atomically; on a rare collision, retry with a new name.
     for (int attempt = 0; attempt < 5; attempt++) {
       String fname = baseName + (attempt == 0 ? "" : "-" + attempt) + ".zip";
       Path out = PKI_PUB.resolve("dl").resolve(fname);
-      try (OutputStream os = Files.newOutputStream(out,
-               java.nio.file.StandardOpenOption.CREATE_NEW,
-               java.nio.file.StandardOpenOption.WRITE);
-           ZipOutputStream zos = new ZipOutputStream(os)) {
-      zos.putNextEntry(new ZipEntry("signed.pdf"));
-      zos.write(signedPdf);
-      zos.closeEntry();
-      addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.cer"), "trust-kit/dmj-one-root-ca-r1.cer");
-      addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.crt"), "trust-kit/dmj-one-root-ca-r1.crt");
-      addZipFile(zos, PKI_PUB.resolve("dmj-one-issuing-ca-r1.crt"), "trust-kit/dmj-one-issuing-ca-r1.crt");
-      addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.txt"), "trust-kit/README.txt");
-      addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.html"), "trust-kit/README.html");
-      addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-SHA256SUMS.txt"), "trust-kit/SHA256SUMS.txt");
-      
-      return out;
+      try {
+        // Create the file explicitly so we can control initial permissions, ignoring umask.
+        try {
+          Files.createFile(out, PosixFilePermissions.asFileAttribute(PUB_0644));
+        } catch (UnsupportedOperationException e) {
+          // Non-POSIX FS; create the file, we'll set perms after write if possible.
+          Files.createFile(out);
+        }
+
+        try (OutputStream os = Files.newOutputStream(out, java.nio.file.StandardOpenOption.WRITE);
+          ZipOutputStream zos = new ZipOutputStream(os)) {
+            zos.putNextEntry(new ZipEntry("signed.pdf"));
+            zos.write(signedPdf);
+            zos.closeEntry();
+            addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.cer"), "trust-kit/dmj-one-root-ca-r1.cer");
+            addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.crt"), "trust-kit/dmj-one-root-ca-r1.crt");
+            addZipFile(zos, PKI_PUB.resolve("dmj-one-issuing-ca-r1.crt"), "trust-kit/dmj-one-issuing-ca-r1.crt");
+            addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.txt"), "trust-kit/README.txt");
+            addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.html"), "trust-kit/README.html");
+            addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-SHA256SUMS.txt"), "trust-kit/SHA256SUMS.txt");      
+          }
+        // Ensure final perms are 0644 even if the FS ignored the create attribute.
+        try { Files.setPosixFilePermissions(out, PUB_0644); } catch (Exception ignore) {}
+        return out;
       } catch (java.nio.file.FileAlreadyExistsException e) {
         // race/collision: loop and try a fresh base name
         baseName = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
@@ -4210,14 +4226,9 @@ function renderAdminDashboard(issuer: string, adminPath: string, nonce: string, 
         if(!r.download){ throw new Error('no download url'); }
         if(!(r.hasSignature && r.isValid && r.coversDocument && r.issuedByUs)){
           throw new Error('verification failed');
-        }
-        // Send the browser straight to pki/pub/dl/<bundle>.zip (no CORS needed)
-        const a = document.createElement('a');
-        a.href = r.download;
-        a.rel = 'noopener';
-        a.target = '_blank';
-        document.body.appendChild(a); a.click(); a.remove();
-        toast('Signed & downloaded','success');
+        }                
+        window.location.assign(r.download);
+        toast('Signed. Downloading...','success');
         loadRows(); // refresh issued list
       }catch(e){
         toast('Signing failed','danger');
