@@ -2587,8 +2587,8 @@ server {
   #     add_header Content-Type text/plain;
   # }
 
-  location / {
-    limit_except POST GET { return 405; }
+  location / {    
+    limit_except POST GET { deny all; }   # 403 to anything else - was 405
 
     proxy_pass         http://127.0.0.1:9090;
     proxy_http_version 1.1;
@@ -2640,7 +2640,7 @@ server {
   # }
 
   location / {
-    limit_except POST GET { return 405; }
+    limit_except POST GET { deny all; }   # 403 to anything else - was 405
 
     proxy_pass         http://127.0.0.1:9090;
     proxy_http_version 1.1;
