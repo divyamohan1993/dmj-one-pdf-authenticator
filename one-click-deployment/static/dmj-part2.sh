@@ -41,7 +41,6 @@ fi
 
 # Re-issue all PKI artifacts if you set DMJ_REISSUE_ALL_HARD_RESET=1 in the environment
 ################## DANGER ########################
-DMJ_REISSUE_ALL_HARD_RESET="${DMJ_REISSUE_ALL_HARD_RESET:-1}" # Never enable this in PROD. DEV can freely rotate.
 if [[ "${DMJ_REISSUE_ALL_HARD_RESET}" == "1" && "${DEPLOYMENT_MODE:-}" == "DEV" && "${I_UNDERSTAND_THE_RISK:-}" == "YES" ]]; then
     DMJ_REISSUE_ROOT=1
     DMJ_REISSUE_ICA=1
@@ -2383,21 +2382,10 @@ server {
 
   ssl_certificate     /etc/letsencrypt/live/${SIGNER_DOMAIN}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/${SIGNER_DOMAIN}/privkey.pem;
+  include /etc/letsencrypt/options-ssl-nginx.conf;
+  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-  # --- TLS: RFC 9325 / Mozilla Intermediate ---
-  ssl_protocols TLSv1.2 TLSv1.3;
-  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
-                ECDHE-RSA-AES256-GCM-SHA384:
-                ECDHE-ECDSA-CHACHA20-POLY1305:
-                ECDHE-RSA-CHACHA20-POLY1305:
-                ECDHE-ECDSA-AES128-GCM-SHA256:
-                ECDHE-RSA-AES128-GCM-SHA256';
-  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
   ssl_ecdh_curve X25519:prime256v1:secp384r1;
-  ssl_prefer_server_ciphers off;
-  ssl_session_timeout 1d;
-  ssl_session_cache shared:SSL:10m;
-  ssl_session_tickets off;
   ssl_early_data off;
   # --- OCSP Stapling --- LetsEncrypt disabled OCSP stapling so disabling.
   ssl_stapling off;
@@ -2479,21 +2467,10 @@ server {
   # ssl_certificate and ssl_certificate_key managed by certbot
   ssl_certificate /etc/letsencrypt/live/${PKI_DOMAIN}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/${PKI_DOMAIN}/privkey.pem;
+  include /etc/letsencrypt/options-ssl-nginx.conf;
+  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-  # --- TLS: RFC 9325 / Mozilla Intermediate ---
-  ssl_protocols TLSv1.2 TLSv1.3;
-  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
-                ECDHE-RSA-AES256-GCM-SHA384:
-                ECDHE-ECDSA-CHACHA20-POLY1305:
-                ECDHE-RSA-CHACHA20-POLY1305:
-                ECDHE-ECDSA-AES128-GCM-SHA256:
-                ECDHE-RSA-AES128-GCM-SHA256';
-  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
   ssl_ecdh_curve X25519:prime256v1:secp384r1;
-  ssl_prefer_server_ciphers off;
-  ssl_session_timeout 1d;
-  ssl_session_cache shared:SSL:10m;
-  ssl_session_tickets off;
   ssl_early_data off;
   # --- OCSP Stapling --- LetsEncrypt disabled OCSP stapling so disabling.
   ssl_stapling off;
@@ -2560,23 +2537,12 @@ server {
   # ssl_certificate and ssl_certificate_key managed by certbot
   ssl_certificate /etc/letsencrypt/live/${OCSP_DOMAIN}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/${OCSP_DOMAIN}/privkey.pem;
+  include /etc/letsencrypt/options-ssl-nginx.conf;
+  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-  # --- TLS: RFC 9325 / Mozilla Intermediate ---
-  ssl_protocols TLSv1.2 TLSv1.3;
-  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
-                ECDHE-RSA-AES256-GCM-SHA384:
-                ECDHE-ECDSA-CHACHA20-POLY1305:
-                ECDHE-RSA-CHACHA20-POLY1305:
-                ECDHE-ECDSA-AES128-GCM-SHA256:
-                ECDHE-RSA-AES128-GCM-SHA256';
-  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
   ssl_ecdh_curve X25519:prime256v1:secp384r1;
-  ssl_prefer_server_ciphers off;
-  ssl_session_timeout 1d;
-  ssl_session_cache shared:SSL:10m;
-  ssl_session_tickets off;
   ssl_early_data off;
-  # --- OCSP Stapling ---
+  # --- OCSP Stapling --- LetsEncrypt disabled OCSP stapling so disabling.
   ssl_stapling off;
   # ssl_stapling on; ssl_stapling_verify on;
   # ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
@@ -2646,23 +2612,12 @@ server {
 
   ssl_certificate     /etc/letsencrypt/live/tsa.dmj.one/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/tsa.dmj.one/privkey.pem;
+  include /etc/letsencrypt/options-ssl-nginx.conf;
+  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-  # --- TLS: RFC 9325 / Mozilla Intermediate ---
-  ssl_protocols TLSv1.2 TLSv1.3;
-  ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:
-                ECDHE-RSA-AES256-GCM-SHA384:
-                ECDHE-ECDSA-CHACHA20-POLY1305:
-                ECDHE-RSA-CHACHA20-POLY1305:
-                ECDHE-ECDSA-AES128-GCM-SHA256:
-                ECDHE-RSA-AES128-GCM-SHA256';
-  ssl_conf_command Ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
   ssl_ecdh_curve X25519:prime256v1:secp384r1;
-  ssl_prefer_server_ciphers off;
-  ssl_session_timeout 1d;
-  ssl_session_cache shared:SSL:10m;
-  ssl_session_tickets off;
   ssl_early_data off;
-  # --- OCSP Stapling ---
+  # --- OCSP Stapling --- LetsEncrypt disabled OCSP stapling so disabling.
   ssl_stapling off;
   # ssl_stapling on; ssl_stapling_verify on;
   # ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
