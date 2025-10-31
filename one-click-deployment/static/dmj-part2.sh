@@ -2415,10 +2415,10 @@ say "[+] Signer at https://${SIGNER_DOMAIN}/healthz"
 # --- NGINX: static PKI files host (pki.*) and OCSP proxy (ocsp.*) ----------
 # First, remove conflicting/legacy sites so our servers aren't ignored.
 say "[+] Removing legacy/duplicate nginx site links to avoid 'conflicting server name' ..."
-# sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-# sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
-# sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
-# sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
+sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/pki* /etc/nginx/sites-enabled/ocsp* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/*pki* /etc/nginx/sites-enabled/*ocsp* /etc/nginx/sites-enabled/*tsa* 2>/dev/null || true 
 
 sudo tee /etc/nginx/sites-available/dmj-pki >/dev/null <<NGX
 server {
