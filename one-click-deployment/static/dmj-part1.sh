@@ -174,20 +174,11 @@ fi
 echo "[+] Installing dmj-fetch-fresh helper..."
 sudo bash -c "cat > /usr/local/bin/dmj-fetch-fresh" <<'EOSH'
 #!/usr/bin/env bash
-
 # dmj-fetch-fresh: fetch the latest dmj-fetcher.sh (with pinned SHA-256),
 # source it, and delegate to the dmj_fetch_fresh() function.
 # Usage: dmj-fetch-fresh URL DEST [-chmod OCTAL] [-chown USER[:GROUP]] [-hash sha256:HEX] [-replacevars true|false]
-
 set -euo pipefail
 umask 022
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-# Uniform behavior: re-exec as root so results are identical with or without sudo.
-# Requires the sudoers drop-in installed by this patch.
-if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-  exec sudo -n "$0" "$@"
-fi
 
 # Optional override/config file:
 #   /etc/dmj/fetcher.env may define:
@@ -199,18 +190,6 @@ if [ -f /etc/dmj/fetcher.env ]; then
   # shellcheck disable=SC1091
   . /etc/dmj/fetcher.env
   set +a
-fi
-
-
-# Fixed service identity for network I/O to keep HSTS/cache consistent for all callers
-: "${DMJ_RUN_USER:=dmjsvc}"
-: "${DMJ_RUN_HOME:=/var/lib/${DMJ_RUN_USER}}"
-: "${DMJ_RUN_XDG:=${DMJ_RUN_HOME}/.config}"
-: "${DMJ_RUN_CACHE:=${DMJ_RUN_HOME}/.cache}"
-
-if ! id "${DMJ_RUN_USER}" >/dev/null 2>&1; then
-  echo "[dmj-fetch-fresh] service user '${DMJ_RUN_USER}' does not exist" >&2
-  exit 78
 fi
 
 # Default fetcher location + pinned hash (update hash when you update the script)
@@ -245,9 +224,8 @@ curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && C+=('--retry-al
 
 # Add HSTS cache (curl >= 7.74.0) when available
 if curl --help all 2>/dev/null | grep -q -- '--hsts'; then
-  # Pin HSTS to a shared, service-owned location so HTTPS behavior is the same for every user.
-  HSTS_FILE="${DMJ_FETCH_HSTS_FILE:-${DMJ_RUN_CACHE}/dmj_fetch_hsts}"
-  install -d -m 0755 -o "${DMJ_RUN_USER}" -g "${DMJ_RUN_USER}" "$(dirname "$HSTS_FILE")"
+  HSTS_FILE="${DMJ_FETCH_HSTS_FILE:-$HOME/.cache/dmj_fetch_hsts}"
+  mkdir -p "$(dirname "$HSTS_FILE")" 2>/dev/null || true
   C+=('--hsts' "$HSTS_FILE")
 fi
 
@@ -285,12 +263,6 @@ sh -n "$t" || { log_err "syntax check failed for fetched dmj-fetcher.sh"; exit 6
 # shellcheck disable=SC1090
 . "$t"
 
-# Always do network transfers as the service user for uniform behavior.
-# dmj_fetch_fresh honors DMJ_FETCH_CURL, which must be an executable path (not a command line).
-export DMJ_FETCH_HSTS_FILE="${HSTS_FILE:-${DMJ_RUN_CACHE}/dmj_fetch_hsts}"
-export DMJ_FETCH_CURL="/usr/local/libexec/dmj-curl-as-dmjsvc"
-
-
 set +e
 dmj_fetch_fresh "$@"
 rc=$?
@@ -303,44 +275,16 @@ sudo bash -c "cat > /etc/dmj/fetcher.env" <<'EENV'
 # Update the hash whenever you update the fetcher:
 #   curl -fsSL "$DMJ_FETCHER_URL" | sha256sum
 DMJ_FETCHER_URL="https://raw.githubusercontent.com/divyamohan1993/dmj-one-pdf-authenticator/refs/heads/main/one-click-deployment/static/bin/dmj-fetcher.sh.tmpl"
-DMJ_FETCHER_URL_HASH="sha256:3c28869907adc2dd9e87d21e86f772e289bc49b3cd79ce9a711b6d48babd4b3c"
+DMJ_FETCHER_URL_HASH="sha256:be7deb60cb0634ddac09ab5b659c7d27d344f3d985ce39a245107438d59f676b"
 
 # Runtime behavior (all optional)
 DMJ_FETCH_CONNECT_TIMEOUT=10
 DMJ_FETCH_MAX_TIME=30
 DMJ_FETCH_RETRIES=3
 # DMJ_FETCH_AUTH_HEADER="Authorization: Bearer <token>"
-# Pin HSTS file for uniform HTTPS behavior across all users:
-DMJ_FETCH_HSTS_FILE="/var/lib/dmjsvc/.cache/dmj_fetch_hsts
+# DMJ_FETCH_HSTS_FILE="/var/lib/dmj/.cache/dmj_fetch_hsts"
 EENV
 
-sudo bash -c "cat > /usr/local/libexec/dmj-curl-as-dmjsvc" <<'CASDMJSVC'
-#!/usr/bin/env bash
-# Helper used by dmj-fetch-fresh (run as root) to execute curl as the service user.
-# Must be an executable file path because dmj_fetch_fresh expects DMJ_FETCH_CURL to be a program, not a shell snippet.
-set -euo pipefail
-umask 022
-export PATH=/usr/local/bin:/usr/bin:/bin
-# Drop privileges to dmjsvc and provide a stable HOME/XDG for caches and HSTS.
-exec sudo -n -u dmjsvc -H \
-  env HOME=/var/lib/dmjsvc XDG_CONFIG_HOME=/var/lib/dmjsvc/.config \
-  "$(command -v curl)" "$@"
-CASDMJSVC
-
-sudo bash -c "cat > /etc/sudoers.d/dmj-fetch-fresh" <<'SUDOER'
-# Let ANY user invoke dmj-fetch-fresh uniformly (no password prompt).
-# Keep the rule narrow: only these exact commands are permitted.
-# Manage sudoers via /etc/sudoers.d instead of editing /etc/sudoers directly. 
-# Validate changes with: `visudo -f /etc/sudoers.d/dmj-fetch-fresh`
-Defaults!/usr/local/bin/dmj-fetch-fresh !requiretty
-Cmnd_Alias DMJ_FETCH_CMDS = /usr/local/bin/dmj-fetch-fresh, /usr/local/libexec/dmj-curl-as-dmjsvc
-ALL ALL=(root) NOPASSWD: DMJ_FETCH_CMDS
-SUDOER
-
-sudo chown root:root /etc/sudoers.d/dmj-fetch-fresh
-sudo chmod 0440 /etc/sudoers.d/dmj-fetch-fresh
-sudo visudo -f /etc/sudoers.d/dmj-fetch-fresh   # validate syntax
-sudo chmod 0755 /usr/local/libexec/dmj-curl-as-dmjsvc
 sudo chmod 0755 /usr/local/bin/dmj-fetch-fresh
 
 # --- /install dmj-fetch-fresh ------------------------------------------------
