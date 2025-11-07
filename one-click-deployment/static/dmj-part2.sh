@@ -983,6 +983,7 @@ public class SignerServer {
             addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.cer"), "trust-kit/dmj-one-root-ca-r1.cer");
             addZipFile(zos, PKI_PUB.resolve("dmj-one-root-ca-r1.crt"), "trust-kit/dmj-one-root-ca-r1.crt");
             addZipFile(zos, PKI_PUB.resolve("dmj-one-issuing-ca-r1.crt"), "trust-kit/dmj-one-issuing-ca-r1.crt");
+            addZipFile(zos, PKI_PUB.resolve("install-dmj-certificates.bat"), "trust-kit/install-dmj-certificates.bat");
             addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.txt"), "trust-kit/README.txt");
             addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-README.html"), "trust-kit/README.html");
             addZipFile(zos, PKI_PUB.resolve("dmj-one-trust-kit-SHA256SUMS.txt"), "trust-kit/SHA256SUMS.txt");      
@@ -992,7 +993,7 @@ public class SignerServer {
         return out;
       } catch (java.nio.file.FileAlreadyExistsException e) {
         // race/collision: loop and try a fresh base name
-        baseName = "dmj-one-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        baseName = "dmj-one-trusted-file-" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
       }
     }
     throw new IOException("failed to allocate a unique bundle filename");
