@@ -1671,7 +1671,7 @@ crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
 [ usr_cert ]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, nonRepudiation
-extendedKeyUsage = emailProtection, codeSigning, 1.3.6.1.4.1.311.10.3.12, 1.3.6.1.5.5.7.3.36
+extendedKeyUsage = codeSigning, 1.3.6.1.4.1.311.10.3.12, 1.3.6.1.5.5.7.3.36
 subjectKeyIdentifier = hash
 authorityInfoAccess = caIssuers;URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crt, OCSP;URI:${OCSP_AIA_SCHEME}://${OCSP_DOMAIN}/
 crlDistributionPoints = URI:${AIA_SCHEME}://${PKI_DOMAIN}/ica.crl
